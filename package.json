@@ -15,6 +15,17 @@
   "config": {
     "sandboxImageUri": "ghcr.io/dionanos/qwen-code-termux:0.6.0-termux"
   },
+  "os": [
+    "android",
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "arm64",
+    "x64",
+    "arm"
+  ],
   "scripts": {
     "start": "cross-env node scripts/start.js",
     "debug": "cross-env DEBUG=1 node --inspect-brk scripts/start.js",
@@ -49,6 +60,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "check-i18n": "npm run check-i18n --workspace=packages/cli",
     "preflight": "npm run clean && npm ci && npm run format && npm run lint:ci && npm run build && npm run typecheck && npm run test:ci",
+    "postinstall": "node scripts/postinstall.cjs || true",
     "prepare": "husky && npm run bundle",
     "prepare:package": "node scripts/prepare-package.js",
     "release:version": "node scripts/version.js",
