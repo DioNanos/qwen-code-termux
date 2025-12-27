@@ -20,6 +20,16 @@ type WarningCheck = {
   check: (options: WarningCheckOptions) => Promise<string | null>;
 };
 
+function isTermux(): boolean {
+  return (
+    process.platform === 'android' ||
+    !!process.env['TERMUX_VERSION'] ||
+    !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'))
+  );
+}
+
+const IS_TERMUX = isTermux();
+
 // Individual warning checks
 const homeDirectoryCheck: WarningCheck = {
   id: 'home-directory',
@@ -63,6 +73,10 @@ const rootDirectoryCheck: WarningCheck = {
 const ripgrepAvailabilityCheck: WarningCheck = {
   id: 'ripgrep-availability',
   check: async (options: WarningCheckOptions) => {
+    if (IS_TERMUX) {
+      // Termux users often don't have rg installed; avoid noisy startup warning.
+      return null;
+    }
     if (!options.useRipgrep) {
       return null;
     }
@@ -81,7 +95,7 @@ const ripgrepAvailabilityCheck: WarningCheck = {
 
 // All warning checks
 const WARNING_CHECKS: readonly WarningCheck[] = [
-  homeDirectoryCheck,
+  ...(IS_TERMUX ? [] : [homeDirectoryCheck]),
   rootDirectoryCheck,
   ripgrepAvailabilityCheck,
 ];

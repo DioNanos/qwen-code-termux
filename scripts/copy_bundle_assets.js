@@ -51,6 +51,44 @@ if (existsSync(coreVendorDir)) {
   console.warn(`Warning: Vendor directory not found at ${coreVendorDir}`);
 }
 
+// Copy tiktoken wasm payload (required by bundled tokenizer)
+const tiktokenWasmCandidates = [
+  join(root, 'node_modules', 'tiktoken', 'tiktoken_bg.wasm'),
+  join(
+    root,
+    'packages',
+    'core',
+    'node_modules',
+    'tiktoken',
+    'tiktoken_bg.wasm',
+  ),
+  join(
+    root,
+    'packages',
+    'sdk-typescript',
+    'node_modules',
+    'tiktoken',
+    'tiktoken_bg.wasm',
+  ),
+];
+const tiktokenWasmDest = join(distDir, 'tiktoken_bg.wasm');
+let tiktokenWasmCopied = false;
+
+for (const candidate of tiktokenWasmCandidates) {
+  if (existsSync(candidate)) {
+    copyFileSync(candidate, tiktokenWasmDest);
+    tiktokenWasmCopied = true;
+    console.log('Copied tiktoken_bg.wasm to dist/');
+    break;
+  }
+}
+
+if (!tiktokenWasmCopied) {
+  console.warn(
+    'Warning: tiktoken_bg.wasm not found; tokenization may fail at runtime.',
+  );
+}
+
 console.log('\n✅ All bundle assets copied to dist/');
 
 /**

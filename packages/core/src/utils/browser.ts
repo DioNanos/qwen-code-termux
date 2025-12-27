@@ -27,6 +27,14 @@ export function shouldAttemptBrowserLaunch(): boolean {
     return false;
   }
 
+  const isTermux =
+    process.platform === 'android' ||
+    !!process.env['TERMUX_VERSION'] ||
+    !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'));
+  if (isTermux) {
+    return true;
+  }
+
   // The presence of SSH_CONNECTION indicates a remote session.
   // We should not attempt to launch a browser unless a display is explicitly available
   // (checked below for Linux).

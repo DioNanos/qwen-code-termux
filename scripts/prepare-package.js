@@ -109,6 +109,21 @@ const runtimeDependencies = {};
 if (corePackageJson.dependencies?.tiktoken) {
   runtimeDependencies.tiktoken = corePackageJson.dependencies.tiktoken;
 }
+const isTermuxBuild =
+  process.platform === 'android' ||
+  !!process.env['TERMUX_VERSION'] ||
+  !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'));
+const optionalDependencies = isTermuxBuild
+  ? undefined
+  : {
+      '@lydell/node-pty': '1.1.0',
+      '@lydell/node-pty-darwin-arm64': '1.1.0',
+      '@lydell/node-pty-darwin-x64': '1.1.0',
+      '@lydell/node-pty-linux-x64': '1.1.0',
+      '@lydell/node-pty-win32-arm64': '1.1.0',
+      '@lydell/node-pty-win32-x64': '1.1.0',
+      'node-pty': '^1.0.0',
+    };
 
 // Create a clean package.json for the published package
 const distPackageJson = {
@@ -122,19 +137,19 @@ const distPackageJson = {
   bin: {
     qwen: 'cli.js',
   },
-  files: ['cli.js', 'vendor', '*.sb', 'README.md', 'LICENSE', 'locales'],
+  files: [
+    'cli.js',
+    'vendor',
+    '*.sb',
+    'tiktoken_bg.wasm',
+    'README.md',
+    'LICENSE',
+    'locales',
+  ],
   config: rootPackageJson.config,
   dependencies: runtimeDependencies,
-  optionalDependencies: {
-    '@lydell/node-pty': '1.1.0',
-    '@lydell/node-pty-darwin-arm64': '1.1.0',
-    '@lydell/node-pty-darwin-x64': '1.1.0',
-    '@lydell/node-pty-linux-x64': '1.1.0',
-    '@lydell/node-pty-win32-arm64': '1.1.0',
-    '@lydell/node-pty-win32-x64': '1.1.0',
-    'node-pty': '^1.0.0',
-  },
   engines: rootPackageJson.engines,
+  ...(optionalDependencies ? { optionalDependencies } : {}),
 };
 
 fs.writeFileSync(

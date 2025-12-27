@@ -71,6 +71,37 @@ import {
 } from './settings.js';
 import { FatalConfigError, QWEN_DIR } from '@qwen-code/qwen-code-core';
 
+const isTermux = (): boolean =>
+  process.platform === 'android' ||
+  !!process.env['TERMUX_VERSION'] ||
+  !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'));
+
+const applyTermuxDefaults = <T extends Record<string, unknown>>(
+  settings: T,
+): T => {
+  if (!isTermux()) return settings;
+  const updated = structuredClone(settings) as Record<string, unknown>;
+
+  const ui = (updated.ui as Record<string, unknown> | undefined) ?? {};
+  if (typeof ui.hideBanner !== 'boolean') {
+    ui.hideBanner = true;
+  }
+  if (Object.keys(ui).length > 0) {
+    updated.ui = ui;
+  }
+
+  const tools = (updated.tools as Record<string, unknown> | undefined) ?? {};
+  if (typeof tools.useRipgrep !== 'boolean') {
+    tools.useRipgrep = false;
+    tools.useBuiltinRipgrep = false;
+  }
+  if (Object.keys(tools).length > 0) {
+    updated.tools = tools;
+  }
+
+  return updated as T;
+};
+
 const MOCK_WORKSPACE_DIR = '/mock/workspace';
 // Use the (mocked) SETTINGS_DIRECTORY_NAME for consistency
 const MOCK_WORKSPACE_SETTINGS_PATH = pathActual.join(
@@ -145,7 +176,7 @@ describe('Settings Loading and Merging', () => {
       expect(settings.system.settings).toEqual({});
       expect(settings.user.settings).toEqual({});
       expect(settings.workspace.settings).toEqual({});
-      expect(settings.merged).toEqual({});
+      expect(settings.merged).toEqual(applyTermuxDefaults({}));
     });
 
     it('should load system settings if only system file exists', () => {
@@ -180,10 +211,12 @@ describe('Settings Loading and Merging', () => {
       });
       expect(settings.user.settings).toEqual({});
       expect(settings.workspace.settings).toEqual({});
-      expect(settings.merged).toEqual({
-        ...systemSettingsContent,
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-      });
+      expect(settings.merged).toEqual(
+        applyTermuxDefaults({
+          ...systemSettingsContent,
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+        }),
+      );
     });
 
     it('should load user settings if only user file exists', () => {
@@ -219,10 +252,12 @@ describe('Settings Loading and Merging', () => {
         [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
       });
       expect(settings.workspace.settings).toEqual({});
-      expect(settings.merged).toEqual({
-        ...userSettingsContent,
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-      });
+      expect(settings.merged).toEqual(
+        applyTermuxDefaults({
+          ...userSettingsContent,
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+        }),
+      );
     });
 
     it('should load workspace settings if only workspace file exists', () => {
@@ -256,10 +291,12 @@ describe('Settings Loading and Merging', () => {
         ...workspaceSettingsContent,
         [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
       });
-      expect(settings.merged).toEqual({
-        ...workspaceSettingsContent,
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-      });
+      expect(settings.merged).toEqual(
+        applyTermuxDefaults({
+          ...workspaceSettingsContent,
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+        }),
+      );
     });
 
     it('should merge system, user and workspace settings, with system taking precedence over workspace, and workspace over user', () => {
@@ -331,23 +368,25 @@ describe('Settings Loading and Merging', () => {
         ...workspaceSettingsContent,
         [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
       });
-      expect(settings.merged).toEqual({
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-        ui: {
-          theme: 'system-theme',
-        },
-        tools: {
-          sandbox: false,
-          core: ['tool1'],
-        },
-        telemetry: { enabled: false },
-        context: {
-          fileName: 'WORKSPACE_CONTEXT.md',
-        },
-        mcp: {
-          allowed: ['server1', 'server2'],
-        },
-      });
+      expect(settings.merged).toEqual(
+        applyTermuxDefaults({
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+          ui: {
+            theme: 'system-theme',
+          },
+          tools: {
+            sandbox: false,
+            core: ['tool1'],
+          },
+          telemetry: { enabled: false },
+          context: {
+            fileName: 'WORKSPACE_CONTEXT.md',
+          },
+          mcp: {
+            allowed: ['server1', 'server2'],
+          },
+        }),
+      );
     });
 
     it('should correctly migrate a complex legacy (v1) settings file', () => {
@@ -385,37 +424,39 @@ describe('Settings Loading and Merging', () => {
 
       const settings = loadSettings(MOCK_WORKSPACE_DIR);
 
-      expect(settings.merged).toEqual({
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-        ui: {
-          theme: 'legacy-dark',
-        },
-        general: {
-          vimMode: true,
-        },
-        context: {
-          fileName: 'LEGACY_CONTEXT.md',
-        },
-        model: {
-          name: 'gemini-pro',
-        },
-        mcpServers: {
-          'legacy-server-1': {
-            command: 'npm',
-            args: ['run', 'start:server1'],
-            description: 'Legacy Server 1',
+      expect(settings.merged).toEqual(
+        applyTermuxDefaults({
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+          ui: {
+            theme: 'legacy-dark',
           },
-          'legacy-server-2': {
-            command: 'node',
-            args: ['server2.js'],
-            description: 'Legacy Server 2',
+          general: {
+            vimMode: true,
           },
-        },
-        mcp: {
-          allowed: ['legacy-server-1'],
-        },
-        someUnrecognizedSetting: 'should-be-preserved',
-      });
+          context: {
+            fileName: 'LEGACY_CONTEXT.md',
+          },
+          model: {
+            name: 'gemini-pro',
+          },
+          mcpServers: {
+            'legacy-server-1': {
+              command: 'npm',
+              args: ['run', 'start:server1'],
+              description: 'Legacy Server 1',
+            },
+            'legacy-server-2': {
+              command: 'node',
+              args: ['server2.js'],
+              description: 'Legacy Server 2',
+            },
+          },
+          mcp: {
+            allowed: ['legacy-server-1'],
+          },
+          someUnrecognizedSetting: 'should-be-preserved',
+        }),
+      );
     });
 
     it('should rewrite allowedTools to tools.allowed during migration', () => {
@@ -667,10 +708,12 @@ describe('Settings Loading and Merging', () => {
 
       const settings = loadSettings(MOCK_WORKSPACE_DIR);
 
-      expect(settings.systemDefaults.settings).toEqual({
-        ...systemDefaultsContent,
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-      });
+      expect(settings.systemDefaults.settings).toEqual(
+        applyTermuxDefaults({
+          ...systemDefaultsContent,
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+        }),
+      );
       expect(settings.system.settings).toEqual({
         ...systemSettingsContent,
         [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
@@ -683,26 +726,28 @@ describe('Settings Loading and Merging', () => {
         ...workspaceSettingsContent,
         [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
       });
-      expect(settings.merged).toEqual({
-        [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-        context: {
-          fileName: 'WORKSPACE_CONTEXT.md',
-          includeDirectories: [
-            '/system/defaults/dir',
-            '/user/dir1',
-            '/user/dir2',
-            '/workspace/dir',
-            '/system/dir',
-          ],
-        },
-        telemetry: false,
-        tools: {
-          sandbox: false,
-        },
-        ui: {
-          theme: 'system-theme',
-        },
-      });
+      expect(settings.merged).toEqual(
+        applyTermuxDefaults({
+          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+          context: {
+            fileName: 'WORKSPACE_CONTEXT.md',
+            includeDirectories: [
+              '/system/defaults/dir',
+              '/user/dir1',
+              '/user/dir2',
+              '/workspace/dir',
+              '/system/dir',
+            ],
+          },
+          telemetry: false,
+          tools: {
+            sandbox: false,
+          },
+          ui: {
+            theme: 'system-theme',
+          },
+        }),
+      );
     });
 
     it('should use folderTrust from workspace settings when trusted', () => {
@@ -983,7 +1028,11 @@ describe('Settings Loading and Merging', () => {
       (fs.readFileSync as Mock).mockReturnValue('{}');
       const settings = loadSettings(MOCK_WORKSPACE_DIR);
       expect(settings.merged.telemetry).toBeUndefined();
-      expect(settings.merged.ui).toBeUndefined();
+      if (isTermux()) {
+        expect(settings.merged.ui?.hideBanner).toBe(true);
+      } else {
+        expect(settings.merged.ui).toBeUndefined();
+      }
       expect(settings.merged.mcpServers).toBeUndefined();
     });
 
@@ -1871,10 +1920,12 @@ describe('Settings Loading and Merging', () => {
           ...systemSettingsContent,
           [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
         });
-        expect(settings.merged).toEqual({
-          ...systemSettingsContent,
-          [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
-        });
+        expect(settings.merged).toEqual(
+          applyTermuxDefaults({
+            ...systemSettingsContent,
+            [SETTINGS_VERSION_KEY]: SETTINGS_VERSION,
+          }),
+        );
       });
     });
   });

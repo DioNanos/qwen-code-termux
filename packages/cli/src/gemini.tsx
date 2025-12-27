@@ -399,7 +399,7 @@ export async function main() {
     }
 
     let input = config.getQuestion();
-    const startupWarnings = [
+    let startupWarnings = [
       ...(await getStartupWarnings()),
       ...(await getUserStartupWarnings({
         workspaceRoot: process.cwd(),
@@ -407,6 +407,9 @@ export async function main() {
         useBuiltinRipgrep: settings.merged.tools?.useBuiltinRipgrep ?? true,
       })),
     ];
+    if (settings.merged.ui?.hideBanner || config.getScreenReader()) {
+      startupWarnings = [];
+    }
 
     // Render UI, passing necessary config values. Check that there is no command line question.
     if (config.isInteractive()) {

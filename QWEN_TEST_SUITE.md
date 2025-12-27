@@ -1,9 +1,9 @@
-# 🧪 Qwen Code Termux Test Suite (v0.6.0-termux)
+# 🧪 Qwen Code Termux Test Suite (v0.6.2-termux)
 
 **Goal**: Validate the Termux build without native deps
 (node-pty/keytar/tree-sitter). Run from a clean shell on Termux ARM64.
 
-**Version**: 0.6.0-termux
+**Version**: 0.6.2-termux
 **Last Updated**: 2025-12-27
 
 ## 0. Prep
@@ -13,7 +13,7 @@
 
 ## 1. Version & Env
 
-1.1 `qwen --version` → shows `0.6.0-termux`
+1.1 `qwen --version` → shows `0.6.2-termux`
 1.2 `node -v`, `uname -m`, `echo $PREFIX` (expect Termux paths / aarch64)
 
 ## 2. CLI Basics
@@ -48,8 +48,8 @@
 
 ## 7. Banner Test
 
-7.1 With `hideBanner: false` (default) → banner shows on start
-7.2 With `hideBanner: true` → banner is hidden
+7.1 Default on Termux (no setting) → banner hidden
+7.2 With `hideBanner: false` → banner shows on start
 7.3 Check `~/.qwen/settings.json` for `ui.hideBanner` value
 
 ## 8. Termux specifics
@@ -60,8 +60,8 @@
 
 ## 9. Package/binary
 
-9.1 `ls $(npm root -g)/@dionanos/qwen-code-termux/dist/cli.js` exists
-9.2 `node dist/qwen.js --version` (from repo) prints 0.6.0-termux
+9.1 `ls $(npm root -g)/@mmmbuto/qwen-code-termux/dist/cli.js` exists
+9.2 `node dist/cli.js --version` (from repo) prints 0.6.2-termux
 
 ## 10. Known limits (assert graceful handling)
 
@@ -107,9 +107,9 @@
 
 13.1 **Banner visibility**:
 
-- Default: banner shows on start
-- `/settings` → `ui.hideBanner` → toggle to true → banner hidden
-- Restart `qwen` → verify banner remains hidden
+- Default on Termux: banner hidden
+- `/settings` → `ui.hideBanner` → toggle to false → banner shows
+- Restart `qwen` → verify banner visibility matches setting
 
   13.2 **Dynamic content**:
 
@@ -140,7 +140,7 @@
 ## Test Report Template
 
 ```markdown
-# Test Report v0.6.0-termux
+# Test Report v0.6.2-termux
 
 **Date**: YYYY-MM-DD
 **Device**: [ROG Phone 3 / Pixel 9 Pro / etc]
@@ -166,7 +166,7 @@
 
 **Version History**:
 
-- v0.6.0-termux (2025-12-27): Initial test suite for qwen-code-termux
+- v0.6.2-termux (2025-12-27): Updated test suite for qwen-code-termux
   - Responsive settings layout
   - Banner integration
   - Termux tools discovery

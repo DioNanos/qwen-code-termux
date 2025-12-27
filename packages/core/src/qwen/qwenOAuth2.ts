@@ -6,8 +6,9 @@
 
 import crypto from 'crypto';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { promises as fs, accessSync, constants } from 'node:fs';
 import * as os from 'os';
+import { execFileSync } from 'node:child_process';
 
 import open from 'open';
 import { EventEmitter } from 'events';
@@ -34,6 +35,138 @@ const QWEN_OAUTH_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 // File System Configuration
 const QWEN_DIR = '.qwen';
 const QWEN_CREDENTIAL_FILENAME = 'oauth_creds.json';
+
+/**
+ * Detect if running on Termux/Android
+ */
+function isTermux(): boolean {
+  return (
+    process.platform === 'android' ||
+    process.env['PREFIX']?.includes('com.termux') ||
+    process.env['TERMUX_VERSION'] !== undefined
+  );
+}
+
+function ensureSystemBinInPath(pathValue?: string): string | undefined {
+  if (!pathValue) return pathValue;
+  if (pathValue.includes('/system/bin')) return pathValue;
+  return `${pathValue}:/system/bin`;
+}
+
+function resolveAndroidCommand(candidates: string[]): string | null {
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not executable, try next
+    }
+  }
+  return null;
+}
+
+function getAndroidUserId(): string | undefined {
+  const candidates = ['cmd', '/system/bin/cmd'];
+  const cmdPath = resolveAndroidCommand(candidates);
+  if (!cmdPath) return undefined;
+
+  try {
+    const output = execFileSync(cmdPath, ['activity', 'get-current-user'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, PATH: ensureSystemBinInPath(process.env['PATH']) },
+    })
+      .toString()
+      .trim();
+    const match = output.match(/\d+/);
+    return match ? match[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Open URL in browser - uses termux-open-url on Termux, 'open' package otherwise
+ * @param url - The URL to open
+ */
+async function openBrowserUrl(url: string): Promise<void> {
+  if (isTermux()) {
+    // Use termux-open-url on Android/Termux
+    const possiblePaths = [
+      '/data/data/com.termux/files/usr/bin/termux-open-url',
+      '/usr/bin/termux-open-url',
+      'termux-open-url',
+    ];
+
+    let termuxOpenUrl = 'termux-open-url';
+    for (const candidate of possiblePaths) {
+      try {
+        accessSync(candidate, constants.X_OK);
+        termuxOpenUrl = candidate;
+        break;
+      } catch {
+        // Path not found or not executable, continue
+      }
+    }
+
+    const resolvedUserId = getAndroidUserId();
+    const termuxApp = process.env['TERMUX_OPEN_URL_APP'];
+    const args = termuxApp ? [url, termuxApp] : [url];
+    const env = {
+      ...process.env,
+      PATH: ensureSystemBinInPath(process.env['PATH']),
+      ...(resolvedUserId ? { TERMUX__USER_ID: resolvedUserId } : {}),
+    };
+
+    try {
+      console.debug(`Opening URL with: ${termuxOpenUrl}`);
+      execFileSync(termuxOpenUrl, args, {
+        stdio: 'ignore',
+        env,
+      });
+      return;
+    } catch (error) {
+      // Fallback: try Android Activity Manager directly
+      const rawUserId = resolvedUserId ?? process.env['TERMUX__USER_ID'] ?? '0';
+      const userId = /^\d+$/.test(rawUserId) ? rawUserId : '0';
+      try {
+        const amCandidates = [
+          '/data/data/com.termux/files/usr/bin/am',
+          '/system/bin/am',
+          'am',
+        ];
+        const amPath = resolveAndroidCommand(amCandidates) ?? 'am';
+        execFileSync(
+          amPath,
+          [
+            'start',
+            '--user',
+            userId,
+            '-a',
+            'android.intent.action.VIEW',
+            '-d',
+            url,
+          ],
+          {
+            stdio: 'ignore',
+            env,
+          },
+        );
+        return;
+      } catch (amError) {
+        console.error(
+          `Failed to open URL with termux-open-url: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        console.error(
+          `Fallback 'am start' failed: ${amError instanceof Error ? amError.message : String(amError)}`,
+        );
+        throw error;
+      }
+    }
+  } else {
+    // Use 'open' package on other platforms
+    await open(url);
+  }
+}
 
 /**
  * PKCE (Proof Key for Code Exchange) utilities
@@ -604,20 +737,7 @@ async function authWithQwenDeviceFlow(
     // If browser launch is not suppressed, try to open the URL
     if (!config.isBrowserLaunchSuppressed()) {
       try {
-        const childProcess = await open(deviceAuth.verification_uri_complete);
-
-        // IMPORTANT: Attach an error handler to the returned child process.
-        // Without this, if `open` fails to spawn a process (e.g., `xdg-open` is not found
-        // in a minimal Docker container), it will emit an unhandled 'error' event,
-        // causing the entire Node.js process to crash.
-        if (childProcess) {
-          childProcess.on('error', () => {
-            console.debug(
-              'Failed to open browser. Visit this URL to authorize:',
-            );
-            showFallbackMessage();
-          });
-        }
+        await openBrowserUrl(deviceAuth.verification_uri_complete);
       } catch (_err) {
         showFallbackMessage();
       }

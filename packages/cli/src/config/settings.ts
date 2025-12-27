@@ -50,6 +50,7 @@ function getMergeStrategyForPath(path: string[]): MergeStrategy | undefined {
 export type { Settings, MemoryImportFormat };
 
 export const SETTINGS_DIRECTORY_NAME = '.qwen';
+const LEGACY_SETTINGS_FILENAME = 'config.json';
 export const USER_SETTINGS_PATH = Storage.getGlobalSettingsPath();
 export const USER_SETTINGS_DIR = path.dirname(USER_SETTINGS_PATH);
 export const DEFAULT_EXCLUDED_ENV_VARS = ['DEBUG', 'DEBUG_MODE'];
@@ -136,6 +137,14 @@ const MIGRATION_MAP: Record<string, string> = {
   vlmSwitchMode: 'experimental.vlmSwitchMode',
   visionModelPreview: 'experimental.visionModelPreview',
 };
+
+function isTermux(): boolean {
+  return (
+    process.platform === 'android' ||
+    !!process.env['TERMUX_VERSION'] ||
+    !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'))
+  );
+}
 
 export function getSystemSettingsPath(): string {
   if (process.env['QWEN_CODE_SYSTEM_SETTINGS_PATH']) {
@@ -612,6 +621,11 @@ export function loadSettings(
   const systemSettingsPath = getSystemSettingsPath();
   const systemDefaultsPath = getSystemDefaultsPath();
   const migratedInMemorScopes = new Set<SettingScope>();
+  const legacyUserSettingsPath = path.join(
+    homedir(),
+    SETTINGS_DIRECTORY_NAME,
+    LEGACY_SETTINGS_FILENAME,
+  );
 
   // Resolve paths to their canonical representation to handle symlinks
   const resolvedWorkspaceDir = path.resolve(workspaceDir);
@@ -631,14 +645,32 @@ export function loadSettings(
   const workspaceSettingsPath = new Storage(
     workspaceDir,
   ).getWorkspaceSettingsPath();
+  const legacyWorkspaceSettingsPath = path.join(
+    workspaceDir,
+    SETTINGS_DIRECTORY_NAME,
+    LEGACY_SETTINGS_FILENAME,
+  );
+
+  let warnedLegacySettings = false;
 
   const loadAndMigrate = (
     filePath: string,
     scope: SettingScope,
+    legacyFilePath?: string,
   ): { settings: Settings; rawJson?: string } => {
     try {
-      if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, 'utf-8');
+      let sourcePath = filePath;
+      let usingLegacy = false;
+
+      if (!fs.existsSync(sourcePath) && legacyFilePath) {
+        if (fs.existsSync(legacyFilePath)) {
+          sourcePath = legacyFilePath;
+          usingLegacy = true;
+        }
+      }
+
+      if (fs.existsSync(sourcePath)) {
+        const content = fs.readFileSync(sourcePath, 'utf-8');
         const rawSettings: unknown = JSON.parse(stripJsonComments(content));
 
         if (
@@ -648,7 +680,7 @@ export function loadSettings(
         ) {
           settingsErrors.push({
             message: 'Settings file is not a valid JSON object.',
-            path: filePath,
+            path: sourcePath,
           });
           return { settings: {} };
         }
@@ -659,12 +691,20 @@ export function loadSettings(
           if (migratedSettings) {
             if (MIGRATE_V2_OVERWRITE) {
               try {
-                fs.renameSync(filePath, `${filePath}.orig`);
-                fs.writeFileSync(
-                  filePath,
-                  JSON.stringify(migratedSettings, null, 2),
-                  'utf-8',
-                );
+                if (!usingLegacy) {
+                  fs.renameSync(sourcePath, `${sourcePath}.orig`);
+                  fs.writeFileSync(
+                    sourcePath,
+                    JSON.stringify(migratedSettings, null, 2),
+                    'utf-8',
+                  );
+                } else {
+                  fs.writeFileSync(
+                    filePath,
+                    JSON.stringify(migratedSettings, null, 2),
+                    'utf-8',
+                  );
+                }
               } catch (e) {
                 console.error(
                   `Error migrating settings file on disk: ${getErrorMessage(
@@ -682,8 +722,10 @@ export function loadSettings(
           settingsObject[SETTINGS_VERSION_KEY] = SETTINGS_VERSION;
           if (MIGRATE_V2_OVERWRITE) {
             try {
+              const targetPath =
+                usingLegacy && sourcePath !== filePath ? filePath : sourcePath;
               fs.writeFileSync(
-                filePath,
+                targetPath,
                 JSON.stringify(settingsObject, null, 2),
                 'utf-8',
               );
@@ -692,6 +734,27 @@ export function loadSettings(
                 `Error adding version to settings file: ${getErrorMessage(e)}`,
               );
             }
+          }
+        }
+        if (usingLegacy && !warnedLegacySettings) {
+          console.warn(
+            `Loaded legacy settings from ${sourcePath}. Please migrate to ${filePath}.`,
+          );
+          warnedLegacySettings = true;
+        }
+        if (usingLegacy && MIGRATE_V2_OVERWRITE) {
+          try {
+            fs.writeFileSync(
+              filePath,
+              JSON.stringify(settingsObject, null, 2),
+              'utf-8',
+            );
+          } catch (e) {
+            console.error(
+              `Error writing migrated settings to ${filePath}: ${getErrorMessage(
+                e,
+              )}`,
+            );
           }
         }
         return { settings: settingsObject as Settings, rawJson: content };
@@ -710,7 +773,11 @@ export function loadSettings(
     systemDefaultsPath,
     SettingScope.SystemDefaults,
   );
-  const userResult = loadAndMigrate(USER_SETTINGS_PATH, SettingScope.User);
+  const userResult = loadAndMigrate(
+    USER_SETTINGS_PATH,
+    SettingScope.User,
+    legacyUserSettingsPath,
+  );
 
   let workspaceResult: { settings: Settings; rawJson?: string } = {
     settings: {} as Settings,
@@ -720,6 +787,7 @@ export function loadSettings(
     workspaceResult = loadAndMigrate(
       workspaceSettingsPath,
       SettingScope.Workspace,
+      legacyWorkspaceSettingsPath,
     );
   }
 
@@ -735,6 +803,41 @@ export function loadSettings(
   systemDefaultSettings = resolveEnvVarsInObject(systemDefaultsResult.settings);
   userSettings = resolveEnvVarsInObject(userResult.settings);
   workspaceSettings = resolveEnvVarsInObject(workspaceResult.settings);
+
+  if (isTermux()) {
+    const hasHideBannerSetting = [
+      systemSettings.ui?.hideBanner,
+      systemDefaultSettings.ui?.hideBanner,
+      userSettings.ui?.hideBanner,
+      workspaceSettings.ui?.hideBanner,
+    ].some((value) => typeof value === 'boolean');
+    if (!hasHideBannerSetting) {
+      systemDefaultSettings = {
+        ...systemDefaultSettings,
+        ui: {
+          ...(systemDefaultSettings.ui ?? {}),
+          hideBanner: true,
+        },
+      };
+    }
+
+    const hasUseRipgrepSetting = [
+      systemSettings.tools?.useRipgrep,
+      systemDefaultSettings.tools?.useRipgrep,
+      userSettings.tools?.useRipgrep,
+      workspaceSettings.tools?.useRipgrep,
+    ].some((value) => typeof value === 'boolean');
+    if (!hasUseRipgrepSetting) {
+      systemDefaultSettings = {
+        ...systemDefaultSettings,
+        tools: {
+          ...(systemDefaultSettings.tools ?? {}),
+          useRipgrep: false,
+          useBuiltinRipgrep: false,
+        },
+      };
+    }
+  }
 
   // Support legacy theme names
   if (userSettings.ui?.theme === 'VS') {
