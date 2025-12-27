@@ -173,6 +173,60 @@ Key settings available in `/settings`:
 - `ui.hideTips` - Hide tips display
 - `tools.approvalMode` - Control tool approval behavior
 
+## Termux-Specific Changes
+
+### v0.6.0-termux Modifications
+
+This fork includes specific optimizations for Android/Termux:
+
+**UI/UX Fixes:**
+
+- **Responsive Settings Layout** - Fixed settings dialog for small screens (smartphones)
+  - Changed `minWidth={50}` to `flexGrow={1}` for adaptive labels
+  - Values no longer overflow on narrow terminals
+- **Banner System** - Full banner component integration with hideBanner support
+  - `ThemedGradient.tsx` - Gradient theme for banner first line
+  - `Banner.tsx` - Dynamic warning/info banner display
+  - `useBanner.ts` - Smart banner counting (max 5 shows)
+  - `persistentState.ts` - State persistence across sessions
+
+**Termux Tools Integration:**
+
+- `scripts/termux-tools/discovery.sh` - Discovers 20+ Termux-API tools
+- `scripts/termux-tools/call.sh` - Dispatcher for tool execution
+
+**Available Termux Tools:**
+
+| Tool                          | Description                             |
+| ----------------------------- | --------------------------------------- |
+| `termux_battery_status`       | Battery %, health, temp, charging state |
+| `termux_clipboard_get/set`    | Read/write Android clipboard            |
+| `termux_toast`                | Show toast notification on screen       |
+| `termux_notification`         | Create persistent notification          |
+| `termux_tts_speak`            | Text-to-speech with language/pitch/rate |
+| `termux_vibrate`              | Vibrate device                          |
+| `termux_torch`                | Control camera flash                    |
+| `termux_wifi_scan/connection` | WiFi info                               |
+| `termux_location`             | GPS location                            |
+| `termux_camera_info/photo`    | Camera access                           |
+| `termux_dialog`               | Text input dialog                       |
+| `termux_telephony_call`       | Initiate phone call                     |
+| `termux_sensor_info/read`     | Read device sensors                     |
+
+**npm Install Optimizations:**
+
+- `os: ["android", ...]` - Allows Termux installs
+- `cpu: ["arm64", ...]` - Targets Android architecture
+- Minimal postinstall message: `✓ qwen-code-termux installed`
+
+## Testing
+
+See `QWEN_TEST_SUITE.md` for post-install testing instructions.
+
+## Patches Documentation
+
+See `docs/patches/README.md` for complete list of Termux-specific modifications.
+
 ## Updating
 
 ```bash
