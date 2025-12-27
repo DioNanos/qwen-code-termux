@@ -126,6 +126,12 @@ export interface UIState {
   // Subagent dialogs
   isSubagentCreateDialogOpen: boolean;
   isAgentsManagerDialogOpen: boolean;
+  // Banner data
+  bannerData: {
+    defaultText: string;
+    warningText: string;
+  };
+  bannerVisible: boolean;
 }
 
 export const UIStateContext = createContext<UIState | null>(null);

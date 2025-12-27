@@ -866,7 +866,7 @@ export function SettingsDialog({
           return (
             <React.Fragment key={item.value}>
               <Box flexDirection="row" alignItems="center">
-                <Box minWidth={2} flexShrink={0}>
+                <Box width={2} flexShrink={0}>
                   <Text
                     color={
                       isActive ? theme.status.success : theme.text.secondary
@@ -875,7 +875,7 @@ export function SettingsDialog({
                     {isActive ? '●' : ''}
                   </Text>
                 </Box>
-                <Box minWidth={50}>
+                <Box flexGrow={1} paddingRight={1}>
                   <Text
                     color={isActive ? theme.status.success : theme.text.primary}
                   >
@@ -885,18 +885,19 @@ export function SettingsDialog({
                     )}
                   </Text>
                 </Box>
-                <Box minWidth={3} />
-                <Text
-                  color={
-                    isActive
-                      ? theme.status.success
-                      : shouldBeGreyedOut
-                        ? theme.text.secondary
-                        : theme.text.primary
-                  }
-                >
-                  {displayValue}
-                </Text>
+                <Box flexShrink={0}>
+                  <Text
+                    color={
+                      isActive
+                        ? theme.status.success
+                        : shouldBeGreyedOut
+                          ? theme.text.secondary
+                          : theme.text.primary
+                    }
+                  >
+                    {displayValue}
+                  </Text>
+                </Box>
               </Box>
               <Box height={1} />
             </React.Fragment>

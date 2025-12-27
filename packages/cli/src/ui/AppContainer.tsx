@@ -157,6 +157,19 @@ export const AppContainer = (props: AppContainerProps) => {
     config.isTrustedFolder(),
   );
 
+  // Banner states (static for now - dynamic content can be added later)
+  const defaultBannerText = '';
+  const warningBannerText = '';
+  const bannerVisible = true;
+
+  const bannerData = useMemo(
+    () => ({
+      defaultText: defaultBannerText,
+      warningText: warningBannerText,
+    }),
+    [defaultBannerText, warningBannerText],
+  );
+
   const extensions = config.getExtensions();
   const {
     extensionsUpdateState,
@@ -1294,6 +1307,9 @@ export const AppContainer = (props: AppContainerProps) => {
       // Subagent dialogs
       isSubagentCreateDialogOpen,
       isAgentsManagerDialogOpen,
+      // Banner data
+      bannerData,
+      bannerVisible,
     }),
     [
       isThemeDialogOpen,
@@ -1384,6 +1400,9 @@ export const AppContainer = (props: AppContainerProps) => {
       // Subagent dialogs
       isSubagentCreateDialogOpen,
       isAgentsManagerDialogOpen,
+      // Banner data
+      bannerData,
+      bannerVisible,
     ],
   );
 
