@@ -3,8 +3,8 @@
 Android/Termux optimized fork of Qwen Code CLI. Installs cleanly on Termux
 by skipping native modules and adding mobile-specific optimizations.
 
-[![npm](https://img.shields.io/npm/v/@dionanos/qwen-code-termux?style=flat-square&logo=npm)](https://www.npmjs.com/package/@dionanos/qwen-code-termux)
-[![downloads](https://img.shields.io/npm/dt/@dionanos/qwen-code-termux?style=flat-square)](https://www.npmjs.com/package/@dionanos/qwen-code-termux)
+[![npm](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux?style=flat-square&logo=npm)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
+[![downloads](https://img.shields.io/npm/dt/@mmmbuto/qwen-code-termux?style=flat-square)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 [![ko-fi](https://img.shields.io/badge/☕_Support-Ko--fi-FF5E5B?style=flat-square&logo=ko-fi)](https://ko-fi.com/dionanos)
 
 ---
@@ -28,7 +28,7 @@ while tracking upstream development closely.
 ```bash
 pkg update && pkg upgrade -y
 pkg install nodejs-lts -y
-npm install -g @dionanos/qwen-code-termux
+npm install -g @mmmbuto/qwen-code-termux
 
 qwen --version  # expected: 0.6.0-termux
 ```
@@ -230,7 +230,7 @@ See `docs/patches/README.md` for complete list of Termux-specific modifications.
 ## Updating
 
 ```bash
-npm install -g @dionanos/qwen-code-termux@latest
+npm install -g @mmmbuto/qwen-code-termux@latest
 ```
 
 ## Upstream Tracking
