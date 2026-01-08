@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.6.401",
+  "version": "0.6.402",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -13,7 +13,7 @@
     "url": "git+https://github.com/DioNanos/qwen-code-termux.git"
   },
   "config": {
-    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.6.401"
+    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.6.402"
   },
   "scripts": {
     "start": "cross-env node scripts/start.js",
@@ -122,7 +122,7 @@
     "@lydell/node-pty-linux-x64": "1.1.0",
     "@lydell/node-pty-win32-arm64": "1.1.0",
     "@lydell/node-pty-win32-x64": "1.1.0",
-    "node-pty": "^1.0.0"
+    "@lydell/node-pty-linux-arm64": "1.2.0-beta.2"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx}": [

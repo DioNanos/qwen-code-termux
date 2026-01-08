@@ -1,4 +1,10 @@
 # Changelog
+## 0.6.402 (Termux Edition)
+
+- Added @lydell/node-pty-linux-arm64 to optionalDependencies for ARM64 Termux support
+- Removed generic node-pty package (conflicts with platform-specific prebuilds)
+- Clean installation without node-gyp build errors on Termux
+
 
 ## 0.6.401 (Termux Edition)
 
