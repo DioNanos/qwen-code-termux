@@ -1,4 +1,4 @@
-# Termux Patches (0.6.2-termux)
+# Termux Patches (0.6.404-termux)
 
 Minimal changes to run Qwen Code on Android/Termux without native deps.
 
@@ -7,7 +7,9 @@ Minimal changes to run Qwen Code on Android/Termux without native deps.
 - Responsive settings layout for small screens.
 - Banner system + hideBanner support.
 - Termux detection and clipboard/shell fallbacks.
-- Optional native deps (pty/keychain) are skipped.
+- PTY uses `@mmmbuto/node-pty-android-arm64` (Termux-only) with local typings
+  shim (`packages/core/src/types/pty-shim.d.ts`).
+- `prepare` is a no-op on Termux to avoid unnecessary bundle work.
 - Prebuilt `dist/cli.js` in npm package.
 
 ## Notes

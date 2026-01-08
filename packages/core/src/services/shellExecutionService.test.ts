@@ -21,7 +21,7 @@ const mockGetPty = vi.hoisted(() => vi.fn());
 const mockSerializeTerminalToObject = vi.hoisted(() => vi.fn());
 
 // Top-level Mocks
-vi.mock('@lydell/node-pty', () => ({
+vi.mock('@mmmbuto/node-pty-android-arm64', () => ({
   spawn: mockPtySpawn,
 }));
 vi.mock('child_process', () => ({
@@ -114,7 +114,7 @@ describe('ShellExecutionService', () => {
     mockPlatform.mockReturnValue('linux');
     mockGetPty.mockResolvedValue({
       module: { spawn: mockPtySpawn },
-      name: 'mock-pty',
+      name: 'mmmbuto-node-pty',
     });
 
     onOutputEventMock = vi.fn();
@@ -885,7 +885,7 @@ describe('ShellExecutionService execution method selection', () => {
     mockPtySpawn.mockReturnValue(mockPtyProcess);
     mockGetPty.mockResolvedValue({
       module: { spawn: mockPtySpawn },
-      name: 'mock-pty',
+      name: 'mmmbuto-node-pty',
     });
 
     // Mock for child_process
@@ -919,7 +919,7 @@ describe('ShellExecutionService execution method selection', () => {
     expect(mockGetPty).toHaveBeenCalled();
     expect(mockPtySpawn).toHaveBeenCalled();
     expect(mockCpSpawn).not.toHaveBeenCalled();
-    expect(result.executionMethod).toBe('mock-pty');
+    expect(result.executionMethod).toBe('mmmbuto-node-pty');
   });
 
   it('should use child_process when shouldUseNodePty is false', async () => {

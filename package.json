@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.6.403-termux",
+  "version": "0.6.404-termux",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -13,7 +13,7 @@
     "url": "git+https://github.com/DioNanos/qwen-code-termux.git"
   },
   "config": {
-    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.6.403-termux"
+    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.6.404-termux"
   },
   "scripts": {
     "start": "cross-env node scripts/start.js",
@@ -49,7 +49,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "check-i18n": "npm run check-i18n --workspace=packages/cli",
     "preflight": "npm run clean && npm ci && npm run format && npm run lint:ci && npm run build && npm run typecheck && npm run test:ci",
-    "prepare": "husky && npm run bundle",
+    "prepare": "node scripts/prepare-termux.cjs",
     "prepare:package": "node scripts/prepare-package.js",
     "release:version": "node scripts/version.js",
     "telemetry": "node scripts/telemetry.js",
@@ -116,13 +116,7 @@
     "simple-git": "^3.28.0"
   },
   "optionalDependencies": {
-    "@lydell/node-pty": "1.1.0",
-    "@lydell/node-pty-darwin-arm64": "1.1.0",
-    "@lydell/node-pty-darwin-x64": "1.1.0",
-    "@lydell/node-pty-linux-x64": "1.1.0",
-    "@lydell/node-pty-win32-arm64": "1.1.0",
-    "@lydell/node-pty-win32-x64": "1.1.0",
-    "@lydell/node-pty-linux-arm64": "1.2.0-beta.2"
+    "@mmmbuto/node-pty-android-arm64": "1.1.0"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx}": [

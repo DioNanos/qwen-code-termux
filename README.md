@@ -1,7 +1,7 @@
 # 🤖 Qwen Code – Termux Edition
 
 Android/Termux optimized fork of Qwen Code CLI. Installs cleanly on Termux
-by skipping native modules and using mobile‑friendly fallbacks.
+with a native ARM64 PTY prebuild and mobile‑friendly fallbacks.
 
 [![npm](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux?style=flat-square&logo=npm)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 [![downloads](https://img.shields.io/npm/dt/@mmmbuto/qwen-code-termux?style=flat-square)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
@@ -14,7 +14,7 @@ by skipping native modules and using mobile‑friendly fallbacks.
 **Optimized Termux edition** of `QwenLM/qwen-code`.
 
 - **Termux‑First:** Android filesystem and shell fallbacks.
-- **Lightweight:** No native PTY/keychain deps.
+- **Lightweight:** PTY via `@mmmbuto/node-pty-android-arm64`, no keychain deps.
 - **Up‑to‑Date:** Tracks upstream Qwen Code.
 
 ## Installation (Termux)
@@ -24,7 +24,7 @@ pkg update && pkg upgrade -y
 pkg install nodejs-lts -y
 npm install -g @mmmbuto/qwen-code-termux
 
-qwen --version  # expected: 0.6.403-termux
+qwen --version  # expected: 0.6.404-termux
 ```
 
 Build from source:
@@ -32,7 +32,7 @@ Build from source:
 ```bash
 git clone https://github.com/DioNanos/qwen-code-termux.git
 cd qwen-code-termux
-npm install --ignore-optional --ignore-scripts
+npm install
 npm run build && npm run bundle
 node dist/cli.js --version
 ```
@@ -78,11 +78,13 @@ export OPENAI_MODEL="gpt-4o"                        # optional
 - **OAuth:** browser launch via `termux-open-url` with Android fallback.
 - **Clean UX:** desktop‑centric warnings suppressed on Termux.
 - **Defaults:** banner hidden by default on Termux (toggle in settings).
+- **PTY:** prebuilt `@mmmbuto/node-pty-android-arm64` for interactive shells.
 
 ## Documentation & Fixes
 
 - **Test Suite**: [`QWEN_TEST_SUITE.md`](./QWEN_TEST_SUITE.md)
-- **Test Report**: [`QWEN_TEST_REPORT_v0.6.403-termux.md`](./QWEN_TEST_REPORT_v0.6.403-termux.md)
+- **Test Report**: [`QWEN_TEST_REPORT_v0.6.404-termux.md`](./QWEN_TEST_REPORT_v0.6.404-termux.md)
+  (latest report; 0.6.404-termux)
 - **Patches**: [`docs/patches/README.md`](./docs/patches/README.md)
 - **Termux Fixes**: [`docs/patches/TERMUX_FIXES.md`](./docs/patches/TERMUX_FIXES.md)
 

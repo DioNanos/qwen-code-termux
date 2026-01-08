@@ -25,15 +25,7 @@ const pkg = require(path.resolve(__dirname, 'package.json'));
 // Clean dist directory (cross-platform)
 rmSync(path.resolve(__dirname, 'dist'), { recursive: true, force: true });
 
-const external = [
-  '@lydell/node-pty',
-  'node-pty',
-  '@lydell/node-pty-darwin-arm64',
-  '@lydell/node-pty-darwin-x64',
-  '@lydell/node-pty-linux-x64',
-  '@lydell/node-pty-win32-arm64',
-  '@lydell/node-pty-win32-x64',
-];
+const external = ['@mmmbuto/node-pty-android-arm64'];
 
 esbuild
   .build({

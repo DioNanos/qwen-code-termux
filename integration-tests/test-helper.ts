@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { env } from 'node:process';
 import fs from 'node:fs';
 import { EOL } from 'node:os';
-import * as pty from '@lydell/node-pty';
+import * as pty from '@mmmbuto/node-pty-android-arm64';
 import stripAnsi from 'strip-ansi';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

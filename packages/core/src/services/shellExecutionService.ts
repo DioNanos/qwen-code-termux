@@ -10,7 +10,7 @@ import { getPty } from '../utils/getPty.js';
 import { spawn as cpSpawn, spawnSync } from 'node:child_process';
 import { TextDecoder } from 'node:util';
 import os from 'node:os';
-import type { IPty } from '@lydell/node-pty';
+import type { IPty } from '@mmmbuto/node-pty-android-arm64';
 import { getCachedEncodingForBuffer } from '../utils/systemEncoding.js';
 import { isBinary } from '../utils/textUtils.js';
 import pkg from '@xterm/headless';
@@ -39,7 +39,7 @@ export interface ShellExecutionResult {
   /** The process ID of the spawned shell. */
   pid: number | undefined;
   /** The method used to execute the shell command. */
-  executionMethod: 'lydell-node-pty' | 'node-pty' | 'child_process' | 'none';
+  executionMethod: 'mmmbuto-node-pty' | 'child_process' | 'none';
 }
 
 /** A handle for an ongoing shell execution. */
@@ -616,9 +616,7 @@ export class ShellExecutionService {
                 error,
                 aborted: abortSignal.aborted,
                 pid: ptyProcess.pid,
-                executionMethod:
-                  (ptyInfo?.name as 'node-pty' | 'lydell-node-pty') ??
-                  'node-pty',
+                executionMethod: ptyInfo?.name ?? 'mmmbuto-node-pty',
               });
             });
           },

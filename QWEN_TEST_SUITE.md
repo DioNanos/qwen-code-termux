@@ -1,10 +1,10 @@
-# 🧪 Qwen Code Termux Test Suite (v0.6.2-termux)
+# 🧪 Qwen Code Termux Test Suite (v0.6.404-termux)
 
-**Goal**: Validate the Termux build without native deps
-(node-pty/keytar/tree-sitter). Run from a clean shell on Termux ARM64.
+**Goal**: Validate the Termux build with ARM64 PTY prebuild (no node-gyp).
+Run from a clean shell on Termux ARM64.
 
-**Version**: 0.6.2-termux
-**Last Updated**: 2025-12-27
+**Version**: 0.6.404-termux
+**Last Updated**: 2026-01-08
 
 ## 0. Prep
 
@@ -13,7 +13,7 @@
 
 ## 1. Version & Env
 
-1.1 `qwen --version` → shows `0.6.2-termux`
+1.1 `qwen --version` → shows `0.6.404-termux`
 1.2 `node -v`, `uname -m`, `echo $PREFIX` (expect Termux paths / aarch64)
 
 ## 2. CLI Basics
@@ -61,12 +61,12 @@
 ## 9. Package/binary
 
 9.1 `ls $(npm root -g)/@mmmbuto/qwen-code-termux/dist/cli.js` exists
-9.2 `node dist/cli.js --version` (from repo) prints 0.6.2-termux
+9.2 `node dist/cli.js --version` (from repo) prints 0.6.404-termux
 
-## 10. Known limits (assert graceful handling)
+## 10. PTY checks
 
-10.1 `node-pty` optional: running `require('node-pty')` should fail gracefully
-10.2 Shell tool uses child_process fallback on Termux
+10.1 `node -e "require('@mmmbuto/node-pty-android-arm64')"` should succeed
+10.2 `node -e "require('node-pty')"` should fail gracefully (not installed)
 
 ## 11. Termux-API Tools (Optional)
 
@@ -133,14 +133,14 @@
 
 ## Known Issues / Limitations
 
-- `node-pty` not available → some interactive shell features limited
+- PTY depends on `@mmmbuto/node-pty-android-arm64` prebuild availability
 - Secure keychain not available → credentials in plain files
 - Some upstream features may not be Termux-optimized
 
 ## Test Report Template
 
 ```markdown
-# Test Report v0.6.2-termux
+# Test Report v0.6.404-termux
 
 **Date**: YYYY-MM-DD
 **Device**: [ROG Phone 3 / Pixel 9 Pro / etc]
@@ -166,7 +166,7 @@
 
 **Version History**:
 
-- v0.6.2-termux (2025-12-27): Updated test suite for qwen-code-termux
+- v0.6.404-termux (2026-01-08): Updated test suite for qwen-code-termux
   - Responsive settings layout
   - Banner integration
   - Termux tools discovery

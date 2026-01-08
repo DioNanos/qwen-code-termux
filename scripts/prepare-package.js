@@ -114,16 +114,10 @@ const isTermuxBuild =
   !!process.env['TERMUX_VERSION'] ||
   !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'));
 const optionalDependencies = isTermuxBuild
-  ? undefined
-  : {
-      '@lydell/node-pty': '1.1.0',
-      '@lydell/node-pty-darwin-arm64': '1.1.0',
-      '@lydell/node-pty-darwin-x64': '1.1.0',
-      '@lydell/node-pty-linux-x64': '1.1.0',
-      '@lydell/node-pty-win32-arm64': '1.1.0',
-      '@lydell/node-pty-win32-x64': '1.1.0',
-      'node-pty': '^1.0.0',
-    };
+  ? {
+      '@mmmbuto/node-pty-android-arm64': '1.1.0',
+    }
+  : undefined;
 
 // Create a clean package.json for the published package
 const distPackageJson = {
