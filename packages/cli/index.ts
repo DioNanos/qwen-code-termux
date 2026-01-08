@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import './src/patches/termux-runtime.js';
 import './src/gemini.js';
 import { main } from './src/gemini.js';
 import { FatalError } from '@qwen-code/qwen-code-core';

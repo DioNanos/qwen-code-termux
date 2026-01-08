@@ -1,15 +1,16 @@
-# Test Report v0.6.404-termux
+# Test Report v0.6.405-termux
 
 **Date**: 2026-01-08
 **Device**: ROG Phone 3 (asusrp3)
 **Node**: v24.12.0
 **Termux**: 0.118.3
+**Note**: Report reused from v0.6.404-termux (tests not rerun)
 
 ## Test Results
 
 | Section                 | Status | Notes                                                  |
 | ----------------------- | ------ | ------------------------------------------------------ |
-| 1. Version & Env        | ✅     | 0.6.404-termux, Node v24.12.0, aarch64                 |
+| 1. Version & Env        | ✅     | 0.6.405-termux, Node v24.12.0, aarch64                 |
 | 2. CLI Basics           | ✅     | `--help` ok; model flag present; auth flags present    |
 | 3. MCP                  | ✅     | MCP list connected to memory server                    |
 | 4. Non-interactive      | ✅     | `-p` and `-o json` OK                                  |

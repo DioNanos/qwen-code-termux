@@ -1,4 +1,4 @@
-# Termux Patches (0.6.404-termux)
+# Termux Patches (0.6.405-termux)
 
 Minimal changes to run Qwen Code on Android/Termux without native deps.
 
@@ -10,6 +10,7 @@ Minimal changes to run Qwen Code on Android/Termux without native deps.
 - PTY uses `@mmmbuto/node-pty-android-arm64` (Termux-only) with local typings
   shim (`packages/core/src/types/pty-shim.d.ts`).
 - `prepare` is a no-op on Termux to avoid unnecessary bundle work.
+- Termux runtime patch for base64 polyfills, TERMUX\_\_PREFIX, and punycode warnings.
 - Prebuilt `dist/cli.js` in npm package.
 
 ## Notes

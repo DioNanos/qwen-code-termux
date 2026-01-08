@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.405-termux (Termux Edition)
+
+- Add Termux runtime patches (Uint8Array base64 polyfills, TERMUX\_\_PREFIX for clipboardy)
+- Suppress noisy punycode deprecation warnings on Android
+
 ## 0.6.404-termux (Termux Edition)
 
 - Added @mmmbuto/node-pty-android-arm64 to optionalDependencies for ARM64 Termux support

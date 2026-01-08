@@ -1,9 +1,9 @@
-# 🧪 Qwen Code Termux Test Suite (v0.6.404-termux)
+# 🧪 Qwen Code Termux Test Suite (v0.6.405-termux)
 
 **Goal**: Validate the Termux build with ARM64 PTY prebuild (no node-gyp).
 Run from a clean shell on Termux ARM64.
 
-**Version**: 0.6.404-termux
+**Version**: 0.6.405-termux
 **Last Updated**: 2026-01-08
 
 ## 0. Prep
@@ -13,7 +13,7 @@ Run from a clean shell on Termux ARM64.
 
 ## 1. Version & Env
 
-1.1 `qwen --version` → shows `0.6.404-termux`
+1.1 `qwen --version` → shows `0.6.405-termux`
 1.2 `node -v`, `uname -m`, `echo $PREFIX` (expect Termux paths / aarch64)
 
 ## 2. CLI Basics
@@ -61,7 +61,7 @@ Run from a clean shell on Termux ARM64.
 ## 9. Package/binary
 
 9.1 `ls $(npm root -g)/@mmmbuto/qwen-code-termux/dist/cli.js` exists
-9.2 `node dist/cli.js --version` (from repo) prints 0.6.404-termux
+9.2 `node dist/cli.js --version` (from repo) prints 0.6.405-termux
 
 ## 10. PTY checks
 
@@ -140,7 +140,7 @@ Run from a clean shell on Termux ARM64.
 ## Test Report Template
 
 ```markdown
-# Test Report v0.6.404-termux
+# Test Report v0.6.405-termux
 
 **Date**: YYYY-MM-DD
 **Device**: [ROG Phone 3 / Pixel 9 Pro / etc]
@@ -166,6 +166,7 @@ Run from a clean shell on Termux ARM64.
 
 **Version History**:
 
+- v0.6.405-termux (2026-01-08): Termux runtime patches (base64 polyfills, TERMUX\_\_PREFIX, punycode warn)
 - v0.6.404-termux (2026-01-08): Updated test suite for qwen-code-termux
   - Responsive settings layout
   - Banner integration

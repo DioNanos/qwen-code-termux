@@ -39,13 +39,19 @@ This guide explains how to maintain merge-safe practices when updating from upst
 
 - `packages/core/src/types/pty-shim.d.ts`
 
+#### Termux runtime patches
+
+**Keep this file** to preserve Android/Termux runtime fixes:
+
+- `packages/cli/src/patches/termux-runtime.ts`
+
 ### scripts/prepare-termux.cjs
 
 **Keep this script** - it skips `husky` + `bundle` during Termux installs.
 
 ### Version Format
 
-- Use standard semver: `0.6.404-termux` (not `0.6.3-termux`)
+- Use standard semver: `0.6.405-termux` (not `0.6.3-termux`)
 - This avoids bundled CLI validation errors
 - Format: `X.Y.Z` where Z >= 400 for Termux releases
 
@@ -87,13 +93,13 @@ git merge upstream/release/v0.6.X  # or appropriate tag
 
 ```bash
 # Bump version
-sed -i 's/"version": "0.6.404-termux"/"version": "0.6.405-termux"/g' package.json
+sed -i 's/"version": "0.6.405-termux"/"version": "0.6.406-termux"/g' package.json
 
 # Update sandboxImageUri
-sed -i 's/0.6.404-termux/0.6.405-termux/g' package.json
+sed -i 's/0.6.405-termux/0.6.406-termux/g' package.json
 
 # Update README
-sed -i 's/0.6.404-termux/0.6.405-termux/g' README.md
+sed -i 's/0.6.405-termux/0.6.406-termux/g' README.md
 ```
 
 ### Step 5: Test
@@ -108,12 +114,12 @@ qwen --version
 
 ```bash
 git add -A
-git commit --no-verify -m "chore: merge upstream v0.6.X into termux v0.6.405"
+git commit --no-verify -m "chore: merge upstream v0.6.X into termux v0.6.406"
 git push
-git tag v0.6.405
-git push origin v0.6.405
+git tag v0.6.406
+git push origin v0.6.406
 npm publish
-gh release create v0.6.405 --notes "..."
+gh release create v0.6.406 --notes "..."
 ```
 
 ## Common Pitfalls
@@ -145,7 +151,7 @@ gh release create v0.6.405 --notes "..."
 
 ```json
 // GOOD - passes validation
-"version": "0.6.404-termux"
+"version": "0.6.405-termux"
 ```
 
 ## Why This Works
@@ -167,7 +173,7 @@ gh release create v0.6.405 --notes "..."
 | Action         | Command                                                   |
 | -------------- | --------------------------------------------------------- |
 | Merge upstream | `git merge upstream/release/v0.6.X`                       |
-| Bump version   | `sed -i 's/0.6.404-termux/0.6.405-termux/g' package.json` |
+| Bump version   | `sed -i 's/0.6.405-termux/0.6.406-termux/g' package.json` |
 | Test install   | `npm install -g ./mmmbuto-qwen-code-termux-*.tgz`         |
 | Publish        | `npm publish`                                             |
 
@@ -177,3 +183,4 @@ gh release create v0.6.405 --notes "..."
 - `0.6.402`: Added ARM64 prebuild support
 - `0.6.403-termux`: Rerelease with deprecations
 - `0.6.404-termux`: Switch to @mmmbuto/node-pty-android-arm64 (Termux-only PTY)
+- `0.6.405-termux`: Add Termux runtime patches (base64 polyfills, TERMUX\_\_PREFIX, punycode warn)
