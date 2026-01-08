@@ -186,3 +186,18 @@ Apache 2.0 (same as upstream). See LICENSE.
 
 Based on [Qwen Code](https://github.com/QwenLM/qwen-code), which is based on
 [Google Gemini CLI](https://github.com/google-gemini/gemini-cli).
+
+## PTY Support (Shared Library)
+
+This project uses `@mmmbuto/pty-termux-utils` as a shared library for PTY
+management across all Termux CLI projects (Gemini, Qwen, Nexus).
+
+- **Native PTY:** Uses `@mmmbuto/node-pty-android-arm64@~1.1.0` when available
+- **Fallback:** Gracefully degrades to `child_process` adapter
+- **Debug Logging:** Enable with `PTY_DEBUG=1` environment variable
+- **Architecture:** See `@mmmbuto/pty-termux-utils` documentation
+
+```bash
+# Enable PTY debug logging
+PTY_DEBUG=1 qwen "your prompt"
+```
