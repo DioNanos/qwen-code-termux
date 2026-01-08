@@ -24,7 +24,7 @@ pkg update && pkg upgrade -y
 pkg install nodejs-lts -y
 npm install -g @mmmbuto/qwen-code-termux
 
-qwen --version  # expected: 0.6.4.1-termux
+qwen --version  # expected: 0.6.401
 ```
 
 Build from source:
@@ -82,7 +82,7 @@ export OPENAI_MODEL="gpt-4o"                        # optional
 ## Documentation & Fixes
 
 - **Test Suite**: [`QWEN_TEST_SUITE.md`](./QWEN_TEST_SUITE.md)
-- **Test Report**: [`QWEN_TEST_REPORT_v0.6.4.1.md`](./QWEN_TEST_REPORT_v0.6.4.1.md)
+- **Test Report**: [`QWEN_TEST_REPORT_v0.6.401.md`](./QWEN_TEST_REPORT_v0.6.401.md)
 - **Patches**: [`docs/patches/README.md`](./docs/patches/README.md)
 - **Termux Fixes**: [`docs/patches/TERMUX_FIXES.md`](./docs/patches/TERMUX_FIXES.md)
 
@@ -153,7 +153,7 @@ npm install -g @mmmbuto/qwen-code-termux@latest
 
 ### Versions
 
-- **latest / stable**: 0.6.4.1-termux
+- **latest / stable**: 0.6.401
 
 ## Benchmark Results
 
