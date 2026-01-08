@@ -168,8 +168,7 @@ npm install -g @mmmbuto/qwen-code-termux@latest
 
 Looking for a graphical interface?
 
-- [**AionUi**](https://github.com/iOfficeAI/AionUi) A modern GUI for command-line AI tools including Qwen Code
-- [**Gemini CLI Desktop**](https://github.com/Piebald-AI/gemini-cli-desktop) A cross-platform desktop/web/mobile UI for Qwen Code
+- Web UI: [NexusCLI](https://github.com/DioNanos/nexuscli) - Optional web interface for Codex/Claude/Gemini
 
 ## Troubleshooting
 
