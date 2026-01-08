@@ -1,4 +1,4 @@
-# Test Report v0.6.3-termux
+# Test Report v0.6.4.1-termux
 
 **Date**: 2026-01-08  
 **Device**: ROG Phone 3 (asusrp3)  
@@ -13,7 +13,7 @@
 
 | Section                  | Status  | Notes                                                         |
 | ------------------------ | ------- | ------------------------------------------------------------- |
-| **1. Version & Env**     | ✅ PASS | Version 0.6.3-termux, Node v24.12.0, aarch64, Termux paths OK |
+| **1. Version & Env**     | ✅ PASS | Version 0.6.4.1-termux, Node v24.12.0, aarch64, Termux paths OK |
 | **2. CLI Basics**        | ✅ PASS | --help, model option, auth command all present                |
 | **3. MCP**               | ✅ PASS | list, add --help, subcommands work; memory server connected   |
 | **4. Non-interactive**   | ✅ PASS | -p prompts work, JSON output (-o json) produces valid JSON    |
@@ -34,7 +34,7 @@
 ### 1. Version & Environment
 
 ```
-qwen --version: 0.6.3-termux
+qwen --version: 0.6.4.1-termux
 node -v: v24.12.0
 uname -m: aarch64
 PREFIX: /data/data/com.termux/files/usr
@@ -75,7 +75,7 @@ PREFIX: /data/data/com.termux/files/usr
 ### 9. Package & Binary
 
 - ✅ Global package installed at: `$(npm root -g)/@mmmbuto/qwen-code-termux/dist/cli.js`
-- ✅ Local bundle `node dist/cli.js --version` returns `0.6.3-termux`
+- ✅ Local bundle `node dist/cli.js --version` returns `0.6.4.1-termux`
 
 ### 10. Native Dependencies Fallback
 
@@ -133,7 +133,7 @@ PREFIX: /data/data/com.termux/files/usr
 ## Merge Summary
 
 **Upstream**: QwenLM/qwen-code v0.6.1 (97 commits)  
-**Fork**: @mmmbuto/qwen-code-termux v0.6.3-termux
+**Fork**: @mmmbuto/qwen-code-termux v0.6.4.1-termux
 
 **Merged Features**:
 
@@ -161,7 +161,7 @@ PREFIX: /data/data/com.termux/files/usr
 
 1. Manual interactive tests (settings, banner, auth)
 2. Push to origin
-3. Create GitHub release v0.6.3-termux
+3. Create GitHub release v0.6.4.1-termux
 4. Publish to npm @mmmbuto/qwen-code-termux
 
 ---

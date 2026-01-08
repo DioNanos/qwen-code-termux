@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4.1-termux (Termux Edition)
+
+- **Bug fix**: Added `scripts/` to package.json `files` field to include postinstall.cjs in npm package
+- Updated version references to 0.6.4.1-termux
+- Renamed test report to QWEN_TEST_REPORT_v0.6.4.1.md
+
+
 ## 0.0.14
 
 - Added plan mode support for task planning

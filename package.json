@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.6.3-termux",
+  "version": "0.6.4.1-termux",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -13,7 +13,7 @@
     "url": "git+https://github.com/DioNanos/qwen-code-termux.git"
   },
   "config": {
-    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.6.3-termux"
+    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.6.4.1-termux"
   },
   "scripts": {
     "start": "cross-env node scripts/start.js",
@@ -69,6 +69,7 @@
     "qwen": "dist/cli.js"
   },
   "files": [
+    "scripts",
     "dist/",
     "README.md",
     "LICENSE"
