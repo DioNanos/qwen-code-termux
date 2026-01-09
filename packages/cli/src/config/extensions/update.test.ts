@@ -16,7 +16,7 @@ import {
   loadExtension,
 } from '../extension.js';
 import { checkForAllExtensionUpdates, updateExtension } from './update.js';
-import { QWEN_DIR } from '@qwen-code/qwen-code-core';
+import { QWEN_DIR } from '@mmmbuto/qwen-code-termux-core';
 import { isWorkspaceTrusted } from '../trustedFolders.js';
 import { ExtensionUpdateState } from '../../ui/state/extensions.js';
 import { createExtension } from '../../test-utils/createExtension.js';
@@ -71,9 +71,9 @@ vi.mock('../trustedFolders.js', async (importOriginal) => {
 const mockLogExtensionInstallEvent = vi.hoisted(() => vi.fn());
 const mockLogExtensionUninstall = vi.hoisted(() => vi.fn());
 
-vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
+    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
   return {
     ...actual,
     logExtensionInstallEvent: mockLogExtensionInstallEvent,

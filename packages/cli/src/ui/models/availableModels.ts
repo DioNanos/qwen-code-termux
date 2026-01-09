@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AuthType, DEFAULT_QWEN_MODEL } from '@qwen-code/qwen-code-core';
+import { AuthType, DEFAULT_QWEN_MODEL } from '@mmmbuto/qwen-code-termux-core';
 import { t } from '../../i18n/index.js';
 
 export type AvailableModel = {

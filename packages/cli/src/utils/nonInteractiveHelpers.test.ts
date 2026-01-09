@@ -10,13 +10,13 @@ import type {
   SessionMetrics,
   TaskResultDisplay,
   ToolCallResponseInfo,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   ToolErrorType,
   MCPServerStatus,
   getMCPServerStatus,
   OutputFormat,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { Part } from '@google/genai';
 import type {
   CLIUserMessage,
@@ -71,9 +71,9 @@ vi.mock('../ui/utils/computeStats.js', () => ({
   }),
 }));
 
-vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
+    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
   return {
     ...actual,
     getMCPServerStatus: vi.fn(),

@@ -6,7 +6,7 @@
 
 import type React from 'react';
 import { useState } from 'react';
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 import { Box, Text } from 'ink';
 import { SettingScope } from '../../config/settings.js';
 import { Colors } from '../colors.js';

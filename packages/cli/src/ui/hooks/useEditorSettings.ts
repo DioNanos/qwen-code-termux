@@ -7,11 +7,11 @@
 import { useState, useCallback } from 'react';
 import type { LoadedSettings, SettingScope } from '../../config/settings.js';
 import { type HistoryItem, MessageType } from '../types.js';
-import type { EditorType } from '@qwen-code/qwen-code-core';
+import type { EditorType } from '@mmmbuto/qwen-code-termux-core';
 import {
   allowEditorTypeInSandbox,
   checkHasEditorType,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 interface UseEditorSettingsReturn {
   isEditorDialogOpen: boolean;

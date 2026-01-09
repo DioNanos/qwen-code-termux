@@ -10,7 +10,7 @@ import {
   getErrorMessage,
   logAuth,
   AuthEvent,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 /**
  * Handles the initial authentication flow.

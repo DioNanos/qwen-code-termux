@@ -13,7 +13,7 @@ import {
   detectIdeFromEnv,
   IDE_DEFINITIONS,
   type IdeInfo,
-} from '@qwen-code/qwen-code-core/src/ide/detect-ide.js';
+} from '@mmmbuto/qwen-code-termux-core/src/ide/detect-ide.js';
 import { WebViewProvider } from './webview/WebViewProvider.js';
 import { registerNewCommands } from './commands/index.js';
 import { ReadonlyFileSystemProvider } from './services/readonlyFileSystemProvider.js';

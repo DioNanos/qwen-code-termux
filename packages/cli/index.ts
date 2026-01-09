@@ -9,7 +9,7 @@
 import './src/patches/termux-runtime.js';
 import './src/gemini.js';
 import { main } from './src/gemini.js';
-import { FatalError } from '@qwen-code/qwen-code-core';
+import { FatalError } from '@mmmbuto/qwen-code-termux-core';
 
 // --- Global Entry Point ---
 main().catch((error) => {

@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handleSlashCommand } from './nonInteractiveCliCommands.js';
-import type { Config } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
 import type { LoadedSettings } from './config/settings.js';
 import { CommandKind } from './ui/commands/types.js';
 

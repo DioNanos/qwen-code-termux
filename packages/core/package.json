@@ -1,6 +1,6 @@
 {
-  "name": "@qwen-code/qwen-code-core",
-  "version": "0.6.2",
+  "name": "@mmmbuto/qwen-code-termux-core",
+  "version": "0.6.3",
   "description": "Qwen Code Core",
   "repository": {
     "type": "git",
@@ -72,7 +72,7 @@
     "@mmmbuto/node-pty-android-arm64": "~1.1.0"
   },
   "devDependencies": {
-    "@qwen-code/qwen-code-test-utils": "file:../test-utils",
+    "@mmmbuto/qwen-code-termux-test-utils": "file:../test-utils",
     "@types/diff": "^7.0.2",
     "@types/dotenv": "^6.1.1",
     "@types/fast-levenshtein": "^0.0.4",

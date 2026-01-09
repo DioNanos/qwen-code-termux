@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { SubagentConfig } from '@qwen-code/qwen-code-core';
+import type { SubagentConfig } from '@mmmbuto/qwen-code-termux-core';
 
 /**
  * Annotation for attaching metadata to content blocks

@@ -38,7 +38,7 @@ vi.mock('node:os', async (importOriginal) => {
   };
 });
 
-vi.mock('@qwen-code/qwen-code-core/src/ide/detect-ide.js', () => ({
+vi.mock('@mmmbuto/qwen-code-termux-core/src/ide/detect-ide.js', () => ({
   detectIdeFromEnv: vi.fn(() => ({ name: 'vscode', displayName: 'VS Code' })),
 }));
 
@@ -62,7 +62,7 @@ const vscodeMock = vi.hoisted(() => ({
 
 vi.mock('vscode', () => vscodeMock);
 
-vi.mock('@qwen-code/qwen-code-core/src/ide/detect-ide.js', () => ({
+vi.mock('@mmmbuto/qwen-code-termux-core/src/ide/detect-ide.js', () => ({
   detectIdeFromEnv: vi.fn(() => ({
     name: 'vscode',
     displayName: 'VS Code',

@@ -1,6 +1,7 @@
 # Qwen Code overview
-[![@qwen-code/qwen-code downloads](https://img.shields.io/npm/dw/@qwen-code/qwen-code.svg)](https://npm-compare.com/@qwen-code/qwen-code) 
-[![@qwen-code/qwen-code version](https://img.shields.io/npm/v/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
+
+[![@mmmbuto/qwen-code-termux downloads](https://img.shields.io/npm/dw/@mmmbuto/qwen-code-termux.svg)](https://npm-compare.com/@mmmbuto/qwen-code-termux)
+[![@mmmbuto/qwen-code-termux version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
 > Learn about Qwen Code, Qwen's agentic coding tool that lives in your terminal and helps you turn ideas into code faster than ever before.
 
@@ -16,7 +17,7 @@ Prerequisites:
 **NPM**(recommended)
 
 ```bash
-npm install -g @qwen-code/qwen-code@latest
+npm install -g @mmmbuto/qwen-code-termux@latest
 ```
 
 **Homebrew**(macOS, Linux)

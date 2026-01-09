@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { FileSystemService } from '@qwen-code/qwen-code-core';
+import type { FileSystemService } from '@mmmbuto/qwen-code-termux-core';
 import type * as acp from '../acp.js';
 
 /**

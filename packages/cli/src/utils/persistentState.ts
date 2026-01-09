@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Storage } from '@qwen-code/qwen-code-core';
+import { Storage } from '@mmmbuto/qwen-code-termux-core';
 import * as fs from 'node:fs';
 import * as path from 'path';
 

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isGitRepository } from '@qwen-code/qwen-code-core';
+import { isGitRepository } from '@mmmbuto/qwen-code-termux-core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';

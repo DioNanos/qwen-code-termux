@@ -50,7 +50,7 @@ import type { ModelInfo } from '../types/acpTypes.js';
 import {
   DEFAULT_TOKEN_LIMIT,
   tokenLimit,
-} from '@qwen-code/qwen-code-core/src/core/tokenLimits.js';
+} from '@mmmbuto/qwen-code-termux-core/src/core/tokenLimits.js';
 
 export const App: React.FC = () => {
   const vscode = useVSCode();

@@ -10,7 +10,7 @@ import { ToolConfirmationMessage } from './ToolConfirmationMessage.js';
 import type {
   ToolCallConfirmationDetails,
   Config,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { renderWithProviders } from '../../../test-utils/render.js';
 import type { LoadedSettings } from '../../../config/settings.js';
 

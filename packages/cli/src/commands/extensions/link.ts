@@ -9,7 +9,7 @@ import {
   installExtension,
   requestConsentNonInteractive,
 } from '../../config/extension.js';
-import type { ExtensionInstallMetadata } from '@qwen-code/qwen-code-core';
+import type { ExtensionInstallMetadata } from '@mmmbuto/qwen-code-termux-core';
 
 import { getErrorMessage } from '../../utils/errors.js';
 

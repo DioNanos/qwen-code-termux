@@ -19,7 +19,7 @@ import {
   type ConversationRecord,
   type DeviceAuthorizationData,
   tokenLimit,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { ApprovalModeValue } from './schema.js';
 import * as acp from './acp.js';
 import { AcpFileSystemService } from './service/filesystem.js';

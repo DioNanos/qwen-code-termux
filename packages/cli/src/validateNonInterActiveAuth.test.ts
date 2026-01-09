@@ -6,8 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { validateNonInteractiveAuth } from './validateNonInterActiveAuth.js';
-import { AuthType, OutputFormat } from '@qwen-code/qwen-code-core';
-import type { Config } from '@qwen-code/qwen-code-core';
+import { AuthType, OutputFormat } from '@mmmbuto/qwen-code-termux-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
 import * as auth from './config/auth.js';
 import { type LoadedSettings } from './config/settings.js';
 import * as JsonOutputAdapterModule from './nonInteractive/io/JsonOutputAdapter.js';

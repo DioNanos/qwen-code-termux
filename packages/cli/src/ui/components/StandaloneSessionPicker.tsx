@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { render, Box, useApp } from 'ink';
-import { getGitBranch, SessionService } from '@qwen-code/qwen-code-core';
+import { getGitBranch, SessionService } from '@mmmbuto/qwen-code-termux-core';
 import { KeypressProvider } from '../contexts/KeypressContext.js';
 import { SessionPicker } from './SessionPicker.js';
 

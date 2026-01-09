@@ -69,7 +69,7 @@ import {
   SETTINGS_VERSION,
   SETTINGS_VERSION_KEY,
 } from './settings.js';
-import { FatalConfigError, QWEN_DIR } from '@qwen-code/qwen-code-core';
+import { FatalConfigError, QWEN_DIR } from '@mmmbuto/qwen-code-termux-core';
 
 const isTermux = (): boolean =>
   process.platform === 'android' ||

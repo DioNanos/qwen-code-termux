@@ -10,7 +10,7 @@ import {
   IdeConnectionType,
   logIdeConnection,
   type Config,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { type LoadedSettings, SettingScope } from '../config/settings.js';
 import { performInitialAuth } from './auth.js';
 import { validateTheme } from './theme.js';

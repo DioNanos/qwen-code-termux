@@ -420,7 +420,7 @@ export class ShellExecutionService {
       const isWindows = os.platform() === 'win32';
       const shell = isWindows ? 'cmd.exe' : 'bash';
       const args = isWindows
-        ? `/c ${commandToExecute}`
+        ? ['/c', commandToExecute]
         : ['-c', commandToExecute];
 
       const ptyProcess = ptyInfo.module.spawn(shell, args, {
@@ -597,34 +597,32 @@ export class ShellExecutionService {
           );
         };
 
-        ptyProcess.onData((data: string) => {
+        ptyProcess.on('data', (data: string) => {
           const bufferData = Buffer.from(data, 'utf-8');
           handleOutput(bufferData);
         });
 
-        ptyProcess.onExit(
-          ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
-            exited = true;
-            abortSignal.removeEventListener('abort', abortHandler);
-            this.activePtys.delete(ptyProcess.pid);
+        ptyProcess.on('exit', (exitCode: number, signal: number) => {
+          exited = true;
+          abortSignal.removeEventListener('abort', abortHandler);
+          this.activePtys.delete(ptyProcess.pid);
 
-            processingChain.then(() => {
-              render(true);
-              const finalBuffer = Buffer.concat(outputChunks);
+          processingChain.then(() => {
+            render(true);
+            const finalBuffer = Buffer.concat(outputChunks);
 
-              resolve({
-                rawOutput: finalBuffer,
-                output: getFullBufferText(headlessTerminal),
-                exitCode,
-                signal: signal ?? null,
-                error,
-                aborted: abortSignal.aborted,
-                pid: ptyProcess.pid,
-                executionMethod: ptyInfo?.name ?? 'mmmbuto-node-pty',
-              });
+            resolve({
+              rawOutput: finalBuffer,
+              output: getFullBufferText(headlessTerminal),
+              exitCode,
+              signal: signal ?? null,
+              error,
+              aborted: abortSignal.aborted,
+              pid: ptyProcess.pid,
+              executionMethod: ptyInfo?.name ?? 'mmmbuto-node-pty',
             });
-          },
-        );
+          });
+        });
 
         const abortHandler = async () => {
           if (ptyProcess.pid && !exited) {
@@ -636,7 +634,11 @@ export class ShellExecutionService {
                 process.kill(-ptyProcess.pid, 'SIGINT');
               } catch (_e) {
                 // Fallback to killing just the process if the group kill fails
-                ptyProcess.kill('SIGINT');
+                try {
+                  process.kill(ptyProcess.pid, 'SIGINT');
+                } catch (_inner) {
+                  ptyProcess.kill();
+                }
               }
             }
           }

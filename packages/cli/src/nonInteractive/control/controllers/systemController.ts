@@ -25,7 +25,7 @@ import {
   MCPServerConfig,
   AuthProviderType,
   type MCPOAuthConfig,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 export class SystemController extends BaseController {
   /**

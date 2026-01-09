@@ -8,7 +8,7 @@ import {
   CompressionStatus,
   type ChatCompressionInfo,
   type GeminiClient,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { compressCommand } from './compressCommand.js';
 import { createMockCommandContext } from '../../test-utils/mockCommandContext.js';

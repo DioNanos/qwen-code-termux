@@ -57,7 +57,7 @@ describe('getVersion', () => {
     // For doesVersionExist checks - default to not found
     if (
       command.includes('npm view') &&
-      command.includes('@qwen-code/qwen-code@')
+      command.includes('@mmmbuto/qwen-code-termux@')
     ) {
       throw new Error('NPM version not found');
     }
@@ -124,7 +124,7 @@ describe('getVersion', () => {
         // Mock the deprecation check
         if (
           command.includes(
-            'npm view @qwen-code/qwen-code@0.9.0-nightly.20250917.deprecated deprecated',
+            'npm view @mmmbuto/qwen-code-termux@0.9.0-nightly.20250917.deprecated deprecated',
           )
         )
           return 'This version is deprecated';
@@ -162,14 +162,14 @@ describe('getVersion', () => {
         // The calculated preview 0.8.0-preview.0 already exists on NPM
         if (
           command.includes(
-            'npm view @qwen-code/qwen-code@0.8.0-preview.0 version',
+            'npm view @mmmbuto/qwen-code-termux@0.8.0-preview.0 version',
           )
         )
           return '0.8.0-preview.0';
         // The next one is available
         if (
           command.includes(
-            'npm view @qwen-code/qwen-code@0.8.0-preview.1 version',
+            'npm view @mmmbuto/qwen-code-termux@0.8.0-preview.1 version',
           )
         )
           throw new Error('Not found');

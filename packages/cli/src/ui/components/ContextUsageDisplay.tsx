@@ -6,7 +6,7 @@
 
 import { Text } from 'ink';
 import { theme } from '../semantic-colors.js';
-import { tokenLimit } from '@qwen-code/qwen-code-core';
+import { tokenLimit } from '@mmmbuto/qwen-code-termux-core';
 
 export const ContextUsageDisplay = ({
   promptTokenCount,

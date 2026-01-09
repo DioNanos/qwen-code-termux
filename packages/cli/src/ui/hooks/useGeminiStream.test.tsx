@@ -24,14 +24,14 @@ import type {
   EditorType,
   GeminiClient,
   AnyToolInvocation,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   ApprovalMode,
   AuthType,
   GeminiEventType as ServerGeminiEventType,
   ToolErrorType,
   ToolConfirmationOutcome,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { Part, PartListUnion } from '@google/genai';
 import type { UseHistoryManagerReturn } from './useHistoryManager.js';
 import type { HistoryItem, SlashCommandProcessorResult } from '../types.js';
@@ -78,7 +78,7 @@ const mockRestoreOriginalModel = vi.hoisted(() =>
   vi.fn().mockResolvedValue(undefined),
 );
 
-vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
   const actualCoreModule = (await importOriginal()) as any;
   return {
     ...actualCoreModule,

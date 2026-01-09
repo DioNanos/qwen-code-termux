@@ -1,14 +1,14 @@
 # Package Overview
 
-This monorepo contains two main packages: `@qwen-code/qwen-code` and `@qwen-code/qwen-code-core`.
+This monorepo contains two main packages: `@mmmbuto/qwen-code-termux` and `@mmmbuto/qwen-code-termux-core`.
 
-## `@qwen-code/qwen-code`
+## `@mmmbuto/qwen-code-termux`
 
 This is the main package for Qwen Code. It is responsible for the user interface, command parsing, and all other user-facing functionality.
 
-When this package is published, it is bundled into a single executable file. This bundle includes all of the package's dependencies, including `@qwen-code/qwen-code-core`. This means that whether a user installs the package with `npm install -g @qwen-code/qwen-code` or runs it directly with `npx @qwen-code/qwen-code`, they are using this single, self-contained executable.
+When this package is published, it is bundled into a single executable file. This bundle includes all of the package's dependencies, including `@mmmbuto/qwen-code-termux-core`. This means that whether a user installs the package with `npm install -g @mmmbuto/qwen-code-termux` or runs it directly with `npx @mmmbuto/qwen-code-termux`, they are using this single, self-contained executable.
 
-## `@qwen-code/qwen-code-core`
+## `@mmmbuto/qwen-code-termux-core`
 
 This package contains the core logic for the CLI. It is responsible for making API requests to configured providers, handling authentication, and managing the local cache.
 
@@ -59,13 +59,13 @@ To install the latest version of each type:
 
 ```bash
 # Stable (default)
-npm install -g @qwen-code/qwen-code
+npm install -g @mmmbuto/qwen-code-termux
 
 # Preview
-npm install -g @qwen-code/qwen-code@preview
+npm install -g @mmmbuto/qwen-code-termux@preview
 
 # Nightly
-npm install -g @qwen-code/qwen-code@nightly
+npm install -g @mmmbuto/qwen-code-termux@nightly
 ```
 
 ### Release Process Details
@@ -87,9 +87,9 @@ If any step in the release workflow fails, it will automatically create a new is
 
 After pushing a new release smoke testing should be performed to ensure that the packages are working as expected. This can be done by installing the packages locally and running a set of tests to ensure that they are functioning correctly.
 
-- `npx -y @qwen-code/qwen-code@latest --version` to validate the push worked as expected if you were not doing a rc or dev tag
-- `npx -y @qwen-code/qwen-code@<release tag> --version` to validate the tag pushed appropriately
-- _This is destructive locally_ `npm uninstall @qwen-code/qwen-code && npm uninstall -g @qwen-code/qwen-code && npm cache clean --force &&  npm install @qwen-code/qwen-code@<version>`
+- `npx -y @mmmbuto/qwen-code-termux@latest --version` to validate the push worked as expected if you were not doing a rc or dev tag
+- `npx -y @mmmbuto/qwen-code-termux@<release tag> --version` to validate the tag pushed appropriately
+- _This is destructive locally_ `npm uninstall @mmmbuto/qwen-code-termux && npm uninstall -g @mmmbuto/qwen-code-termux && npm cache clean --force &&  npm install @mmmbuto/qwen-code-termux@<version>`
 - Smoke testing a basic run through of exercising a few llm commands and tools is recommended to ensure that the packages are working as expected. We'll codify this more in the future.
 
 ## When to merge the version change, or not?
@@ -255,4 +255,4 @@ This tells NPM that any folder inside the `packages` directory is a separate pac
 
 - **Simplified Dependency Management**: Running `npm install` from the root of the project will install all dependencies for all packages in the workspace and link them together. This means you don't need to run `npm install` in each package's directory.
 - **Automatic Linking**: Packages within the workspace can depend on each other. When you run `npm install`, NPM will automatically create symlinks between the packages. This means that when you make changes to one package, the changes are immediately available to other packages that depend on it.
-- **Simplified Script Execution**: You can run scripts in any package from the root of the project using the `--workspace` flag. For example, to run the `build` script in the `cli` package, you can run `npm run build --workspace @qwen-code/qwen-code`.
+- **Simplified Script Execution**: You can run scripts in any package from the root of the project using the `--workspace` flag. For example, to run the `build` script in the `cli` package, you can run `npm run build --workspace @mmmbuto/qwen-code-termux`.

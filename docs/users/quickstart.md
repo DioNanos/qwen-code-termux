@@ -23,7 +23,7 @@ Requires [Node.js 20+](https://nodejs.org/download), you can use `node -v` check
 If you have [Node.js or newer installed](https://nodejs.org/en/download/):
 
 ```sh
-npm install -g @qwen-code/qwen-code@latest
+npm install -g @mmmbuto/qwen-code-termux@latest
 ```
 
 ### Homebrew (macOS, Linux)

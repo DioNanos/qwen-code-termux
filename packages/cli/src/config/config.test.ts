@@ -13,11 +13,11 @@ import {
   WriteFileTool,
   DEFAULT_QWEN_MODEL,
   OutputFormat,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { loadCliConfig, parseArguments, type CliArgs } from './config.js';
 import type { Settings } from './settings.js';
 import { ExtensionStorage, type Extension } from './extension.js';
-import * as ServerConfig from '@qwen-code/qwen-code-core';
+import * as ServerConfig from '@mmmbuto/qwen-code-termux-core';
 import { isWorkspaceTrusted } from './trustedFolders.js';
 import { ExtensionEnablementManager } from './extensions/extensionEnablement.js';
 
@@ -77,9 +77,9 @@ vi.mock('read-package-up', () => ({
   ),
 }));
 
-vi.mock('@qwen-code/qwen-code-core', async () => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async () => {
   const actualServer = await vi.importActual<typeof ServerConfig>(
-    '@qwen-code/qwen-code-core',
+    '@mmmbuto/qwen-code-termux-core',
   );
   return {
     ...actualServer,

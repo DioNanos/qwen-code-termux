@@ -12,7 +12,7 @@ import {
   getErrorMessage,
   isWithinRoot,
   ideContextStore,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { Settings } from './settings.js';
 import stripJsonComments from 'strip-json-comments';
 

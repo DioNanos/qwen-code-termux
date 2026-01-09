@@ -12,7 +12,7 @@ import type {
   AnyDeclarativeTool,
   ToolResultDisplay,
   SlashCommandRecordPayload,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { HistoryItem, HistoryItemWithoutId } from '../types.js';
 import { ToolCallStatus } from '../types.js';
 

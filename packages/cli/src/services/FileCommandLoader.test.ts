@@ -5,8 +5,8 @@
  */
 
 import * as path from 'node:path';
-import type { Config } from '@qwen-code/qwen-code-core';
-import { Storage } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
+import { Storage } from '@mmmbuto/qwen-code-termux-core';
 import mock from 'mock-fs';
 import { FileCommandLoader } from './FileCommandLoader.js';
 import { assert, vi } from 'vitest';
@@ -57,9 +57,9 @@ vi.mock('./prompt-processors/argumentProcessor.js', async (importOriginal) => {
       .mockImplementation(() => new original.DefaultArgumentProcessor()),
   };
 });
-vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
   const original =
-    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
+    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
   return {
     ...original,
     Storage: original.Storage,

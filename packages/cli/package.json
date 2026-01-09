@@ -1,6 +1,6 @@
 {
-  "name": "@qwen-code/qwen-code",
-  "version": "0.6.2",
+  "name": "@mmmbuto/qwen-code-termux",
+  "version": "0.6.3",
   "description": "Qwen Code",
   "repository": {
     "type": "git",
@@ -38,7 +38,7 @@
   "dependencies": {
     "@google/genai": "1.30.0",
     "@iarna/toml": "^2.2.5",
-    "@qwen-code/qwen-code-core": "file:../core",
+    "@mmmbuto/qwen-code-termux-core": "file:../core",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "@types/update-notifier": "^6.0.8",
     "ansi-regex": "^6.2.2",
@@ -93,7 +93,7 @@
     "react-dom": "^19.1.0",
     "typescript": "^5.3.3",
     "vitest": "^3.1.1",
-    "@qwen-code/qwen-code-test-utils": "file:../test-utils"
+    "@mmmbuto/qwen-code-termux-test-utils": "file:../test-utils"
   },
   "engines": {
     "node": ">=20"

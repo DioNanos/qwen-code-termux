@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ChatRecord, TaskResultDisplay } from '@qwen-code/qwen-code-core';
+import type {
+  ChatRecord,
+  TaskResultDisplay,
+} from '@mmmbuto/qwen-code-termux-core';
 import type {
   Content,
   GenerateContentResponseUsageMetadata,

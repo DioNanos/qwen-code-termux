@@ -11,7 +11,7 @@ import type {
   ToolCallConfirmationDetails,
   ToolConfirmationOutcome,
   ToolResultDisplay,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { PartListUnion } from '@google/genai';
 import { type ReactNode } from 'react';
 

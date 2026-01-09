@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { GeminiCLIExtension } from '@qwen-code/qwen-code-core';
+import type { GeminiCLIExtension } from '@mmmbuto/qwen-code-termux-core';
 import { getErrorMessage } from '../../utils/errors.js';
 import {
   ExtensionUpdateState,

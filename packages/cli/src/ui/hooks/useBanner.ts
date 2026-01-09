@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { persistentState } from '../../utils/persistentState.js';
-import type { Config } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
 import crypto from 'node:crypto';
 
 const DEFAULT_MAX_BANNER_SHOWN_COUNT = 5;

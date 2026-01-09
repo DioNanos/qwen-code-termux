@@ -191,7 +191,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: '@qwen-code'
 
-      - name: 'Publish @qwen-code/qwen-code'
+      - name: 'Publish @mmmbuto/qwen-code-termux'
         working-directory: 'dist'
         run: |-
           npm publish --access public --tag=${{ steps.version.outputs.NPM_TAG }} ${{ steps.vars.outputs.is_dry_run == 'true' && '--dry-run' || '' }}

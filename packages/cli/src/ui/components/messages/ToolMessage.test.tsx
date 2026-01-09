@@ -15,7 +15,7 @@ import type {
   AnsiOutput,
   AnsiOutputDisplay,
   Config,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 vi.mock('../TerminalOutput.js', () => ({
   TerminalOutput: function MockTerminalOutput({

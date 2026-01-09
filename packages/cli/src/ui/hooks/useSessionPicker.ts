@@ -18,7 +18,7 @@ import type {
   ListSessionsResult,
   SessionListItem,
   SessionService,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   filterSessions,
   SESSION_PAGE_SIZE,

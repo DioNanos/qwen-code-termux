@@ -13,7 +13,7 @@ import type {
   ToolRegistry,
   ToolResultDisplay,
   TodoResultDisplay,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 describe('HistoryReplayer', () => {
   let mockContext: SessionContext;

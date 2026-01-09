@@ -7,7 +7,7 @@
 import { render } from 'ink-testing-library';
 import { describe, it, expect, vi } from 'vitest';
 import { McpStatus } from './McpStatus.js';
-import { MCPServerStatus } from '@qwen-code/qwen-code-core';
+import { MCPServerStatus } from '@mmmbuto/qwen-code-termux-core';
 import { MessageType } from '../../types.js';
 
 describe('McpStatus', () => {
@@ -77,7 +77,7 @@ describe('McpStatus', () => {
 
   it('renders correctly with a disconnected server', async () => {
     vi.spyOn(
-      await import('@qwen-code/qwen-code-core'),
+      await import('@mmmbuto/qwen-code-termux-core'),
       'getMCPServerStatus',
     ).mockReturnValue(MCPServerStatus.DISCONNECTED);
     const { lastFrame } = render(<McpStatus {...baseProps} />);

@@ -9,7 +9,7 @@ import {
   getProjectSummaryInfo,
   type ProjectSummaryInfo,
   type Config,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { type Settings } from '../../config/settingsSchema.js';
 
 export interface WelcomeBackState {

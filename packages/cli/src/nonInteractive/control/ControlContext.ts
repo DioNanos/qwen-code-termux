@@ -13,7 +13,7 @@
  * runtime state (e.g. permission mode, active MCP clients).
  */
 
-import type { Config, MCPServerConfig } from '@qwen-code/qwen-code-core';
+import type { Config, MCPServerConfig } from '@mmmbuto/qwen-code-termux-core';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { StreamJsonOutputAdapter } from '../io/StreamJsonOutputAdapter.js';
 import type { PermissionMode } from '../types.js';

@@ -20,7 +20,7 @@ import * as fsSync from 'node:fs';
 import * as path from 'node:path';
 import * as tar from 'tar';
 import * as archiver from 'archiver';
-import type { GeminiCLIExtension } from '@qwen-code/qwen-code-core';
+import type { GeminiCLIExtension } from '@mmmbuto/qwen-code-termux-core';
 
 const mockPlatform = vi.hoisted(() => vi.fn());
 const mockArch = vi.hoisted(() => vi.fn());
