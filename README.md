@@ -178,10 +178,6 @@ If you encounter issues, check the [troubleshooting guide](https://qwenlm.github
 
 To report a bug from within the CLI, run `/bug` and include a short title and repro steps.
 
-## License
-
-Apache 2.0 (same as upstream). See LICENSE.
-
 ## Acknowledgments
 
 Based on [Qwen Code](https://github.com/QwenLM/qwen-code), which is based on
@@ -202,3 +198,7 @@ management across all Termux CLI projects (Gemini, Qwen, Nexus).
 # Enable PTY debug logging
 PTY_DEBUG=1 qwen "your prompt"
 ```
+
+## License
+
+Apache 2.0 (same as upstream). See LICENSE.
