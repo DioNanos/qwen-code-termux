@@ -1,6 +1,7 @@
 # Merge-Safe Guide for Termux Fork
 
 This guide explains how to maintain merge-safe practices when updating from upstream QwenLM/qwen-code.
+This fork also **re-scopes the published packages** to `@mmmbuto`, which is the highest-conflict area during merges.
 
 ## Core Principles
 
@@ -12,6 +13,24 @@ This guide explains how to maintain merge-safe practices when updating from upst
 ## Critical Files to Protect
 
 ### package.json
+
+#### Package scope overrides (most merge conflicts happen here)
+
+**Keep the `@mmmbuto` scope** for the CLI and core packages.
+
+Must remain `@mmmbuto` in:
+
+- `package.json` (root)
+- `packages/cli/package.json`
+- `packages/core/package.json`
+- `package-lock.json`
+- `Dockerfile`
+- `scripts/build_sandbox.js`
+- `scripts/get-release-version.js`
+- `integration-tests/terminal-bench/qwen-code-setup.sh.j2`
+- docs/README/install snippets
+
+**Do NOT change** `@qwen-code/sdk` (that SDK stays upstream for now).
 
 #### optionalDependencies
 
@@ -39,6 +58,13 @@ This guide explains how to maintain merge-safe practices when updating from upst
 
 - `packages/core/src/types/pty-shim.d.ts`
 
+#### Shared PTY provider (multi-provider support)
+
+**Keep these** so Termux + Linux ARM64 can work via the shared PTY adapter:
+
+- `packages/core/src/services/shellExecutionService.ts` (uses `getPty` from `@mmmbuto/pty-termux-utils`)
+- `packages/core/package.json` dependency: `@mmmbuto/pty-termux-utils`
+
 #### Termux runtime patches
 
 **Keep this file** to preserve Android/Termux runtime fixes:
@@ -51,9 +77,10 @@ This guide explains how to maintain merge-safe practices when updating from upst
 
 ### Version Format
 
-- Use standard semver: `0.6.405-termux` (not `0.6.3-termux`)
-- This avoids bundled CLI validation errors
-- Format: `X.Y.Z` where Z >= 400 for Termux releases
+- **Root version** uses termux suffix: `0.6.407-termux` (not `0.6.3-termux`)
+- **Workspace packages** (`packages/cli`, `packages/core`, `packages/test-utils`) use plain semver: `0.6.3`
+- This avoids bundled CLI validation errors and keeps upstream alignment
+- Root format: `X.Y.Z-termux` where Z >= 400 for Termux releases
 
 ## Merge Process
 
@@ -92,14 +119,19 @@ git merge upstream/release/v0.6.X  # or appropriate tag
 ### Step 4: Update version
 
 ```bash
-# Bump version
-sed -i 's/"version": "0.6.405-termux"/"version": "0.6.406-termux"/g' package.json
+# Bump root version (termux)
+sed -i 's/"version": "0.6.407-termux"/"version": "0.6.408-termux"/g' package.json
 
 # Update sandboxImageUri
-sed -i 's/0.6.405-termux/0.6.406-termux/g' package.json
+sed -i 's/0.6.407-termux/0.6.408-termux/g' package.json
 
-# Update README
-sed -i 's/0.6.405-termux/0.6.406-termux/g' README.md
+# Keep workspace versions aligned (no -termux suffix)
+sed -i 's/"version": "0.6.3"/"version": "0.6.4"/g' packages/cli/package.json
+sed -i 's/"version": "0.6.3"/"version": "0.6.4"/g' packages/core/package.json
+sed -i 's/"version": "0.6.3"/"version": "0.6.4"/g' packages/test-utils/package.json
+
+# Refresh lockfile
+npm install --workspace packages/cli --workspace packages/core --package-lock-only
 ```
 
 ### Step 5: Test
@@ -114,12 +146,12 @@ qwen --version
 
 ```bash
 git add -A
-git commit --no-verify -m "chore: merge upstream v0.6.X into termux v0.6.406"
+git commit --no-verify -m "chore: merge upstream v0.6.X into termux v0.6.408"
 git push
-git tag v0.6.406
-git push origin v0.6.406
-npm publish
-gh release create v0.6.406 --notes "..."
+git tag v0.6.408-termux
+git push origin v0.6.408-termux
+cd packages/cli && npm publish --access public --tag latest
+gh release create v0.6.408-termux --notes "..."
 ```
 
 ## Common Pitfalls
@@ -151,7 +183,21 @@ gh release create v0.6.406 --notes "..."
 
 ```json
 // GOOD - passes validation
-"version": "0.6.405-termux"
+"version": "0.6.407-termux"
+```
+
+### ❌ Reverting @mmmbuto package scope
+
+```json
+// BAD - breaks npm publishing for this fork
+"name": "@qwen-code/qwen-code"
+```
+
+### ✅ Keep @mmmbuto scope
+
+```json
+// GOOD - fork uses @mmmbuto scope
+"name": "@mmmbuto/qwen-code-termux"
 ```
 
 ## Why This Works
@@ -173,9 +219,9 @@ gh release create v0.6.406 --notes "..."
 | Action         | Command                                                   |
 | -------------- | --------------------------------------------------------- |
 | Merge upstream | `git merge upstream/release/v0.6.X`                       |
-| Bump version   | `sed -i 's/0.6.405-termux/0.6.406-termux/g' package.json` |
+| Bump root ver  | `sed -i 's/0.6.407-termux/0.6.408-termux/g' package.json` |
 | Test install   | `npm install -g ./mmmbuto-qwen-code-termux-*.tgz`         |
-| Publish        | `npm publish`                                             |
+| Publish        | `cd packages/cli && npm publish --tag latest`             |
 
 ## Version History
 
@@ -184,3 +230,5 @@ gh release create v0.6.406 --notes "..."
 - `0.6.403-termux`: Rerelease with deprecations
 - `0.6.404-termux`: Switch to @mmmbuto/node-pty-android-arm64 (Termux-only PTY)
 - `0.6.405-termux`: Add Termux runtime patches (base64 polyfills, TERMUX\_\_PREFIX, punycode warn)
+- `0.6.406-termux`: Multi-provider PTY via @mmmbuto/pty-termux-utils
+- `0.6.407-termux`: Re-scope CLI/core to @mmmbuto packages
