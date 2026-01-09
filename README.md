@@ -153,9 +153,6 @@ Build on top of Qwen Code with the TypeScript SDK:
 npm install -g @mmmbuto/qwen-code-termux@latest
 ```
 
-If you hit `ERR_MODULE_NOT_FOUND` after an older install, you likely have the
-broken `0.6.3` publish. Upgrade to `>=0.6.407-termux`.
-
 ### Versions
 
 - **latest / stable**: 0.6.407-termux
