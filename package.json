@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.6.405-termux",
+  "version": "0.6.406-termux",
   "engines": {
     "node": ">=20.0.0"
   },
