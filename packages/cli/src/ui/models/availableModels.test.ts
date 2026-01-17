@@ -15,7 +15,7 @@ import {
   MAINLINE_VLM,
   MAINLINE_CODER,
 } from './availableModels.js';
-import { AuthType, type Config } from '@qwen-code/qwen-code-core';
+import { AuthType, type Config } from '@mmmbuto/qwen-code-termux-core';
 
 describe('availableModels', () => {
   describe('AVAILABLE_MODELS_QWEN', () => {

@@ -13,7 +13,7 @@ import {
 import { MessageType, type HistoryItemSkillsList } from '../types.js';
 import { t } from '../../i18n/index.js';
 import { AsyncFzf } from 'fzf';
-import type { SkillConfig } from '@qwen-code/qwen-code-core';
+import type { SkillConfig } from '@mmmbuto/qwen-code-termux-core';
 
 export const skillsCommand: SlashCommand = {
   name: 'skills',

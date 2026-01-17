@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Config } from '@qwen-code/qwen-code-core';
-import { InputFormat, logUserPrompt } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
+import { InputFormat, logUserPrompt } from '@mmmbuto/qwen-code-termux-core';
 import { render } from 'ink';
 import dns from 'node:dns';
 import os from 'node:os';
