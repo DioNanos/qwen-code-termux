@@ -1,11 +1,12 @@
 <div align="center">
 
-[![npm version](https://img.shields.io/npm/v/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
-[![License](https://img.shields.io/github/license/QwenLM/qwen-code.svg)](./LICENSE)
+[![npm version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
-[![Downloads](https://img.shields.io/npm/dm/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
+[![Downloads](https://img.shields.io/npm/dm/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/dionanos)
 
-**An open-source AI agent that lives in your terminal.**
+**An open-source AI agent that lives in your terminal — Termux Edition (Android).**
 
 <a href="https://qwenlm.github.io/qwen-code-docs/zh/users/overview">中文</a> |
 <a href="https://qwenlm.github.io/qwen-code-docs/de/users/overview">Deutsch</a> |
@@ -16,36 +17,51 @@
 
 </div>
 
-Qwen Code is an open-source AI agent for the terminal, optimized for [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder). It helps you understand large codebases, automate tedious work, and ship faster.
+Qwen Code is an open-source AI agent for the terminal, optimized for **Qwen3-Coder**.  
+This repository/package is a **Termux-first build** that keeps upstream behavior, while fixing the parts that commonly break on Android/Termux (notably PTY and a few runtime quirks).
+
+> **Not on Termux?** Use upstream: `npm install -g @qwen-code/qwen-code@latest` (or Homebrew).  
+> **On Termux?** Use this package: `npm install -g @mmmbuto/qwen-code-termux@latest`.
 
 ![](https://gw.alicdn.com/imgextra/i1/O1CN01D2DviS1wwtEtMwIzJ_!!6000000006373-2-tps-1600-900.png)
 
-## Why Qwen Code?
+## Why a Termux Edition?
 
-- **OpenAI-compatible, OAuth free tier**: use an OpenAI-compatible API, or sign in with Qwen OAuth to get 2,000 free requests/day.
-- **Open-source, co-evolving**: both the framework and the Qwen3-Coder model are open-source—and they ship and evolve together.
-- **Agentic workflow, feature-rich**: rich built-in tools (Skills, SubAgents, Plan Mode) for a full agentic workflow and a Claude Code-like experience.
-- **Terminal-first, IDE-friendly**: built for developers who live in the command line, with optional integration for VS Code, Zed, and JetBrains IDEs.
+Upstream Qwen Code targets macOS/Linux/Windows. On Android/Termux, installs may fail due to native dependency issues (PTY / build tooling) and small environment differences.
 
-## Installation
+Termux Edition focuses on:
 
-#### Prerequisites
+- **Android PTY support** via `@mmmbuto/node-pty-android-arm64` (optional dependency)
+- **Termux runtime patches** (polyfills/quirks, clipboard behavior)
+- **Termux-safe install** (avoid node-gyp/husky pitfalls where possible)
+- **Tested on-device** — see [QWEN_TEST_REPORT_v0.7.1-termux.md](./QWEN_TEST_REPORT_v0.7.1-termux.md)
+
+## Installation (Termux / Android)
+
+### Prerequisites
+
+- Termux (recommended from F-Droid)
+- Node.js **20+** (Termux `nodejs-lts` is recommended)
 
 ```bash
-# Node.js 20+
-curl -qL https://www.npmjs.com/install.sh | sh
+pkg update -y && pkg upgrade -y
+pkg install -y nodejs-lts git
 ```
 
-#### NPM (recommended)
+Optional (recommended) for extra tools:
+
+- Install the **Termux:API** Android app
+- Install the Termux package:
 
 ```bash
-npm install -g @qwen-code/qwen-code@latest
+pkg install -y termux-api
 ```
 
-#### Homebrew (macOS, Linux)
+### Install
 
 ```bash
-brew install qwen-code
+npm install -g @mmmbuto/qwen-code-termux@latest
+qwen --version
 ```
 
 ## Quick Start
@@ -71,7 +87,7 @@ Generate unit tests for this module.
 ```
 
 <details>
-<summary>Click to watch a demo video</summary>
+<summary>Click to watch a demo video (upstream)</summary>
 
 <video src="https://cloud.video.taobao.com/vod/HLfyppnCHplRV9Qhz2xSqeazHeRzYtG-EYJnHAqtzkQ.mp4" controls>
 Your browser does not support the video tag.
@@ -86,7 +102,7 @@ Qwen Code supports two authentication methods:
 - **Qwen OAuth (recommended & free)**: sign in with your `qwen.ai` account in a browser.
 - **OpenAI-compatible API**: use `OPENAI_API_KEY` (and optionally a custom base URL / model).
 
-#### Qwen OAuth (recommended)
+### Qwen OAuth (recommended)
 
 Start `qwen`, then run:
 
@@ -96,7 +112,7 @@ Start `qwen`, then run:
 
 Choose **Qwen OAuth** and complete the browser flow. Your credentials are cached locally so you usually won't need to log in again.
 
-#### OpenAI-compatible API (API key)
+### OpenAI-compatible API (API key)
 
 Environment variables (recommended for CI / headless environments):
 
@@ -106,7 +122,8 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"  # optional
 export OPENAI_MODEL="gpt-4o"                        # optional
 ```
 
-For details (including `.qwen/.env` loading and security notes), see the [authentication guide](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/).
+For details (including `.qwen/.env` loading and security notes), see the upstream authentication guide:
+https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/
 
 ## Usage
 
@@ -117,7 +134,7 @@ As an open-source terminal agent, you can use Qwen Code in four primary ways:
 3. IDE integration (VS Code, Zed)
 4. TypeScript SDK
 
-#### Interactive mode
+### Interactive mode
 
 ```bash
 cd your-project/
@@ -126,24 +143,25 @@ qwen
 
 Run `qwen` in your project folder to launch the interactive terminal UI. Use `@` to reference local files (for example `@src/main.ts`).
 
-#### Headless mode
+### Headless mode
 
 ```bash
 cd your-project/
 qwen -p "your question"
 ```
 
-Use `-p` to run Qwen Code without the interactive UI—ideal for scripts, automation, and CI/CD. Learn more: [Headless mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless).
+Use `-p` to run Qwen Code without the interactive UI—ideal for scripts, automation, and CI/CD. Learn more:
+https://qwenlm.github.io/qwen-code-docs/en/users/features/headless
 
-#### IDE integration
+### IDE integration
 
 Use Qwen Code inside your editor (VS Code, Zed, and JetBrains IDEs):
 
-- [Use in VS Code](https://qwenlm.github.io/qwen-code-docs/en/users/integration-vscode/)
-- [Use in Zed](https://qwenlm.github.io/qwen-code-docs/en/users/integration-zed/)
-- [Use in JetBrains IDEs](https://qwenlm.github.io/qwen-code-docs/en/users/integration-jetbrains/)
+- https://qwenlm.github.io/qwen-code-docs/en/users/integration-vscode/
+- https://qwenlm.github.io/qwen-code-docs/en/users/integration-zed/
+- https://qwenlm.github.io/qwen-code-docs/en/users/integration-jetbrains/
 
-#### TypeScript SDK
+### TypeScript SDK
 
 Build on top of Qwen Code with the TypeScript SDK:
 
@@ -166,9 +184,11 @@ Build on top of Qwen Code with the TypeScript SDK:
 - `Ctrl+D` - Exit (on empty line)
 - `Up/Down` - Navigate command history
 
-> Learn more about [Commands](https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/)
+> Learn more about Commands:
+> https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/
 >
-> **Tip**: In YOLO mode (`--yolo`), vision switching happens automatically without prompts when images are detected. Learn more about [Approval Mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/)
+> **Tip**: In YOLO mode (`--yolo`), vision switching happens automatically without prompts when images are detected. Learn more about Approval Mode:
+> https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/
 
 ## Configuration
 
@@ -177,31 +197,54 @@ Qwen Code can be configured via `settings.json`, environment variables, and CLI 
 - **User settings**: `~/.qwen/settings.json`
 - **Project settings**: `.qwen/settings.json`
 
-See [settings](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/) for available options and precedence.
+See settings docs for available options and precedence:
+https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/
 
-## Benchmark Results
+## Termux Notes
 
-### Terminal-Bench Performance
+### Storage access
 
-| Agent     | Model              | Accuracy |
-| --------- | ------------------ | -------- |
-| Qwen Code | Qwen3-Coder-480A35 | 37.5%    |
-| Qwen Code | Qwen3-Coder-30BA3B | 31.3%    |
+To work with files under `/sdcard`, run once:
 
-## Ecosystem
+```bash
+termux-setup-storage
+```
 
-Looking for a graphical interface?
+### Clipboard
 
-- [**AionUi**](https://github.com/iOfficeAI/AionUi) A modern GUI for command-line AI tools including Qwen Code
-- [**Gemini CLI Desktop**](https://github.com/Piebald-AI/gemini-cli-desktop) A cross-platform desktop/web/mobile UI for Qwen Code
+If you installed `termux-api` + the Termux:API app, clipboard actions can use Termux-native commands.
+
+### PTY
+
+On ARM64 Termux, PTY support is provided by `@mmmbuto/node-pty-android-arm64` (optional dependency).  
+If PTY isn't available, Qwen Code falls back to non-PTY execution where possible.
+
+## Changelog & Releases
+
+- [CHANGELOG.md](./CHANGELOG.md)
+- Latest Termux test report: [QWEN_TEST_REPORT_v0.7.1-termux.md](./QWEN_TEST_REPORT_v0.7.1-termux.md)
 
 ## Troubleshooting
 
-If you encounter issues, check the [troubleshooting guide](https://qwenlm.github.io/qwen-code-docs/en/users/support/troubleshooting/).
+If you encounter issues, check the upstream troubleshooting guide:
+https://qwenlm.github.io/qwen-code-docs/en/users/support/troubleshooting/
 
 To report a bug from within the CLI, run `/bug` and include a short title and repro steps.
 
-## Connect with Us
+### Termux-specific troubleshooting
+
+- Make sure you are on **Node 20+** (`node -v`)
+- Update packages (`pkg upgrade -y`)
+- If OAuth browser flow fails, try again after `termux-open-url https://qwen.ai` (ensures the bridge is working)
+- If you need Termux tools, install `termux-api` and the Android companion app
+
+
+## Support
+
+If this Termux edition helps you, you can support the project on Ko-fi:
+- https://ko-fi.com/dionanos
+
+## Connect with Upstream
 
 - Discord: https://discord.gg/ycKBjdNd
 - Dingtalk: https://qr.dingtalk.com/action/joingroup?code=v1,k1,+FX6Gf/ZDlTahTIRi8AEQhIaBlqykA0j+eBKKdhLeAE=&_dt_no_comment=1&origin=1
