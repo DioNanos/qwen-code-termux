@@ -728,6 +728,21 @@ export default {
   'Authentication timed out. Please try again.': '认证超时。请重试。',
   'Waiting for auth... (Press ESC or CTRL+C to cancel)':
     '正在等待认证...（按 ESC 或 CTRL+C 取消）',
+  'Missing API key for OpenAI-compatible auth. Set settings.security.auth.apiKey, or set the {{envKeyHint}} environment variable.':
+    '缺少 OpenAI 兼容认证的 API 密钥。请设置 settings.security.auth.apiKey 或设置 {{envKeyHint}} 环境变量。',
+  '{{envKeyHint}} environment variable not found.':
+    '未找到 {{envKeyHint}} 环境变量。',
+  '{{envKeyHint}} environment variable not found. Please set it in your .env file or environment variables.':
+    '未找到 {{envKeyHint}} 环境变量。请在 .env 文件或系统环境变量中进行设置。',
+  '{{envKeyHint}} environment variable not found (or set settings.security.auth.apiKey). Please set it in your .env file or environment variables.':
+    '未找到 {{envKeyHint}} 环境变量（或设置 settings.security.auth.apiKey）。请在 .env 文件或系统环境变量中进行设置。',
+  'Missing API key for OpenAI-compatible auth. Set the {{envKeyHint}} environment variable.':
+    '缺少 OpenAI 兼容认证的 API 密钥。请设置 {{envKeyHint}} 环境变量。',
+  'Anthropic provider missing required baseUrl in modelProviders[].baseUrl.':
+    'Anthropic 提供商缺少必需的 baseUrl，请在 modelProviders[].baseUrl 中配置。',
+  'ANTHROPIC_BASE_URL environment variable not found.':
+    '未找到 ANTHROPIC_BASE_URL 环境变量。',
+  'Invalid auth method selected.': '选择了无效的认证方式。',
   'Failed to authenticate. Message: {{message}}': '认证失败。消息：{{message}}',
   'Authenticated successfully with {{authType}} credentials.':
     '使用 {{authType}} 凭据成功认证。',
@@ -747,6 +762,15 @@ export default {
   // ============================================================================
   'Select Model': '选择模型',
   '(Press Esc to close)': '（按 Esc 关闭）',
+  'Current (effective) configuration': '当前（实际生效）配置',
+  AuthType: '认证方式',
+  'API Key': 'API 密钥',
+  unset: '未设置',
+  '(default)': '(默认)',
+  '(set)': '(已设置)',
+  '(not set)': '(未设置)',
+  "Failed to switch model to '{{modelId}}'.\n\n{{error}}":
+    "无法切换到模型 '{{modelId}}'.\n\n{{error}}",
   'The latest Qwen Coder model from Alibaba Cloud ModelStudio (version: qwen3-coder-plus-2025-09-23)':
     '来自阿里云 ModelStudio 的最新 Qwen Coder 模型（版本：qwen3-coder-plus-2025-09-23）',
   'The latest Qwen Vision model from Alibaba Cloud ModelStudio (version: qwen3-vl-plus-2025-09-23)':
@@ -849,11 +873,11 @@ export default {
   'Session Stats': '会话统计',
   'Model Usage': '模型使用情况',
   Reqs: '请求数',
-  'Input Tokens': '输入令牌',
-  'Output Tokens': '输出令牌',
+  'Input Tokens': '输入 token 数',
+  'Output Tokens': '输出 token 数',
   'Savings Highlight:': '节省亮点：',
   'of input tokens were served from the cache, reducing costs.':
-    '的输入令牌来自缓存，降低了成本',
+    '从缓存载入 token ，降低了成本',
   'Tip: For a full token breakdown, run `/stats model`.':
     '提示：要查看完整的令牌明细，请运行 `/stats model`',
   'Model Stats For Nerds': '模型统计（技术细节）',

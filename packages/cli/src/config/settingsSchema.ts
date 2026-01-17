@@ -10,12 +10,13 @@ import type {
   TelemetrySettings,
   AuthType,
   ChatCompressionSettings,
-} from '@mmmbuto/qwen-code-termux-core';
+  ModelProvidersConfig,
+} from '@qwen-code/qwen-code-core';
 import {
   ApprovalMode,
   DEFAULT_TRUNCATE_TOOL_OUTPUT_LINES,
   DEFAULT_TRUNCATE_TOOL_OUTPUT_THRESHOLD,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import type { CustomTheme } from '../ui/themes/theme.js';
 
 export type SettingsType =
@@ -100,6 +101,19 @@ const SETTINGS_SCHEMA = {
     description: 'Configuration for MCP servers.',
     showInDialog: false,
     mergeStrategy: MergeStrategy.SHALLOW_MERGE,
+  },
+
+  // Model providers configuration grouped by authType
+  modelProviders: {
+    type: 'object',
+    label: 'Model Providers',
+    category: 'Model',
+    requiresRestart: false,
+    default: {} as ModelProvidersConfig,
+    description:
+      'Model providers configuration grouped by authType. Each authType contains an array of model configurations.',
+    showInDialog: false,
+    mergeStrategy: MergeStrategy.REPLACE,
   },
 
   general: {
@@ -966,6 +980,27 @@ const SETTINGS_SCHEMA = {
         default: DEFAULT_TRUNCATE_TOOL_OUTPUT_LINES,
         description: 'The number of lines to keep when truncating tool output.',
         showInDialog: true,
+      },
+      experimental: {
+        type: 'object',
+        label: 'Experimental',
+        category: 'Tools',
+        requiresRestart: true,
+        default: {},
+        description: 'Experimental tool features.',
+        showInDialog: false,
+        properties: {
+          skills: {
+            type: 'boolean',
+            label: 'Skills',
+            category: 'Tools',
+            requiresRestart: true,
+            default: false,
+            description:
+              'Enable experimental Agent Skills feature. When enabled, Qwen Code can use Skills from .qwen/skills/ and ~/.qwen/skills/.',
+            showInDialog: true,
+          },
+        },
       },
     },
   },

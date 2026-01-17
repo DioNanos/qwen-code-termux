@@ -6,14 +6,14 @@
 
 import crypto from 'crypto';
 import path from 'node:path';
-import { promises as fs, accessSync, constants } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import * as os from 'os';
-import { execFileSync } from 'node:child_process';
 
 import open from 'open';
 import { EventEmitter } from 'events';
 import type { Config } from '../config/config.js';
 import { randomUUID } from 'node:crypto';
+import { formatFetchErrorForUser } from '../utils/fetch.js';
 import {
   SharedTokenManager,
   TokenManagerError,
@@ -35,138 +35,6 @@ const QWEN_OAUTH_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 // File System Configuration
 const QWEN_DIR = '.qwen';
 const QWEN_CREDENTIAL_FILENAME = 'oauth_creds.json';
-
-/**
- * Detect if running on Termux/Android
- */
-function isTermux(): boolean {
-  return (
-    process.platform === 'android' ||
-    process.env['PREFIX']?.includes('com.termux') ||
-    process.env['TERMUX_VERSION'] !== undefined
-  );
-}
-
-function ensureSystemBinInPath(pathValue?: string): string | undefined {
-  if (!pathValue) return pathValue;
-  if (pathValue.includes('/system/bin')) return pathValue;
-  return `${pathValue}:/system/bin`;
-}
-
-function resolveAndroidCommand(candidates: string[]): string | null {
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Not executable, try next
-    }
-  }
-  return null;
-}
-
-function getAndroidUserId(): string | undefined {
-  const candidates = ['cmd', '/system/bin/cmd'];
-  const cmdPath = resolveAndroidCommand(candidates);
-  if (!cmdPath) return undefined;
-
-  try {
-    const output = execFileSync(cmdPath, ['activity', 'get-current-user'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      env: { ...process.env, PATH: ensureSystemBinInPath(process.env['PATH']) },
-    })
-      .toString()
-      .trim();
-    const match = output.match(/\d+/);
-    return match ? match[0] : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Open URL in browser - uses termux-open-url on Termux, 'open' package otherwise
- * @param url - The URL to open
- */
-async function openBrowserUrl(url: string): Promise<void> {
-  if (isTermux()) {
-    // Use termux-open-url on Android/Termux
-    const possiblePaths = [
-      '/data/data/com.termux/files/usr/bin/termux-open-url',
-      '/usr/bin/termux-open-url',
-      'termux-open-url',
-    ];
-
-    let termuxOpenUrl = 'termux-open-url';
-    for (const candidate of possiblePaths) {
-      try {
-        accessSync(candidate, constants.X_OK);
-        termuxOpenUrl = candidate;
-        break;
-      } catch {
-        // Path not found or not executable, continue
-      }
-    }
-
-    const resolvedUserId = getAndroidUserId();
-    const termuxApp = process.env['TERMUX_OPEN_URL_APP'];
-    const args = termuxApp ? [url, termuxApp] : [url];
-    const env = {
-      ...process.env,
-      PATH: ensureSystemBinInPath(process.env['PATH']),
-      ...(resolvedUserId ? { TERMUX__USER_ID: resolvedUserId } : {}),
-    };
-
-    try {
-      console.debug(`Opening URL with: ${termuxOpenUrl}`);
-      execFileSync(termuxOpenUrl, args, {
-        stdio: 'ignore',
-        env,
-      });
-      return;
-    } catch (error) {
-      // Fallback: try Android Activity Manager directly
-      const rawUserId = resolvedUserId ?? process.env['TERMUX__USER_ID'] ?? '0';
-      const userId = /^\d+$/.test(rawUserId) ? rawUserId : '0';
-      try {
-        const amCandidates = [
-          '/data/data/com.termux/files/usr/bin/am',
-          '/system/bin/am',
-          'am',
-        ];
-        const amPath = resolveAndroidCommand(amCandidates) ?? 'am';
-        execFileSync(
-          amPath,
-          [
-            'start',
-            '--user',
-            userId,
-            '-a',
-            'android.intent.action.VIEW',
-            '-d',
-            url,
-          ],
-          {
-            stdio: 'ignore',
-            env,
-          },
-        );
-        return;
-      } catch (amError) {
-        console.error(
-          `Failed to open URL with termux-open-url: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        console.error(
-          `Fallback 'am start' failed: ${amError instanceof Error ? amError.message : String(amError)}`,
-        );
-        throw error;
-      }
-    }
-  } else {
-    // Use 'open' package on other platforms
-    await open(url);
-  }
-}
 
 /**
  * PKCE (Proof Key for Code Exchange) utilities
@@ -691,6 +559,109 @@ export async function getQwenOAuthClient(
   }
 }
 
+/**
+ * Displays a formatted box with OAuth device authorization URL.
+ * Uses process.stderr.write() to bypass ConsolePatcher and ensure the auth URL
+ * is always visible to users, especially in non-interactive mode.
+ * Using stderr prevents corruption of structured JSON output (which goes to stdout)
+ * and follows the standard Unix convention of user-facing messages to stderr.
+ */
+function showFallbackMessage(verificationUriComplete: string): void {
+  const title = 'Qwen OAuth Device Authorization';
+  const url = verificationUriComplete;
+  const minWidth = 70;
+  const maxWidth = 80;
+  const boxWidth = Math.min(Math.max(title.length + 4, minWidth), maxWidth);
+
+  // Calculate the width needed for the box (account for padding)
+  const contentWidth = boxWidth - 4; // Subtract 2 spaces and 2 border chars
+
+  // Helper to wrap text to fit within box width
+  const wrapText = (text: string, width: number): string[] => {
+    // For URLs, break at any character if too long
+    if (text.startsWith('http://') || text.startsWith('https://')) {
+      const lines: string[] = [];
+      for (let i = 0; i < text.length; i += width) {
+        lines.push(text.substring(i, i + width));
+      }
+      return lines;
+    }
+
+    // For regular text, break at word boundaries
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const word of words) {
+      if (currentLine.length + word.length + 1 <= width) {
+        currentLine += (currentLine ? ' ' : '') + word;
+      } else {
+        if (currentLine) {
+          lines.push(currentLine);
+        }
+        currentLine = word.length > width ? word.substring(0, width) : word;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    return lines;
+  };
+
+  // Build the box borders with title centered in top border
+  // Format: +--- Title ---+
+  const titleWithSpaces = ' ' + title + ' ';
+  const totalDashes = boxWidth - 2 - titleWithSpaces.length; // Subtract corners and title
+  const leftDashes = Math.floor(totalDashes / 2);
+  const rightDashes = totalDashes - leftDashes;
+  const topBorder =
+    '+' +
+    '-'.repeat(leftDashes) +
+    titleWithSpaces +
+    '-'.repeat(rightDashes) +
+    '+';
+  const emptyLine = '|' + ' '.repeat(boxWidth - 2) + '|';
+  const bottomBorder = '+' + '-'.repeat(boxWidth - 2) + '+';
+
+  // Build content lines
+  const instructionLines = wrapText(
+    'Please visit the following URL in your browser to authorize:',
+    contentWidth,
+  );
+  const urlLines = wrapText(url, contentWidth);
+  const waitingLine = 'Waiting for authorization to complete...';
+
+  // Write the box
+  process.stderr.write('\n' + topBorder + '\n');
+  process.stderr.write(emptyLine + '\n');
+
+  // Write instructions
+  for (const line of instructionLines) {
+    process.stderr.write(
+      '| ' + line + ' '.repeat(contentWidth - line.length) + ' |\n',
+    );
+  }
+
+  process.stderr.write(emptyLine + '\n');
+
+  // Write URL
+  for (const line of urlLines) {
+    process.stderr.write(
+      '| ' + line + ' '.repeat(contentWidth - line.length) + ' |\n',
+    );
+  }
+
+  process.stderr.write(emptyLine + '\n');
+
+  // Write waiting message
+  process.stderr.write(
+    '| ' + waitingLine + ' '.repeat(contentWidth - waitingLine.length) + ' |\n',
+  );
+
+  process.stderr.write(emptyLine + '\n');
+  process.stderr.write(bottomBorder + '\n\n');
+}
+
 async function authWithQwenDeviceFlow(
   client: QwenOAuth2Client,
   config: Config,
@@ -702,6 +673,50 @@ async function authWithQwenDeviceFlow(
     isCancelled = true;
   };
   qwenOAuth2Events.once(QwenOAuth2Event.AuthCancel, cancelHandler);
+
+  // Helper to check cancellation and return appropriate result
+  const checkCancellation = (): AuthResult | null => {
+    if (!isCancelled) {
+      return null;
+    }
+    const message = 'Authentication cancelled by user.';
+    console.debug('\n' + message);
+    qwenOAuth2Events.emit(QwenOAuth2Event.AuthProgress, 'error', message);
+    return { success: false, reason: 'cancelled', message };
+  };
+
+  // Helper to emit auth progress events
+  const emitAuthProgress = (
+    status: 'polling' | 'success' | 'error' | 'timeout' | 'rate_limit',
+    message: string,
+  ): void => {
+    qwenOAuth2Events.emit(QwenOAuth2Event.AuthProgress, status, message);
+  };
+
+  // Helper to handle browser launch with error handling
+  const launchBrowser = async (url: string): Promise<void> => {
+    try {
+      const childProcess = await open(url);
+
+      // IMPORTANT: Attach an error handler to the returned child process.
+      // Without this, if `open` fails to spawn a process (e.g., `xdg-open` is not found
+      // in a minimal Docker container), it will emit an unhandled 'error' event,
+      // causing the entire Node.js process to crash.
+      if (childProcess) {
+        childProcess.on('error', (err) => {
+          console.debug(
+            'Browser launch failed:',
+            err.message || 'Unknown error',
+          );
+        });
+      }
+    } catch (err) {
+      console.debug(
+        'Failed to open browser:',
+        err instanceof Error ? err.message : 'Unknown error',
+      );
+    }
+  };
 
   try {
     // Generate PKCE code verifier and challenge
@@ -725,34 +740,18 @@ async function authWithQwenDeviceFlow(
     // Emit device authorization event for UI integration immediately
     qwenOAuth2Events.emit(QwenOAuth2Event.AuthUri, deviceAuth);
 
-    const showFallbackMessage = () => {
-      console.log('\n=== Qwen OAuth Device Authorization ===');
-      console.log(
-        'Please visit the following URL in your browser to authorize:',
-      );
-      console.log(`\n${deviceAuth.verification_uri_complete}\n`);
-      console.log('Waiting for authorization to complete...\n');
-    };
+    // Always show the fallback message in non-interactive environments to ensure
+    // users can see the authorization URL even if browser launching is attempted.
+    // This is critical for headless/remote environments where browser launching
+    // may silently fail without throwing an error.
+    showFallbackMessage(deviceAuth.verification_uri_complete);
 
-    // If browser launch is not suppressed, try to open the URL
+    // Try to open browser if not suppressed
     if (!config.isBrowserLaunchSuppressed()) {
-      try {
-        await openBrowserUrl(deviceAuth.verification_uri_complete);
-      } catch (_err) {
-        showFallbackMessage();
-      }
-    } else {
-      // Browser launch is suppressed, show fallback message
-      showFallbackMessage();
+      await launchBrowser(deviceAuth.verification_uri_complete);
     }
 
-    // Emit auth progress event
-    qwenOAuth2Events.emit(
-      QwenOAuth2Event.AuthProgress,
-      'polling',
-      'Waiting for authorization...',
-    );
-
+    emitAuthProgress('polling', 'Waiting for authorization...');
     console.debug('Waiting for authorization...\n');
 
     // Poll for the token
@@ -763,11 +762,9 @@ async function authWithQwenDeviceFlow(
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       // Check if authentication was cancelled
-      if (isCancelled) {
-        const message = 'Authentication cancelled by user.';
-        console.debug('\n' + message);
-        qwenOAuth2Events.emit(QwenOAuth2Event.AuthProgress, 'error', message);
-        return { success: false, reason: 'cancelled', message };
+      const cancellationResult = checkCancellation();
+      if (cancellationResult) {
+        return cancellationResult;
       }
 
       try {
@@ -810,9 +807,7 @@ async function authWithQwenDeviceFlow(
             // minimal stub; cache invalidation is best-effort and should not break auth.
           }
 
-          // Emit auth progress success event
-          qwenOAuth2Events.emit(
-            QwenOAuth2Event.AuthProgress,
+          emitAuthProgress(
             'success',
             'Authentication successful! Access token obtained.',
           );
@@ -835,9 +830,7 @@ async function authWithQwenDeviceFlow(
             pollInterval = 2000; // Reset to default interval
           }
 
-          // Emit polling progress event
-          qwenOAuth2Events.emit(
-            QwenOAuth2Event.AuthProgress,
+          emitAuthProgress(
             'polling',
             `Polling... (attempt ${attempt + 1}/${maxAttempts})`,
           );
@@ -867,15 +860,9 @@ async function authWithQwenDeviceFlow(
           });
 
           // Check for cancellation after waiting
-          if (isCancelled) {
-            const message = 'Authentication cancelled by user.';
-            console.debug('\n' + message);
-            qwenOAuth2Events.emit(
-              QwenOAuth2Event.AuthProgress,
-              'error',
-              message,
-            );
-            return { success: false, reason: 'cancelled', message };
+          const cancellationResult = checkCancellation();
+          if (cancellationResult) {
+            return cancellationResult;
           }
 
           continue;
@@ -903,14 +890,16 @@ async function authWithQwenDeviceFlow(
           message: string,
           eventType: 'error' | 'rate_limit' = 'error',
         ): AuthResult => {
-          qwenOAuth2Events.emit(
-            QwenOAuth2Event.AuthProgress,
-            eventType,
-            message,
-          );
+          emitAuthProgress(eventType, message);
           console.error('\n' + message);
           return { success: false, reason, message };
         };
+
+        // Check for cancellation first
+        const cancellationResult = checkCancellation();
+        if (cancellationResult) {
+          return cancellationResult;
+        }
 
         // Handle credential caching failures - stop polling immediately
         if (errorMessage.includes('Failed to cache credentials')) {
@@ -935,31 +924,23 @@ async function authWithQwenDeviceFlow(
         }
 
         const message = `Error polling for token: ${errorMessage}`;
-        qwenOAuth2Events.emit(QwenOAuth2Event.AuthProgress, 'error', message);
-
-        if (isCancelled) {
-          const message = 'Authentication cancelled by user.';
-          return { success: false, reason: 'cancelled', message };
-        }
+        emitAuthProgress('error', message);
 
         await new Promise((resolve) => setTimeout(resolve, pollInterval));
       }
     }
 
     const timeoutMessage = 'Authorization timeout, please restart the process.';
-
-    // Emit timeout error event
-    qwenOAuth2Events.emit(
-      QwenOAuth2Event.AuthProgress,
-      'timeout',
-      timeoutMessage,
-    );
-
+    emitAuthProgress('timeout', timeoutMessage);
     console.error('\n' + timeoutMessage);
     return { success: false, reason: 'timeout', message: timeoutMessage };
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const message = `Device authorization flow failed: ${errorMessage}`;
+    const fullErrorMessage = formatFetchErrorForUser(error, {
+      url: QWEN_OAUTH_BASE_URL,
+    });
+    const message = `Device authorization flow failed: ${fullErrorMessage}`;
+
+    emitAuthProgress('error', message);
     console.error(message);
     return { success: false, reason: 'error', message };
   } finally {

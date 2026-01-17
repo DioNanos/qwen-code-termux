@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Config, AuthType } from '@mmmbuto/qwen-code-termux-core';
-import { InputFormat, logUserPrompt } from '@mmmbuto/qwen-code-termux-core';
+import type { Config } from '@qwen-code/qwen-code-core';
+import { InputFormat, logUserPrompt } from '@qwen-code/qwen-code-core';
 import { render } from 'ink';
 import dns from 'node:dns';
 import os from 'node:os';
@@ -17,7 +17,11 @@ import * as cliConfig from './config/config.js';
 import { loadCliConfig, parseArguments } from './config/config.js';
 import { ExtensionStorage, loadExtensions } from './config/extension.js';
 import type { DnsResolutionOrder, LoadedSettings } from './config/settings.js';
-import { loadSettings, migrateDeprecatedSettings } from './config/settings.js';
+import {
+  getSettingsWarnings,
+  loadSettings,
+  migrateDeprecatedSettings,
+} from './config/settings.js';
 import {
   initializeApp,
   type InitializationResult,
@@ -252,22 +256,20 @@ export async function main() {
         argv,
       );
 
-      if (
-        settings.merged.security?.auth?.selectedType &&
-        !settings.merged.security?.auth?.useExternal
-      ) {
+      if (!settings.merged.security?.auth?.useExternal) {
         // Validate authentication here because the sandbox will interfere with the Oauth2 web redirect.
         try {
-          const err = validateAuthMethod(
-            settings.merged.security.auth.selectedType,
-          );
-          if (err) {
-            throw new Error(err);
-          }
+          const authType = partialConfig.modelsConfig.getCurrentAuthType();
+          // Fresh users may not have selected/persisted an authType yet.
+          // In that case, defer auth prompting/selection to the main interactive flow.
+          if (authType) {
+            const err = validateAuthMethod(authType, partialConfig);
+            if (err) {
+              throw new Error(err);
+            }
 
-          await partialConfig.refreshAuth(
-            settings.merged.security.auth.selectedType,
-          );
+            await partialConfig.refreshAuth(authType);
+          }
         } catch (err) {
           console.error('Error authenticating:', err);
           process.exit(1);
@@ -344,6 +346,7 @@ export async function main() {
       extensionEnablementManager,
       argv,
     );
+    registerCleanup(() => config.shutdown());
 
     if (config.getListExtensions()) {
       console.log('Installed extensions:');
@@ -401,17 +404,17 @@ export async function main() {
     }
 
     let input = config.getQuestion();
-    let startupWarnings = [
-      ...(await getStartupWarnings()),
-      ...(await getUserStartupWarnings({
-        workspaceRoot: process.cwd(),
-        useRipgrep: settings.merged.tools?.useRipgrep ?? true,
-        useBuiltinRipgrep: settings.merged.tools?.useBuiltinRipgrep ?? true,
-      })),
+    const startupWarnings = [
+      ...new Set([
+        ...(await getStartupWarnings()),
+        ...(await getUserStartupWarnings({
+          workspaceRoot: process.cwd(),
+          useRipgrep: settings.merged.tools?.useRipgrep ?? true,
+          useBuiltinRipgrep: settings.merged.tools?.useBuiltinRipgrep ?? true,
+        })),
+        ...getSettingsWarnings(settings),
+      ]),
     ];
-    if (settings.merged.ui?.hideBanner || config.getScreenReader()) {
-      startupWarnings = [];
-    }
 
     // Render UI, passing necessary config values. Check that there is no command line question.
     if (config.isInteractive()) {
@@ -443,8 +446,6 @@ export async function main() {
     }
 
     const nonInteractiveConfig = await validateNonInteractiveAuth(
-      (argv.authType as AuthType) ||
-        settings.merged.security?.auth?.selectedType,
       settings.merged.security?.auth?.useExternal,
       config,
       settings,

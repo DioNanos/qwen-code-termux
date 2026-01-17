@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux-test-utils",
-  "version": "0.6.3",
+  "version": "0.7.1",
   "private": true,
   "main": "src/index.ts",
   "license": "Apache-2.0",

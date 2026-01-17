@@ -213,6 +213,12 @@ export enum CommandKind {
   MCP_PROMPT = 'mcp-prompt',
 }
 
+export interface CommandCompletionItem {
+  value: string;
+  label?: string;
+  description?: string;
+}
+
 // The standardized contract for any command in the system.
 export interface SlashCommand {
   name: string;
@@ -238,7 +244,7 @@ export interface SlashCommand {
   completion?: (
     context: CommandContext,
     partialArg: string,
-  ) => Promise<string[]>;
+  ) => Promise<Array<string | CommandCompletionItem> | null>;
 
   subCommands?: SlashCommand[];
 }

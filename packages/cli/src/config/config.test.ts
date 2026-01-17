@@ -13,11 +13,11 @@ import {
   WriteFileTool,
   DEFAULT_QWEN_MODEL,
   OutputFormat,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { loadCliConfig, parseArguments, type CliArgs } from './config.js';
 import type { Settings } from './settings.js';
 import { ExtensionStorage, type Extension } from './extension.js';
-import * as ServerConfig from '@mmmbuto/qwen-code-termux-core';
+import * as ServerConfig from '@qwen-code/qwen-code-core';
 import { isWorkspaceTrusted } from './trustedFolders.js';
 import { ExtensionEnablementManager } from './extensions/extensionEnablement.js';
 
@@ -77,10 +77,8 @@ vi.mock('read-package-up', () => ({
   ),
 }));
 
-vi.mock('@mmmbuto/qwen-code-termux-core', async () => {
-  const actualServer = await vi.importActual<typeof ServerConfig>(
-    '@mmmbuto/qwen-code-termux-core',
-  );
+vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+  const actualServer = await importOriginal<typeof ServerConfig>();
   return {
     ...actualServer,
     IdeClient: {

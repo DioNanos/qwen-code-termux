@@ -1,50 +1,83 @@
-# 🤖 Qwen Code – Termux Edition
+<div align="center">
 
-Android/Termux optimized fork of Qwen Code CLI. Installs cleanly on Termux
-with a native ARM64 PTY prebuild and mobile‑friendly fallbacks.
+[![npm version](https://img.shields.io/npm/v/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
+[![License](https://img.shields.io/github/license/QwenLM/qwen-code.svg)](./LICENSE)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Downloads](https://img.shields.io/npm/dm/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
 
-[![npm](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux?style=flat-square&logo=npm)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
-[![downloads](https://img.shields.io/npm/dt/@mmmbuto/qwen-code-termux?style=flat-square)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
-[![ko-fi](https://img.shields.io/badge/☕_Support-Ko--fi-FF5E5B?style=flat-square&logo=ko-fi)](https://ko-fi.com/dionanos)
+**An open-source AI agent that lives in your terminal.**
 
----
+<a href="https://qwenlm.github.io/qwen-code-docs/zh/users/overview">中文</a> |
+<a href="https://qwenlm.github.io/qwen-code-docs/de/users/overview">Deutsch</a> |
+<a href="https://qwenlm.github.io/qwen-code-docs/fr/users/overview">français</a> |
+<a href="https://qwenlm.github.io/qwen-code-docs/ja/users/overview">日本語</a> |
+<a href="https://qwenlm.github.io/qwen-code-docs/ru/users/overview">Русский</a> |
+<a href="https://qwenlm.github.io/qwen-code-docs/pt-BR/users/overview">Português (Brasil)</a>
 
-## What This Is
+</div>
 
-**Optimized Termux edition** of `QwenLM/qwen-code`.
+Qwen Code is an open-source AI agent for the terminal, optimized for [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder). It helps you understand large codebases, automate tedious work, and ship faster.
 
-- **Termux‑First:** Android filesystem and shell fallbacks.
-- **Lightweight:** PTY via `@mmmbuto/node-pty-android-arm64`, no keychain deps.
-- **Up‑to‑Date:** Tracks upstream Qwen Code.
+![](https://gw.alicdn.com/imgextra/i1/O1CN01D2DviS1wwtEtMwIzJ_!!6000000006373-2-tps-1600-900.png)
 
-## Installation (Termux)
+## Why Qwen Code?
+
+- **OpenAI-compatible, OAuth free tier**: use an OpenAI-compatible API, or sign in with Qwen OAuth to get 2,000 free requests/day.
+- **Open-source, co-evolving**: both the framework and the Qwen3-Coder model are open-source—and they ship and evolve together.
+- **Agentic workflow, feature-rich**: rich built-in tools (Skills, SubAgents, Plan Mode) for a full agentic workflow and a Claude Code-like experience.
+- **Terminal-first, IDE-friendly**: built for developers who live in the command line, with optional integration for VS Code, Zed, and JetBrains IDEs.
+
+## Installation
+
+#### Prerequisites
 
 ```bash
-pkg update && pkg upgrade -y
-pkg install nodejs-lts -y
-npm install -g @mmmbuto/qwen-code-termux
-
-qwen --version  # expected: 0.6.407-termux
+# Node.js 20+
+curl -qL https://www.npmjs.com/install.sh | sh
 ```
 
-Build from source:
+#### NPM (recommended)
 
 ```bash
-git clone https://github.com/DioNanos/qwen-code-termux.git
-cd qwen-code-termux
-npm install
-npm run build && npm run bundle
-node dist/cli.js --version
+npm install -g @qwen-code/qwen-code@latest
+```
+
+#### Homebrew (macOS, Linux)
+
+```bash
+brew install qwen-code
 ```
 
 ## Quick Start
 
 ```bash
+# Start Qwen Code (interactive)
 qwen
-# then
+
+# Then, in the session:
 /help
 /auth
 ```
+
+On first use, you'll be prompted to sign in. You can run `/auth` anytime to switch authentication methods.
+
+Example prompts:
+
+```text
+What does this project do?
+Explain the codebase structure.
+Help me refactor this function.
+Generate unit tests for this module.
+```
+
+<details>
+<summary>Click to watch a demo video</summary>
+
+<video src="https://cloud.video.taobao.com/vod/HLfyppnCHplRV9Qhz2xSqeazHeRzYtG-EYJnHAqtzkQ.mp4" controls>
+Your browser does not support the video tag.
+</video>
+
+</details>
 
 ## Authentication
 
@@ -53,7 +86,7 @@ Qwen Code supports two authentication methods:
 - **Qwen OAuth (recommended & free)**: sign in with your `qwen.ai` account in a browser.
 - **OpenAI-compatible API**: use `OPENAI_API_KEY` (and optionally a custom base URL / model).
 
-### Qwen OAuth (recommended)
+#### Qwen OAuth (recommended)
 
 Start `qwen`, then run:
 
@@ -61,9 +94,9 @@ Start `qwen`, then run:
 /auth
 ```
 
-Choose **Qwen OAuth** and complete the browser flow. On Termux, the browser opens via `termux-open-url` with an Android fallback. Your credentials are cached locally.
+Choose **Qwen OAuth** and complete the browser flow. Your credentials are cached locally so you usually won't need to log in again.
 
-### OpenAI-compatible API (API key)
+#### OpenAI-compatible API (API key)
 
 Environment variables (recommended for CI / headless environments):
 
@@ -73,20 +106,7 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"  # optional
 export OPENAI_MODEL="gpt-4o"                        # optional
 ```
 
-## Termux Optimizations
-
-- **OAuth:** browser launch via `termux-open-url` with Android fallback.
-- **Clean UX:** desktop‑centric warnings suppressed on Termux.
-- **Defaults:** banner hidden by default on Termux (toggle in settings).
-- **PTY:** prebuilt `@mmmbuto/node-pty-android-arm64` for interactive shells.
-
-## Documentation & Fixes
-
-- **Test Suite**: [`QWEN_TEST_SUITE.md`](./QWEN_TEST_SUITE.md)
-- **Test Report**: [`QWEN_TEST_REPORT_v0.6.405-termux.md`](./QWEN_TEST_REPORT_v0.6.405-termux.md)
-  (latest report; 0.6.405-termux)
-- **Patches**: [`docs/patches/README.md`](./docs/patches/README.md)
-- **Termux Fixes**: [`docs/patches/TERMUX_FIXES.md`](./docs/patches/TERMUX_FIXES.md)
+For details (including `.qwen/.env` loading and security notes), see the [authentication guide](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/).
 
 ## Usage
 
@@ -117,10 +137,11 @@ Use `-p` to run Qwen Code without the interactive UI—ideal for scripts, automa
 
 #### IDE integration
 
-Use Qwen Code inside your editor (VS Code and Zed):
+Use Qwen Code inside your editor (VS Code, Zed, and JetBrains IDEs):
 
 - [Use in VS Code](https://qwenlm.github.io/qwen-code-docs/en/users/integration-vscode/)
 - [Use in Zed](https://qwenlm.github.io/qwen-code-docs/en/users/integration-zed/)
+- [Use in JetBrains IDEs](https://qwenlm.github.io/qwen-code-docs/en/users/integration-jetbrains/)
 
 #### TypeScript SDK
 
@@ -146,16 +167,17 @@ Build on top of Qwen Code with the TypeScript SDK:
 - `Up/Down` - Navigate command history
 
 > Learn more about [Commands](https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/)
+>
+> **Tip**: In YOLO mode (`--yolo`), vision switching happens automatically without prompts when images are detected. Learn more about [Approval Mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/)
 
-## Updating
+## Configuration
 
-```bash
-npm install -g @mmmbuto/qwen-code-termux@latest
-```
+Qwen Code can be configured via `settings.json`, environment variables, and CLI flags.
 
-### Versions
+- **User settings**: `~/.qwen/settings.json`
+- **Project settings**: `.qwen/settings.json`
 
-- **latest / stable**: 0.6.407-termux
+See [settings](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/) for available options and precedence.
 
 ## Benchmark Results
 
@@ -170,7 +192,8 @@ npm install -g @mmmbuto/qwen-code-termux@latest
 
 Looking for a graphical interface?
 
-- Web UI: [NexusCLI](https://github.com/DioNanos/nexuscli) - Optional web interface for Codex/Claude/Gemini
+- [**AionUi**](https://github.com/iOfficeAI/AionUi) A modern GUI for command-line AI tools including Qwen Code
+- [**Gemini CLI Desktop**](https://github.com/Piebald-AI/gemini-cli-desktop) A cross-platform desktop/web/mobile UI for Qwen Code
 
 ## Troubleshooting
 
@@ -178,27 +201,11 @@ If you encounter issues, check the [troubleshooting guide](https://qwenlm.github
 
 To report a bug from within the CLI, run `/bug` and include a short title and repro steps.
 
+## Connect with Us
+
+- Discord: https://discord.gg/ycKBjdNd
+- Dingtalk: https://qr.dingtalk.com/action/joingroup?code=v1,k1,+FX6Gf/ZDlTahTIRi8AEQhIaBlqykA0j+eBKKdhLeAE=&_dt_no_comment=1&origin=1
+
 ## Acknowledgments
 
-Based on [Qwen Code](https://github.com/QwenLM/qwen-code), which is based on
-[Google Gemini CLI](https://github.com/google-gemini/gemini-cli).
-
-## PTY Support (Shared Library)
-
-This project uses `@mmmbuto/pty-termux-utils` as a shared library for PTY
-management across all Termux CLI projects (Gemini, Qwen, Nexus).
-
-- **Native PTY:** Uses `@mmmbuto/node-pty-android-arm64@~1.1.0` when available
-- **Linux ARM64:** Uses `@lydell/node-pty-linux-arm64@~1.2.0-beta.2` when available
-- **Fallback:** Gracefully degrades to `child_process` adapter
-- **Debug Logging:** Enable with `PTY_DEBUG=1` environment variable
-- **Architecture:** See `@mmmbuto/pty-termux-utils` documentation
-
-```bash
-# Enable PTY debug logging
-PTY_DEBUG=1 qwen "your prompt"
-```
-
-## License
-
-Apache 2.0 (same as upstream). See LICENSE.
+This project is based on [Google Gemini CLI](https://github.com/google-gemini/gemini-cli). We acknowledge and appreciate the excellent work of the Gemini CLI team. Our main contribution focuses on parser-level adaptations to better support Qwen-Coder models.
