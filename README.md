@@ -23,7 +23,9 @@ This repository/package is a **Termux-first build** that keeps upstream behavior
 > **Not on Termux?** Use upstream: `npm install -g @qwen-code/qwen-code@latest` (or Homebrew).  
 > **On Termux?** Use this package: `npm install -g @mmmbuto/qwen-code-termux@latest`.
 
-![](https://gw.alicdn.com/imgextra/i1/O1CN01D2DviS1wwtEtMwIzJ_!!6000000006373-2-tps-1600-900.png)
+<div align="center">
+  <img src="./assets/hero.png" alt="Qwen Code Termux screenshot" width="800" />
+</div>
 
 ## Why a Termux Edition?
 
