@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 import {
   formatAcpModelId,
   parseAcpBaseModelId,

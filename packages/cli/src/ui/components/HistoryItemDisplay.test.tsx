@@ -12,7 +12,7 @@ import { SessionStatsProvider } from '../contexts/SessionContext.js';
 import type {
   Config,
   ToolExecuteConfirmationDetails,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { ToolGroupMessage } from './messages/ToolGroupMessage.js';
 import { renderWithProviders } from '../../test-utils/render.js';
 import { ConfigContext } from '../contexts/ConfigContext.js';

@@ -13,7 +13,7 @@ import {
 import type {
   ExtensionConfig,
   ClaudeMarketplaceConfig,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import prompts from 'prompts';
 
 vi.mock('../../i18n/index.js', () => ({

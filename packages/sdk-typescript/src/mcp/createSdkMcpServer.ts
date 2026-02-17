@@ -37,7 +37,7 @@ export type McpSdkServerConfigWithInstance = {
  * @example
  * ```typescript
  * import { z } from 'zod';
- * import { tool, createSdkMcpServer } from '@qwen-code/sdk';
+ * import { tool, createSdkMcpServer } from ' @mmmbuto/sdk';
  *
  * const calculatorTool = tool(
  *   'calculate_sum',

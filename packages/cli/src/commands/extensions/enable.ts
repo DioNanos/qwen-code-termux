@@ -5,7 +5,10 @@
  */
 
 import { type CommandModule } from 'yargs';
-import { FatalConfigError, getErrorMessage } from '@qwen-code/qwen-code-core';
+import {
+  FatalConfigError,
+  getErrorMessage,
+} from '@mmmbuto/qwen-code-termux-core';
 import { SettingScope } from '../../config/settings.js';
 import { writeStdoutLine } from '../../utils/stdioHelpers.js';
 import { getExtensionManager } from './utils.js';

@@ -34,8 +34,8 @@ vi.mock('../i18n/index.js', () => ({
   }),
 }));
 
-// Mock @qwen-code/qwen-code-core
-vi.mock('@qwen-code/qwen-code-core', () => ({
+// Mock @mmmbuto/qwen-code-termux-core
+vi.mock('@mmmbuto/qwen-code-termux-core', () => ({
   Storage: {
     getGlobalQwenDir: vi.fn(() => '/mock/home/.qwen'),
   },

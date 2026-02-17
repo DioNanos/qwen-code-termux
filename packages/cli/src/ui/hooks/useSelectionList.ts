@@ -5,7 +5,7 @@
  */
 
 import { useReducer, useRef, useEffect } from 'react';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 import { useKeypress } from './useKeypress.js';
 
 export interface SelectionListItem<T> {

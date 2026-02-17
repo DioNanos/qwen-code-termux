@@ -6,7 +6,7 @@
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { Storage } from '@qwen-code/qwen-code-core';
+import { Storage } from '@mmmbuto/qwen-code-termux-core';
 
 const cleanupFunctions: Array<(() => void) | (() => Promise<void>)> = [];
 

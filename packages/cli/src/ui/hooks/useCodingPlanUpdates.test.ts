@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { useCodingPlanUpdates } from './useCodingPlanUpdates.js';
 import { CODING_PLAN_ENV_KEY } from '../../constants/codingPlan.js';
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 
 // Mock the constants module
 vi.mock('../../constants/codingPlan.js', async () => {

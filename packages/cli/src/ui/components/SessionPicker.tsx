@@ -8,7 +8,7 @@ import { Box, Text } from 'ink';
 import type {
   SessionListItem as SessionData,
   SessionService,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { theme } from '../semantic-colors.js';
 import { useSessionPicker } from '../hooks/useSessionPicker.js';
 import { formatRelativeTime } from '../utils/formatters.js';

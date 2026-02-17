@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Config, ChatRecord } from '@qwen-code/qwen-code-core';
+import type { Config, ChatRecord } from '@mmmbuto/qwen-code-termux-core';
 import type { SessionContext } from '../../../acp-integration/session/types.js';
 import type * as acp from '../../../acp-integration/acp.js';
 import { HistoryReplayer } from '../../../acp-integration/session/HistoryReplayer.js';

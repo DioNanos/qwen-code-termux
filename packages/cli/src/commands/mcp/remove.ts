@@ -8,7 +8,7 @@
 import type { CommandModule } from 'yargs';
 import { loadSettings, SettingScope } from '../../config/settings.js';
 import { writeStdoutLine } from '../../utils/stdioHelpers.js';
-import { MCPOAuthTokenStorage } from '@qwen-code/qwen-code-core';
+import { MCPOAuthTokenStorage } from '@mmmbuto/qwen-code-termux-core';
 
 async function removeMcpServer(
   name: string,

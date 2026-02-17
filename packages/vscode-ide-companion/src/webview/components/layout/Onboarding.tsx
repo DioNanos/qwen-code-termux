@@ -8,7 +8,7 @@
  */
 
 import type { FC } from 'react';
-import { Onboarding as BaseOnboarding } from '@qwen-code/webui';
+import { Onboarding as BaseOnboarding } from ' @mmmbuto/webui';
 import { generateIconUrl } from '../../utils/resourceUrl.js';
 
 interface OnboardingPageProps {

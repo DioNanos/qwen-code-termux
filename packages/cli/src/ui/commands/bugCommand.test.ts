@@ -9,7 +9,7 @@ import open from 'open';
 import { bugCommand } from './bugCommand.js';
 import { createMockCommandContext } from '../../test-utils/mockCommandContext.js';
 import { GIT_COMMIT_INFO } from '../../generated/git-commit.js';
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 import * as systemInfoUtils from '../../utils/systemInfo.js';
 
 // Mock dependencies

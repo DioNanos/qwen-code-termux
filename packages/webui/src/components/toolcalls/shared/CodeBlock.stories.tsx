@@ -42,7 +42,7 @@ console.log(fibonacci(10));`,
 export const CommandOutput: Story = {
   args: {
     children: `$ npm run build
-> @qwen-code/webui@0.1.0 build
+>  @mmmbuto/webui@0.1.0 build
 > vite build
 
 vite v5.4.21 building for production...

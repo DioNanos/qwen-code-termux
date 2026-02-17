@@ -5,7 +5,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { ProviderModelConfig as ModelConfig } from '@qwen-code/qwen-code-core';
+import type { ProviderModelConfig as ModelConfig } from '@mmmbuto/qwen-code-termux-core';
 
 /**
  * Coding plan template - array of model configurations

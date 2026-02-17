@@ -7,13 +7,13 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { PartListUnion } from '@google/genai';
-import type { Config } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
 import {
   getErrorMessage,
   isNodeError,
   unescapePath,
   readManyFiles,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type {
   HistoryItemToolGroup,
   HistoryItemWithoutId,

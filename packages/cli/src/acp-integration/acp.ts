@@ -7,7 +7,7 @@
 /* ACP defines a schema for a simple (experimental) JSON-RPC protocol that allows GUI applications to interact with agents. */
 
 import { z } from 'zod';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 import * as schema from './schema.js';
 import { ACP_ERROR_CODES } from './errorCodes.js';
 import { pickAuthMethodsForDetails } from './authMethods.js';

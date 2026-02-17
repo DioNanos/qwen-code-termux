@@ -7,7 +7,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useVSCode } from './useVSCode.js';
 import type { Conversation } from '../../services/conversationStore.js';
-import type { PermissionOption, PermissionToolCall } from '@qwen-code/webui';
+import type { PermissionOption, PermissionToolCall } from ' @mmmbuto/webui';
 import type {
   ToolCallUpdate,
   UsageStatsPayload,

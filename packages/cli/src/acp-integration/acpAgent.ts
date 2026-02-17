@@ -20,7 +20,7 @@ import {
   type Config,
   type ConversationRecord,
   type DeviceAuthorizationData,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { ApprovalModeValue } from './schema.js';
 import * as acp from './acp.js';
 import { buildAuthMethods } from './authMethods.js';

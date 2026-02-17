@@ -19,7 +19,7 @@ import {
   TodoWriteTool,
   Kind,
   ExitPlanModeTool,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 /**
  * Unified tool call event emitter.

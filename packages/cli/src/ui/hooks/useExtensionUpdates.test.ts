@@ -21,7 +21,7 @@ import {
   type Extension,
   type ExtensionUpdateInfo,
   ExtensionUpdateState,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { MessageType } from '../types.js';
 

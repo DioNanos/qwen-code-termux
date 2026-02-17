@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import { exportCommand } from './exportCommand.js';
 import { createMockCommandContext } from '../../test-utils/mockCommandContext.js';
-import type { ChatRecord } from '@qwen-code/qwen-code-core';
+import type { ChatRecord } from '@mmmbuto/qwen-code-termux-core';
 import type { Part, Content } from '@google/genai';
 import {
   collectSessionData,
@@ -22,7 +22,7 @@ const mockSessionServiceMocks = vi.hoisted(() => ({
   loadLastSession: vi.fn(),
 }));
 
-vi.mock('@qwen-code/qwen-code-core', () => {
+vi.mock('@mmmbuto/qwen-code-termux-core', () => {
   class SessionService {
     constructor(_cwd: string) {}
     async loadLastSession() {

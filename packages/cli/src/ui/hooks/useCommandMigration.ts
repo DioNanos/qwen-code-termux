@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Storage } from '@qwen-code/qwen-code-core';
+import { Storage } from '@mmmbuto/qwen-code-termux-core';
 import { detectTomlCommands } from '../../services/command-migration-tool.js';
 import type { LoadedSettings } from '../../config/settings.js';
 

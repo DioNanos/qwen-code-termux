@@ -8,7 +8,7 @@ import React from 'react';
 import { Text } from 'ink';
 import { theme } from '../semantic-colors.js';
 import stringWidth from 'string-width';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 
 // Constants for Markdown parsing
 const BOLD_MARKER_LENGTH = 2; // For "**"

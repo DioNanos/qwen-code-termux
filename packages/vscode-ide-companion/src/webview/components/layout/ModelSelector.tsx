@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FC } from 'react';
 import type { ModelInfo } from '../../../types/acpTypes.js';
-import { PlanCompletedIcon } from '@qwen-code/webui';
+import { PlanCompletedIcon } from ' @mmmbuto/webui';
 
 interface ModelSelectorProps {
   visible: boolean;

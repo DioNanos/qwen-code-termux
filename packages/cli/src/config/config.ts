@@ -31,7 +31,7 @@ import {
   NativeLspClient,
   createDebugLogger,
   NativeLspService,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { extensionsCommand } from '../commands/extensions.js';
 import type { Settings } from './settings.js';
 import {

@@ -9,8 +9,8 @@
 
 import { useMemo, useCallback, useEffect, useRef } from 'react';
 import type { FC, ReactNode } from 'react';
-import { PlatformProvider } from '@qwen-code/webui';
-import type { PlatformContextValue } from '@qwen-code/webui';
+import { PlatformProvider } from ' @mmmbuto/webui';
+import type { PlatformContextValue } from ' @mmmbuto/webui';
 import { useVSCode } from '../hooks/useVSCode.js';
 import { generateIconUrl } from '../utils/resourceUrl.js';
 

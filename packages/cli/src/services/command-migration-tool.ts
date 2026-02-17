@@ -11,7 +11,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { glob } from 'glob';
-import { convertTomlToMarkdown } from '@qwen-code/qwen-code-core';
+import { convertTomlToMarkdown } from '@mmmbuto/qwen-code-termux-core';
 import { t } from '../i18n/index.js';
 
 export interface MigrationResult {

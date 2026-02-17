@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 import { vi } from 'vitest';
 import { validateAuthMethod } from './auth.js';
 import * as settings from './settings.js';
@@ -187,7 +187,7 @@ describe('validateAuthMethod', () => {
       getModelsConfig: vi.fn().mockReturnValue({
         getModel: vi.fn().mockReturnValue('cli-model'),
       }),
-    } as unknown as import('@qwen-code/qwen-code-core').Config;
+    } as unknown as import('@mmmbuto/qwen-code-termux-core').Config;
 
     // Set the env key for the CLI model, not the settings model
     process.env['CLI_API_KEY'] = 'cli-key';
@@ -220,7 +220,7 @@ describe('validateAuthMethod', () => {
       getModelsConfig: vi.fn().mockReturnValue({
         getModel: vi.fn().mockReturnValue('cli-model'),
       }),
-    } as unknown as import('@qwen-code/qwen-code-core').Config;
+    } as unknown as import('@mmmbuto/qwen-code-termux-core').Config;
 
     // Don't set CLI_API_KEY - validation should fail
     const result = validateAuthMethod(AuthType.USE_OPENAI, mockConfig);

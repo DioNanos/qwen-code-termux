@@ -5,8 +5,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { Storage } from '@qwen-code/qwen-code-core';
-import { Logger } from '@qwen-code/qwen-code-core';
+import type { Storage } from '@mmmbuto/qwen-code-termux-core';
+import { Logger } from '@mmmbuto/qwen-code-termux-core';
 
 /**
  * Hook to manage the logger instance.

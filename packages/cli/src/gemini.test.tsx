@@ -21,8 +21,8 @@ import {
 } from './gemini.js';
 import { type LoadedSettings } from './config/settings.js';
 import { appEvents, AppEvent } from './utils/events.js';
-import type { Config } from '@qwen-code/qwen-code-core';
-import { OutputFormat } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
+import { OutputFormat } from '@mmmbuto/qwen-code-termux-core';
 
 const mockWriteStderrLine = vi.hoisted(() => vi.fn());
 

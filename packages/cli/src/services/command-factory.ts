@@ -10,7 +10,7 @@
  */
 
 import path from 'node:path';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 import type {
   CommandContext,
   SlashCommand,

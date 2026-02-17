@@ -21,7 +21,7 @@ import type {
   AnsiOutput,
   Config,
   McpToolProgressData,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { AgentExecutionDisplay } from '../subagents/index.js';
 import { PlanSummaryDisplay } from '../PlanSummaryDisplay.js';
 import { ShellInputPrompt } from '../ShellInputPrompt.js';

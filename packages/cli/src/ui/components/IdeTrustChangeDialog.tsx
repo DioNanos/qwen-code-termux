@@ -9,7 +9,7 @@ import { theme } from '../semantic-colors.js';
 import { useKeypress } from '../hooks/useKeypress.js';
 import { relaunchApp } from '../../utils/processUtils.js';
 import { type RestartReason } from '../hooks/useIdeTrustListener.js';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 
 interface IdeTrustChangeDialogProps {
   reason: RestartReason;

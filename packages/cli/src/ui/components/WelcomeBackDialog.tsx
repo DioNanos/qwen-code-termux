@@ -6,7 +6,7 @@
 
 import { Box, Text } from 'ink';
 import { Colors } from '../colors.js';
-import { type ProjectSummaryInfo } from '@qwen-code/qwen-code-core';
+import { type ProjectSummaryInfo } from '@mmmbuto/qwen-code-termux-core';
 import {
   RadioButtonSelect,
   type RadioSelectItem,

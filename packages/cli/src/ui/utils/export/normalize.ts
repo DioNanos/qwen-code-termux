@@ -5,8 +5,8 @@
  */
 
 import type { Part } from '@google/genai';
-import { ExitPlanModeTool, ToolNames } from '@qwen-code/qwen-code-core';
-import type { ChatRecord, Config, Kind } from '@qwen-code/qwen-code-core';
+import { ExitPlanModeTool, ToolNames } from '@mmmbuto/qwen-code-termux-core';
+import type { ChatRecord, Config, Kind } from '@mmmbuto/qwen-code-termux-core';
 import type { ExportMessage, ExportSessionData } from './types.js';
 
 /**

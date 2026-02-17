@@ -17,7 +17,7 @@ import type {
   ToolResult,
   ChatRecord,
   SubAgentEventEmitter,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   AuthType,
   ApprovalMode,
@@ -34,7 +34,7 @@ import {
   TodoWriteTool,
   ExitPlanModeTool,
   readManyFiles,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 import * as acp from '../acp.js';
 import type { LoadedSettings } from '../../config/settings.js';

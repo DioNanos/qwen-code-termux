@@ -16,7 +16,7 @@ import { CreationSummary } from './CreationSummary.js';
 import { type WizardStepProps } from '../types.js';
 import { WIZARD_STEPS } from '../constants.js';
 import { getStepKind } from '../utils.js';
-import type { Config } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
 import { theme } from '../../../semantic-colors.js';
 import { TextEntryStep } from './TextEntryStep.js';
 import { useKeypress } from '../../../hooks/useKeypress.js';

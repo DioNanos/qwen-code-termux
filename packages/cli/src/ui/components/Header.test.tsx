@@ -6,7 +6,7 @@
 
 import { render } from 'ink-testing-library';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 import { Header } from './Header.js';
 import * as useTerminalSize from '../hooks/useTerminalSize.js';
 

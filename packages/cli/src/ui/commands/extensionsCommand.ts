@@ -17,8 +17,8 @@ import {
   ExtensionManager,
   parseInstallSource,
   type ExtensionUpdateInfo,
-} from '@qwen-code/qwen-code-core';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 import { SettingScope } from '../../config/settings.js';
 import open from 'open';
 import { extensionToOutputString } from '../../commands/extensions/utils.js';

@@ -11,7 +11,10 @@ import path from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@qwen-code/qwen-code-core': path.resolve(__dirname, '../core/index.ts'),
+      '@mmmbuto/qwen-code-termux-core': path.resolve(
+        __dirname,
+        '../core/index.ts',
+      ),
     },
   },
   test: {

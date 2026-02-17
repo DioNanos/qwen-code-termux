@@ -9,7 +9,7 @@ import { CommandKind } from './types.js';
 import { MessageType } from '../types.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadServerHierarchicalMemory } from '@qwen-code/qwen-code-core';
+import { loadServerHierarchicalMemory } from '@mmmbuto/qwen-code-termux-core';
 import { t } from '../../i18n/index.js';
 
 export function expandHomeDir(p: string): string {

@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import type {
   ToolCallConfirmationDetails,
   ToolEditConfirmationDetails,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { escapeAnsiCtrlCodes } from './textUtils.js';
 
 describe('textUtils', () => {

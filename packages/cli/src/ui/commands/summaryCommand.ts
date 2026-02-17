@@ -11,7 +11,7 @@ import {
   CommandKind,
   type SlashCommandActionReturn,
 } from './types.js';
-import { getProjectSummaryPrompt } from '@qwen-code/qwen-code-core';
+import { getProjectSummaryPrompt } from '@mmmbuto/qwen-code-termux-core';
 import type { HistoryItemSummary } from '../types.js';
 import { t } from '../../i18n/index.js';
 

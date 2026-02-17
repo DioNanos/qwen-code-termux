@@ -9,13 +9,13 @@ import type {
   ContentGeneratorConfig,
   ModelProvidersConfig,
   ProviderModelConfig,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   AuthEvent,
   AuthType,
   getErrorMessage,
   logAuth,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { useCallback, useEffect, useState } from 'react';
 import type { LoadedSettings } from '../../config/settings.js';
 import { getPersistScopeForModelSelection } from '../../config/modelProvidersScope.js';

@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AuthType } from '@qwen-code/qwen-code-core';
-import type { WebSearchProviderConfig } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
+import type { WebSearchProviderConfig } from '@mmmbuto/qwen-code-termux-core';
 import type { Settings } from './settings.js';
 
 /**

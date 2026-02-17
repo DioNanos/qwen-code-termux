@@ -59,6 +59,28 @@ Make sure you have Node.js 20 or later installed. Download it from [nodejs.org](
 npm install -g @qwen-code/qwen-code@latest
 ```
 
+### Termux Edition (Android)
+
+For Android/Termux devices, use the Termux-optimized package:
+
+```bash
+npm install -g @mmmbuto/qwen-code-termux@latest
+qwen --version
+```
+
+**Prerequisites** (Termux):
+
+```bash
+pkg update -y && pkg upgrade -y
+pkg install -y nodejs-lts git
+```
+
+**Notes** (Termux):
+
+- See [test-reports/](test-reports/README.md) for validation reports
+- See [patches/](patches/README.md) for Termux-specific patches
+- See [docs/developers/BUILDING.md](docs/developers/BUILDING.md) for build instructions
+
 #### Homebrew (macOS, Linux)
 
 ```bash
@@ -413,3 +435,16 @@ To report a bug from within the CLI, run `/bug` and include a short title and re
 ## Acknowledgments
 
 This project is based on [Google Gemini CLI](https://github.com/google-gemini/gemini-cli). We acknowledge and appreciate the excellent work of the Gemini CLI team. Our main contribution focuses on parser-level adaptations to better support Qwen-Coder models.
+
+---
+
+## Termux Edition Notes
+
+This is a Termux-optimized fork of Qwen Code for Android devices. For standard installations on macOS/Linux/Windows, use the upstream package: `@qwen-code/qwen-code`.
+
+**Termux-specific resources**:
+
+- **Test Reports**: [test-reports/README.md](test-reports/README.md) — Validation reports for each release
+- **Patches**: [patches/README.md](patches/README.md) — Termux compatibility patches
+- **Build Notes**: [docs/developers/BUILDING.md](docs/developers/BUILDING.md) — Building from source
+- **Configuration**: [docs/users/configuration.md](docs/users/configuration.md) — Provider-neutral setup

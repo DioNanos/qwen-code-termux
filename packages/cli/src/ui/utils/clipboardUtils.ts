@@ -6,7 +6,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { createDebugLogger, execCommand } from '@qwen-code/qwen-code-core';
+import { createDebugLogger, execCommand } from '@mmmbuto/qwen-code-termux-core';
 
 const MACOS_CLIPBOARD_TIMEOUT_MS = 1500;
 

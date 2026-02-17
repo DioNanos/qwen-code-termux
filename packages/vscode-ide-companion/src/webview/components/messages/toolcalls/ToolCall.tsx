@@ -10,7 +10,7 @@
  */
 
 import type { FC } from 'react';
-import type { ToolCallData } from '@qwen-code/webui';
+import type { ToolCallData } from ' @mmmbuto/webui';
 import { ToolCallRouter } from './index.js';
 
 // Re-export types from webui for backward compatibility
@@ -18,7 +18,7 @@ export type {
   ToolCallData,
   BaseToolCallProps as ToolCallProps,
   ToolCallContent,
-} from '@qwen-code/webui';
+} from ' @mmmbuto/webui';
 
 export const ToolCall: FC<{
   toolCall: ToolCallData;

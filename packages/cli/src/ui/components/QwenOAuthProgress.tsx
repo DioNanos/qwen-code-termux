@@ -11,8 +11,8 @@ import Spinner from 'ink-spinner';
 import Link from 'ink-link';
 import qrcode from 'qrcode-terminal';
 import { Colors } from '../colors.js';
-import type { DeviceAuthorizationData } from '@qwen-code/qwen-code-core';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import type { DeviceAuthorizationData } from '@mmmbuto/qwen-code-termux-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 import { useKeypress } from '../hooks/useKeypress.js';
 import { t } from '../../i18n/index.js';
 

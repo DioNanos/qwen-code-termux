@@ -38,7 +38,7 @@ import type {
   ControlResponse,
   ControlRequestPayload,
 } from '../types.js';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 
 const debugLogger = createDebugLogger('CONTROL_DISPATCHER');
 
