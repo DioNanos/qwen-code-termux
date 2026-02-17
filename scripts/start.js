@@ -17,6 +17,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Suppress deprecated url.parse() warnings from dependencies
+process.noDeprecation = true;
+
 import { spawn, execSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
