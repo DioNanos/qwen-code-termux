@@ -439,17 +439,27 @@ export interface ChatCompressionEvent extends BaseTelemetryEvent {
   'event.timestamp': string;
   tokens_before: number;
   tokens_after: number;
+  compression_input_token_count?: number;
+  compression_output_token_count?: number;
 }
 
 export function makeChatCompressionEvent({
   tokens_before,
   tokens_after,
+  compression_input_token_count,
+  compression_output_token_count,
 }: Omit<ChatCompressionEvent, CommonFields>): ChatCompressionEvent {
   return {
     'event.name': 'chat_compression',
     'event.timestamp': new Date().toISOString(),
     tokens_before,
     tokens_after,
+    ...(compression_input_token_count !== undefined
+      ? { compression_input_token_count }
+      : {}),
+    ...(compression_output_token_count !== undefined
+      ? { compression_output_token_count }
+      : {}),
   };
 }
 
@@ -666,6 +676,35 @@ export class ExtensionUninstallEvent implements BaseTelemetryEvent {
   }
 }
 
+export class ExtensionUpdateEvent implements BaseTelemetryEvent {
+  'event.name': 'extension_update';
+  'event.timestamp': string;
+  extension_name: string;
+  extension_id: string;
+  extension_previous_version: string;
+  extension_version: string;
+  extension_source: string;
+  status: 'success' | 'error';
+
+  constructor(
+    extension_name: string,
+    extension_id: string,
+    extension_version: string,
+    extension_previous_version: string,
+    extension_source: string,
+    status: 'success' | 'error',
+  ) {
+    this['event.name'] = 'extension_update';
+    this['event.timestamp'] = new Date().toISOString();
+    this.extension_name = extension_name;
+    this.extension_id = extension_id;
+    this.extension_version = extension_version;
+    this.extension_previous_version = extension_previous_version;
+    this.extension_source = extension_source;
+    this.status = status;
+  }
+}
+
 export class ExtensionEnableEvent implements BaseTelemetryEvent {
   'event.name': 'extension_enable';
   'event.timestamp': string;
@@ -724,13 +763,13 @@ export class AuthEvent implements BaseTelemetryEvent {
   'event.name': 'auth';
   'event.timestamp': string;
   auth_type: AuthType;
-  action_type: 'auto' | 'manual';
+  action_type: 'auto' | 'manual' | 'coding-plan';
   status: 'success' | 'error' | 'cancelled';
   error_message?: string;
 
   constructor(
     auth_type: AuthType,
-    action_type: 'auto' | 'manual',
+    action_type: 'auto' | 'manual' | 'coding-plan',
     status: 'success' | 'error' | 'cancelled',
     error_message?: string,
   ) {
@@ -754,6 +793,38 @@ export class SkillLaunchEvent implements BaseTelemetryEvent {
     this['event.timestamp'] = new Date().toISOString();
     this.skill_name = skill_name;
     this.success = success;
+  }
+}
+
+export enum UserFeedbackRating {
+  BAD = 1,
+  FINE = 2,
+  GOOD = 3,
+}
+
+export class UserFeedbackEvent implements BaseTelemetryEvent {
+  'event.name': 'user_feedback';
+  'event.timestamp': string;
+  session_id: string;
+  rating: UserFeedbackRating;
+  model: string;
+  approval_mode: string;
+  prompt_id?: string;
+
+  constructor(
+    session_id: string,
+    rating: UserFeedbackRating,
+    model: string,
+    approval_mode: string,
+    prompt_id?: string,
+  ) {
+    this['event.name'] = 'user_feedback';
+    this['event.timestamp'] = new Date().toISOString();
+    this.session_id = session_id;
+    this.rating = rating;
+    this.model = model;
+    this.approval_mode = approval_mode;
+    this.prompt_id = prompt_id;
   }
 }
 
@@ -786,7 +857,8 @@ export type TelemetryEvent =
   | ToolOutputTruncatedEvent
   | ModelSlashCommandEvent
   | AuthEvent
-  | SkillLaunchEvent;
+  | SkillLaunchEvent
+  | UserFeedbackEvent;
 
 export class ExtensionDisableEvent implements BaseTelemetryEvent {
   'event.name': 'extension_disable';

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isGitRepository } from '@mmmbuto/qwen-code-termux-core';
+import { createDebugLogger, isGitRepository } from '@qwen-code/qwen-code-core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
@@ -21,6 +21,8 @@ export enum PackageManager {
   UNKNOWN = 'unknown',
 }
 
+const debugLogger = createDebugLogger('INSTALLATION_INFO');
+
 export interface InstallationInfo {
   packageManager: PackageManager;
   isGlobal: boolean;
@@ -30,7 +32,7 @@ export interface InstallationInfo {
 
 export function getInstallationInfo(
   projectRoot: string,
-  isAutoUpdateDisabled: boolean,
+  isAutoUpdateEnabled: boolean,
 ): InstallationInfo {
   const cliPath = process.argv[1];
   if (!cliPath) {
@@ -94,27 +96,27 @@ export function getInstallationInfo(
 
     // Check for pnpm
     if (realPath.includes('/.pnpm/global')) {
-      const updateCommand = 'pnpm add -g @mmmbuto/qwen-code-termux@latest';
+      const updateCommand = 'pnpm add -g @qwen-code/qwen-code@latest';
       return {
         packageManager: PackageManager.PNPM,
         isGlobal: true,
         updateCommand,
-        updateMessage: isAutoUpdateDisabled
-          ? `Please run ${updateCommand} to update`
-          : 'Installed with pnpm. Attempting to automatically update now...',
+        updateMessage: isAutoUpdateEnabled
+          ? 'Installed with pnpm. Attempting to automatically update now...'
+          : `Please run ${updateCommand} to update`,
       };
     }
 
     // Check for yarn
     if (realPath.includes('/.yarn/global')) {
-      const updateCommand = 'yarn global add @mmmbuto/qwen-code-termux@latest';
+      const updateCommand = 'yarn global add @qwen-code/qwen-code@latest';
       return {
         packageManager: PackageManager.YARN,
         isGlobal: true,
         updateCommand,
-        updateMessage: isAutoUpdateDisabled
-          ? `Please run ${updateCommand} to update`
-          : 'Installed with yarn. Attempting to automatically update now...',
+        updateMessage: isAutoUpdateEnabled
+          ? 'Installed with yarn. Attempting to automatically update now...'
+          : `Please run ${updateCommand} to update`,
       };
     }
 
@@ -127,14 +129,14 @@ export function getInstallationInfo(
       };
     }
     if (realPath.includes('/.bun/bin')) {
-      const updateCommand = 'bun add -g @mmmbuto/qwen-code-termux@latest';
+      const updateCommand = 'bun add -g @qwen-code/qwen-code@latest';
       return {
         packageManager: PackageManager.BUN,
         isGlobal: true,
         updateCommand,
-        updateMessage: isAutoUpdateDisabled
-          ? `Please run ${updateCommand} to update`
-          : 'Installed with bun. Attempting to automatically update now...',
+        updateMessage: isAutoUpdateEnabled
+          ? 'Installed with bun. Attempting to automatically update now...'
+          : `Please run ${updateCommand} to update`,
       };
     }
 
@@ -160,17 +162,17 @@ export function getInstallationInfo(
     }
 
     // Assume global npm
-    const updateCommand = 'npm install -g @mmmbuto/qwen-code-termux@latest';
+    const updateCommand = 'npm install -g @qwen-code/qwen-code@latest';
     return {
       packageManager: PackageManager.NPM,
       isGlobal: true,
       updateCommand,
-      updateMessage: isAutoUpdateDisabled
-        ? `Please run ${updateCommand} to update`
-        : 'Installed with npm. Attempting to automatically update now...',
+      updateMessage: isAutoUpdateEnabled
+        ? 'Installed with npm. Attempting to automatically update now...'
+        : `Please run ${updateCommand} to update`,
     };
   } catch (error) {
-    console.log(error);
+    debugLogger.error('Failed to detect installation info:', error);
     return { packageManager: PackageManager.UNKNOWN, isGlobal: false };
   }
 }

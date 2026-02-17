@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { MCPServerConfig } from '@mmmbuto/qwen-code-termux-core';
-import { MCPServerStatus } from '@mmmbuto/qwen-code-termux-core';
+import type { MCPServerConfig } from '@qwen-code/qwen-code-core';
+import { MCPServerStatus } from '@qwen-code/qwen-code-core';
 import { Box, Text } from 'ink';
 import type React from 'react';
 import { theme } from '../../semantic-colors.js';
@@ -49,13 +49,6 @@ export const McpStatus: React.FC<McpStatusProps> = ({
     return (
       <Box flexDirection="column">
         <Text>{t('No MCP servers configured.')}</Text>
-        <Text>
-          {t('Please view MCP documentation in your browser:')}{' '}
-          <Text color={theme.text.link}>
-            https://goo.gle/gemini-cli-docs-mcp
-          </Text>{' '}
-          {t('or use the cli /docs command')}
-        </Text>
       </Box>
     );
   }

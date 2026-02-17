@@ -4,17 +4,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// File for 'gemini mcp list' command
+// File for 'qwen mcp list' command
 import type { CommandModule } from 'yargs';
 import { loadSettings } from '../../config/settings.js';
-import type { MCPServerConfig } from '@mmmbuto/qwen-code-termux-core';
+import { writeStdoutLine } from '../../utils/stdioHelpers.js';
+import type { MCPServerConfig } from '@qwen-code/qwen-code-core';
 import {
   MCPServerStatus,
   createTransport,
-} from '@mmmbuto/qwen-code-termux-core';
+  ExtensionManager,
+} from '@qwen-code/qwen-code-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { ExtensionStorage, loadExtensions } from '../../config/extension.js';
-import { ExtensionEnablementManager } from '../../config/extensions/extensionEnablement.js';
+import { isWorkspaceTrusted } from '../../config/trustedFolders.js';
 
 const COLOR_GREEN = '\u001b[32m';
 const COLOR_YELLOW = '\u001b[33m';
@@ -25,22 +26,27 @@ async function getMcpServersFromConfig(): Promise<
   Record<string, MCPServerConfig>
 > {
   const settings = loadSettings();
-  const extensions = loadExtensions(
-    new ExtensionEnablementManager(ExtensionStorage.getUserExtensionsDir()),
-  );
+  const extensionManager = new ExtensionManager({
+    isWorkspaceTrusted: !!isWorkspaceTrusted(settings.merged),
+    telemetrySettings: settings.merged.telemetry,
+  });
+  await extensionManager.refreshCache();
+  const extensions = extensionManager.getLoadedExtensions();
   const mcpServers = { ...(settings.merged.mcpServers || {}) };
   for (const extension of extensions) {
-    Object.entries(extension.config.mcpServers || {}).forEach(
-      ([key, server]) => {
-        if (mcpServers[key]) {
-          return;
-        }
-        mcpServers[key] = {
-          ...server,
-          extensionName: extension.config.name,
-        };
-      },
-    );
+    if (extension.isActive) {
+      Object.entries(extension.config.mcpServers || {}).forEach(
+        ([key, server]) => {
+          if (mcpServers[key]) {
+            return;
+          }
+          mcpServers[key] = {
+            ...server,
+            extensionName: extension.config.name,
+          };
+        },
+      );
+    }
   }
   return mcpServers;
 }
@@ -91,11 +97,11 @@ export async function listMcpServers(): Promise<void> {
   const serverNames = Object.keys(mcpServers);
 
   if (serverNames.length === 0) {
-    console.log('No MCP servers configured.');
+    writeStdoutLine('No MCP servers configured.');
     return;
   }
 
-  console.log('Configured MCP servers:\n');
+  writeStdoutLine('Configured MCP servers:\n');
 
   for (const serverName of serverNames) {
     const server = mcpServers[serverName];
@@ -129,7 +135,7 @@ export async function listMcpServers(): Promise<void> {
       serverInfo += `${server.command} ${server.args?.join(' ') || ''} (stdio)`;
     }
 
-    console.log(`${statusIndicator} ${serverInfo} - ${statusText}`);
+    writeStdoutLine(`${statusIndicator} ${serverInfo} - ${statusText}`);
   }
 }
 

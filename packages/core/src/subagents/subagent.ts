@@ -6,6 +6,9 @@
 
 import { reportError } from '../utils/errorReporting.js';
 import type { Config } from '../config/config.js';
+import { createDebugLogger } from '../utils/debugLogger.js';
+
+const debugLogger = createDebugLogger('SUBAGENT');
 import { type ToolCallRequestInfo } from '../core/turn.js';
 import {
   CoreToolScheduler,
@@ -39,7 +42,6 @@ import type {
   SubAgentStartEvent,
   SubAgentToolCallEvent,
   SubAgentToolResultEvent,
-  SubAgentStreamTextEvent,
   SubAgentErrorEvent,
   SubAgentUsageEvent,
 } from './subagent-events.js';
@@ -269,16 +271,15 @@ export class SubAgentScope {
       return;
     }
 
-    const abortController = new AbortController();
-    const onAbort = () => abortController.abort();
+    // Track the current round's AbortController for external signal propagation
+    let currentRoundAbortController: AbortController | null = null;
+    const onExternalAbort = () => {
+      currentRoundAbortController?.abort();
+    };
     if (externalSignal) {
-      if (externalSignal.aborted) {
-        abortController.abort();
-        this.terminateMode = SubagentTerminateMode.CANCELLED;
-        return;
-      }
-      externalSignal.addEventListener('abort', onAbort, { once: true });
+      externalSignal.addEventListener('abort', onExternalAbort);
     }
+
     const toolRegistry = this.runtimeContext.getToolRegistry();
 
     // Prepare the list of tools available to the subagent.
@@ -344,6 +345,15 @@ export class SubAgentScope {
       const startEvent = new SubagentExecutionEvent(this.name, 'started');
       logSubagentExecution(this.runtimeContext, startEvent);
       while (true) {
+        // Create a new AbortController for each round to avoid listener accumulation
+        const roundAbortController = new AbortController();
+        currentRoundAbortController = roundAbortController;
+
+        // If external signal already aborted, cancel immediately
+        if (externalSignal?.aborted) {
+          roundAbortController.abort();
+        }
+
         // Check termination conditions.
         if (
           this.runConfig.max_turns &&
@@ -362,10 +372,11 @@ export class SubAgentScope {
         }
 
         const promptId = `${this.runtimeContext.getSessionId()}#${this.subagentId}#${turnCounter++}`;
+
         const messageParams = {
           message: currentMessages[0]?.parts || [],
           config: {
-            abortSignal: abortController.signal,
+            abortSignal: roundAbortController.signal,
             tools: [{ functionDeclarations: toolsList }],
           },
         };
@@ -391,7 +402,7 @@ export class SubAgentScope {
           undefined;
         let currentResponseId: string | undefined = undefined;
         for await (const streamEvent of responseStream) {
-          if (abortController.signal.aborted) {
+          if (roundAbortController.signal.aborted) {
             this.terminateMode = SubagentTerminateMode.CANCELLED;
             return;
           }
@@ -412,15 +423,17 @@ export class SubAgentScope {
             const content = resp.candidates?.[0]?.content;
             const parts = content?.parts || [];
             for (const p of parts) {
-              const txt = (p as Part & { text?: string }).text;
-              if (txt) roundText += txt;
+              const txt = p.text;
+              const isThought = p.thought ?? false;
+              if (txt && !isThought) roundText += txt;
               if (txt)
                 this.eventEmitter?.emit(SubAgentEventType.STREAM_TEXT, {
                   subagentId: this.subagentId,
                   round: turnCounter,
                   text: txt,
+                  thought: isThought,
                   timestamp: Date.now(),
-                } as SubAgentStreamTextEvent);
+                });
             }
             if (resp.usageMetadata) lastUsage = resp.usageMetadata;
           }
@@ -483,9 +496,10 @@ export class SubAgentScope {
         if (functionCalls.length > 0) {
           currentMessages = await this.processFunctionCalls(
             functionCalls,
-            abortController,
+            roundAbortController,
             promptId,
             turnCounter,
+            toolsList,
             currentResponseId,
           );
         } else {
@@ -515,7 +529,7 @@ export class SubAgentScope {
         } as SubAgentRoundEvent);
       }
     } catch (error) {
-      console.error('Error during subagent execution:', error);
+      debugLogger.error('Error during subagent execution:', error);
       this.terminateMode = SubagentTerminateMode.ERROR;
       this.eventEmitter?.emit(SubAgentEventType.ERROR, {
         subagentId: this.subagentId,
@@ -525,7 +539,11 @@ export class SubAgentScope {
 
       throw error;
     } finally {
-      if (externalSignal) externalSignal.removeEventListener('abort', onAbort);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
+      // Clear the reference to allow GC
+      currentRoundAbortController = null;
       this.executionStats.totalDurationMs = Date.now() - startTime;
       const summary = this.stats.getSummary(Date.now());
       this.eventEmitter?.emit(SubAgentEventType.FINISH, {
@@ -584,9 +602,66 @@ export class SubAgentScope {
     abortController: AbortController,
     promptId: string,
     currentRound: number,
+    toolsList: FunctionDeclaration[],
     responseId?: string,
   ): Promise<Content[]> {
     const toolResponseParts: Part[] = [];
+
+    // Build allowed tool names set for filtering
+    const allowedToolNames = new Set(toolsList.map((t) => t.name));
+
+    // Filter unauthorized tool calls before scheduling
+    const authorizedCalls: FunctionCall[] = [];
+    for (const fc of functionCalls) {
+      const callId = fc.id ?? `${fc.name}-${Date.now()}`;
+
+      if (!allowedToolNames.has(fc.name)) {
+        const toolName = String(fc.name);
+        const errorMessage = `Tool "${toolName}" not found. Tools must use the exact names provided.`;
+
+        // Emit TOOL_CALL event for visibility
+        this.eventEmitter?.emit(SubAgentEventType.TOOL_CALL, {
+          subagentId: this.subagentId,
+          round: currentRound,
+          callId,
+          name: toolName,
+          args: fc.args ?? {},
+          description: `Tool "${toolName}" not found`,
+          timestamp: Date.now(),
+        } as SubAgentToolCallEvent);
+
+        // Build function response part (used for both event and LLM)
+        const functionResponsePart = {
+          functionResponse: {
+            id: callId,
+            name: toolName,
+            response: { error: errorMessage },
+          },
+        };
+
+        // Emit TOOL_RESULT event with error (include responseParts for UI rendering)
+        this.eventEmitter?.emit(SubAgentEventType.TOOL_RESULT, {
+          subagentId: this.subagentId,
+          round: currentRound,
+          callId,
+          name: toolName,
+          success: false,
+          error: errorMessage,
+          responseParts: [functionResponsePart],
+          resultDisplay: errorMessage,
+          durationMs: 0,
+          timestamp: Date.now(),
+        } as SubAgentToolResultEvent);
+
+        // Record blocked tool call in stats
+        this.recordToolCallStats(toolName, false, 0, errorMessage);
+
+        // Add function response for LLM
+        toolResponseParts.push(functionResponsePart);
+        continue;
+      }
+      authorizedCalls.push(fc);
+    }
 
     // Build scheduler
     const responded = new Set<string>();
@@ -604,33 +679,8 @@ export class SubAgentScope {
               ? call.response.error?.message
               : undefined;
 
-          // Update aggregate stats
-          this.executionStats.totalToolCalls += 1;
-          if (success) {
-            this.executionStats.successfulToolCalls += 1;
-          } else {
-            this.executionStats.failedToolCalls += 1;
-          }
-
-          // Per-tool usage
-          const tu = this.toolUsage.get(toolName) || {
-            count: 0,
-            success: 0,
-            failure: 0,
-            totalDurationMs: 0,
-            averageDurationMs: 0,
-          };
-          tu.count += 1;
-          if (success) {
-            tu.success += 1;
-          } else {
-            tu.failure += 1;
-            tu.lastError = errorMessage || 'Unknown error';
-          }
-          tu.totalDurationMs = (tu.totalDurationMs || 0) + duration;
-          tu.averageDurationMs =
-            tu.count > 0 ? tu.totalDurationMs / tu.count : 0;
-          this.toolUsage.set(toolName, tu);
+          // Record stats
+          this.recordToolCallStats(toolName, success, duration, errorMessage);
 
           // Emit tool result event
           this.eventEmitter?.emit(SubAgentEventType.TOOL_RESULT, {
@@ -641,12 +691,6 @@ export class SubAgentScope {
             success,
             error: errorMessage,
             responseParts: call.response.responseParts,
-            /**
-             * Tools like todoWrite will add some extra contents to the result,
-             * making it unable to deserialize the `responseParts` to a JSON object.
-             * While `resultDisplay` is normally a string, if not we stringify it,
-             * so that we can deserialize it to a JSON object when needed.
-             */
             resultDisplay: call.response.resultDisplay
               ? typeof call.response.resultDisplay === 'string'
                 ? call.response.resultDisplay
@@ -655,14 +699,6 @@ export class SubAgentScope {
             durationMs: duration,
             timestamp: Date.now(),
           } as SubAgentToolResultEvent);
-
-          // Update statistics service
-          this.stats.recordToolCall(
-            toolName,
-            success,
-            duration,
-            this.toolUsage.get(toolName)?.lastError,
-          );
 
           // post-tool hook
           await this.hooks?.postToolUse?.({
@@ -735,7 +771,7 @@ export class SubAgentScope {
     });
 
     // Prepare requests and emit TOOL_CALL events
-    const requests: ToolCallRequestInfo[] = functionCalls.map((fc) => {
+    const requests: ToolCallRequestInfo[] = authorizedCalls.map((fc) => {
       const toolName = String(fc.name || 'unknown');
       const callId = fc.id ?? `${fc.name}-${Date.now()}`;
       const args = (fc.args ?? {}) as Record<string, unknown>;
@@ -899,6 +935,52 @@ export class SubAgentScope {
       // Safely ignore all runtime errors and return empty string
       return '';
     }
+  }
+
+  /**
+   * Records tool call statistics for both successful and failed tool calls.
+   * This includes updating aggregate stats, per-tool usage, and the statistics service.
+   */
+  private recordToolCallStats(
+    toolName: string,
+    success: boolean,
+    durationMs: number,
+    errorMessage?: string,
+  ): void {
+    // Update aggregate stats
+    this.executionStats.totalToolCalls += 1;
+    if (success) {
+      this.executionStats.successfulToolCalls += 1;
+    } else {
+      this.executionStats.failedToolCalls += 1;
+    }
+
+    // Per-tool usage
+    const tu = this.toolUsage.get(toolName) || {
+      count: 0,
+      success: 0,
+      failure: 0,
+      totalDurationMs: 0,
+      averageDurationMs: 0,
+    };
+    tu.count += 1;
+    if (success) {
+      tu.success += 1;
+    } else {
+      tu.failure += 1;
+      tu.lastError = errorMessage || 'Unknown error';
+    }
+    tu.totalDurationMs = (tu.totalDurationMs || 0) + durationMs;
+    tu.averageDurationMs = tu.count > 0 ? tu.totalDurationMs / tu.count : 0;
+    this.toolUsage.set(toolName, tu);
+
+    // Update statistics service
+    this.stats.recordToolCall(
+      toolName,
+      success,
+      durationMs,
+      this.toolUsage.get(toolName)?.lastError,
+    );
   }
 
   private buildChatSystemPrompt(context: ContextState): string {

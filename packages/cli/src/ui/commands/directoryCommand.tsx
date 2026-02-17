@@ -9,7 +9,7 @@ import { CommandKind } from './types.js';
 import { MessageType } from '../types.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadServerHierarchicalMemory } from '@mmmbuto/qwen-code-termux-core';
+import { loadServerHierarchicalMemory } from '@qwen-code/qwen-code-core';
 import { t } from '../../i18n/index.js';
 
 export function expandHomeDir(p: string): string {
@@ -113,14 +113,11 @@ export const directoryCommand: SlashCommand = {
                   ...config.getWorkspaceContext().getDirectories(),
                   ...pathsToAdd,
                 ],
-                config.getDebugMode(),
                 config.getFileService(),
                 config.getExtensionContextFilePaths(),
                 config.getFolderTrust(),
                 context.services.settings.merged.context?.importFormat ||
                   'tree', // Use setting or default to 'tree'
-                config.getFileFilteringOptions(),
-                context.services.settings.merged.context?.discoveryMaxDirs,
               );
             config.setUserMemory(memoryContent);
             config.setGeminiMdFileCount(fileCount);

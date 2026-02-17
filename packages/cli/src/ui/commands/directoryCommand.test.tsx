@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { directoryCommand, expandHomeDir } from './directoryCommand.js';
-import type { Config, WorkspaceContext } from '@mmmbuto/qwen-code-termux-core';
+import type { Config, WorkspaceContext } from '@qwen-code/qwen-code-core';
 import type { CommandContext } from './types.js';
 import { MessageType } from '../types.js';
 import * as os from 'node:os';
@@ -54,9 +54,7 @@ describe('directoryCommand', () => {
       services: {
         config: mockConfig,
         settings: {
-          merged: {
-            memoryDiscoveryMaxDirs: 1000,
-          },
+          merged: {},
         },
       },
       ui: {

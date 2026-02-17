@@ -10,7 +10,7 @@ import type {
   AnsiLine,
   AnsiOutput,
   AnsiToken,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 
 const DEFAULT_HEIGHT = 24;
 

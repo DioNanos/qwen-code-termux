@@ -25,7 +25,7 @@ vi.mock('fs', async (importOriginal) => {
     mkdirSync: vi.fn(),
   };
 });
-vi.mock('@mmmbuto/qwen-code-termux-core', () => {
+vi.mock('@qwen-code/qwen-code-core', () => {
   class Storage {
     getProjectTempDir(): string {
       return path.join('/test/home/', '.qwen', 'tmp', 'mocked_hash');
@@ -43,6 +43,12 @@ vi.mock('@mmmbuto/qwen-code-termux-core', () => {
   return {
     isNodeError: (err: unknown): err is NodeJS.ErrnoException =>
       typeof err === 'object' && err !== null && 'code' in err,
+    createDebugLogger: () => ({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
     Storage,
   };
 });

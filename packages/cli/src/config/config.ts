@@ -9,8 +9,8 @@ import {
   AuthType,
   Config,
   DEFAULT_QWEN_EMBEDDING_MODEL,
-  DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
   FileDiscoveryService,
+  FileEncoding,
   getCurrentGeminiMdFilename,
   loadServerHierarchicalMemory,
   setGeminiMdFilename as setServerGeminiMdFilename,
@@ -21,14 +21,17 @@ import {
   OutputFormat,
   isToolEnabled,
   SessionService,
+  ideContextStore,
   type ResumedSessionData,
-  type FileFilteringOptions,
-  type MCPServerConfig,
+  type LspClient,
   type ToolName,
   EditTool,
   ShellTool,
   WriteFileTool,
-} from '@mmmbuto/qwen-code-termux-core';
+  NativeLspClient,
+  createDebugLogger,
+  NativeLspService,
+} from '@qwen-code/qwen-code-core';
 import { extensionsCommand } from '../commands/extensions.js';
 import type { Settings } from './settings.js';
 import {
@@ -43,25 +46,28 @@ import { homedir } from 'node:os';
 
 import { resolvePath } from '../utils/resolvePath.js';
 import { getCliVersion } from '../utils/version.js';
-import type { Extension } from './extension.js';
-import { annotateActiveExtensions } from './extension.js';
 import { loadSandboxConfig } from './sandboxConfig.js';
 import { appEvents } from '../utils/events.js';
 import { mcpCommand } from '../commands/mcp.js';
 
-import { isWorkspaceTrusted } from './trustedFolders.js';
-import type { ExtensionEnablementManager } from './extensions/extensionEnablement.js';
-import { buildWebSearchConfig } from './webSearch.js';
+// UUID v4 regex pattern for validation
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// Simple console logger for now - replace with actual logger if available
-const logger = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  debug: (...args: any[]) => console.debug('[DEBUG]', ...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  warn: (...args: any[]) => console.warn('[WARN]', ...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  error: (...args: any[]) => console.error('[ERROR]', ...args),
-};
+/**
+ * Validates if a string is a valid UUID format
+ * @param value - The string to validate
+ * @returns True if the string is a valid UUID, false otherwise
+ */
+function isValidUUID(value: string): boolean {
+  return UUID_REGEX.test(value);
+}
+
+import { isWorkspaceTrusted } from './trustedFolders.js';
+import { buildWebSearchConfig } from './webSearch.js';
+import { writeStderrLine } from '../utils/stdioHelpers.js';
+
+const debugLogger = createDebugLogger('CONFIG');
 
 const VALID_APPROVAL_MODE_VALUES = [
   'plan',
@@ -104,8 +110,6 @@ export interface CliArgs {
   debug: boolean | undefined;
   prompt: string | undefined;
   promptInteractive: string | undefined;
-  allFiles: boolean | undefined;
-  showMemoryUsage: boolean | undefined;
   yolo: boolean | undefined;
   approvalMode: string | undefined;
   telemetry: boolean | undefined;
@@ -119,7 +123,7 @@ export interface CliArgs {
   allowedTools: string[] | undefined;
   acp: boolean | undefined;
   experimentalAcp: boolean | undefined;
-  experimentalSkills: boolean | undefined;
+  experimentalLsp: boolean | undefined;
   extensions: string[] | undefined;
   listExtensions: boolean | undefined;
   openaiLogging: boolean | undefined;
@@ -134,7 +138,6 @@ export interface CliArgs {
   webSearchDefault: string | undefined;
   screenReader: boolean | undefined;
   vlmSwitchMode: string | undefined;
-  useSmartEdit: boolean | undefined;
   inputFormat?: string | undefined;
   outputFormat: string | undefined;
   includePartialMessages?: boolean;
@@ -147,6 +150,8 @@ export interface CliArgs {
   continue: boolean | undefined;
   /** Resume a specific session by its ID */
   resume: string | undefined;
+  /** Specify a session ID without session resumption */
+  sessionId: string | undefined;
   maxSessionTurns: number | undefined;
   coreTools: string[] | undefined;
   excludeTools: string[] | undefined;
@@ -169,14 +174,15 @@ function normalizeOutputFormat(
   return OutputFormat.TEXT;
 }
 
-export async function parseArguments(settings: Settings): Promise<CliArgs> {
+export async function parseArguments(): Promise<CliArgs> {
   let rawArgv = hideBin(process.argv);
 
   // hack: if the first argument is the CLI entry point, remove it
   if (
     rawArgv.length > 0 &&
     (rawArgv[0].endsWith('/dist/qwen-cli/cli.js') ||
-      rawArgv[0].endsWith('/dist/cli.js'))
+      rawArgv[0].endsWith('/dist/cli.js') ||
+      rawArgv[0].endsWith('/dist/cli/cli.js'))
   ) {
     rawArgv = rawArgv.slice(1);
   }
@@ -292,17 +298,6 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
           type: 'string',
           description: 'Sandbox image URI.',
         })
-        .option('all-files', {
-          alias: ['a'],
-          type: 'boolean',
-          description: 'Include ALL files in context?',
-          default: false,
-        })
-        .option('show-memory-usage', {
-          type: 'boolean',
-          description: 'Show memory usage in status bar',
-          default: false,
-        })
         .option('yolo', {
           alias: 'y',
           type: 'boolean',
@@ -333,8 +328,15 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
         })
         .option('experimental-skills', {
           type: 'boolean',
-          description: 'Enable experimental Skills feature',
-          default: settings.tools?.experimental?.skills ?? false,
+          description:
+            'Deprecated: Skills are now enabled by default. This flag is ignored.',
+          hidden: true,
+        })
+        .option('experimental-lsp', {
+          type: 'boolean',
+          description:
+            'Enable experimental LSP (Language Server Protocol) feature for code intelligence',
+          default: false,
         })
         .option('channel', {
           type: 'string',
@@ -462,6 +464,10 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
           description:
             'Resume a specific session by its ID. Use without an ID to show session picker.',
         })
+        .option('session-id', {
+          type: 'string',
+          description: 'Specify a session ID for this run.',
+        })
         .option('max-session-turns', {
           type: 'number',
           description: 'Maximum number of session turns',
@@ -499,10 +505,6 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
           description: 'Authentication type',
         })
         .deprecateOption(
-          'show-memory-usage',
-          'Use the "ui.showMemoryUsage" setting in settings.json instead. This flag will be removed in a future version.',
-        )
-        .deprecateOption(
           'sandbox-image',
           'Use the "tools.sandbox" setting in settings.json instead. This flag will be removed in a future version.',
         )
@@ -511,16 +513,12 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
           'Use the "general.checkpointing.enabled" setting in settings.json instead. This flag will be removed in a future version.',
         )
         .deprecateOption(
-          'all-files',
-          'Use @ includes in the application instead. This flag will be removed in a future version.',
-        )
-        .deprecateOption(
           'prompt',
           'Use the positional prompt instead. This flag will be removed in a future version.',
         )
         // Ensure validation flows through .fail() for clean UX
         .fail((msg: string, err: Error | undefined, yargs: Argv) => {
-          console.error(msg || err?.message || 'Unknown error');
+          writeStderrLine(msg || err?.message || 'Unknown error');
           yargs.showHelp();
           process.exit(1);
         })
@@ -556,15 +554,22 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
           if (argv['continue'] && argv['resume']) {
             return 'Cannot use both --continue and --resume together. Use --continue to resume the latest session, or --resume <sessionId> to resume a specific session.';
           }
+          if (argv['sessionId'] && (argv['continue'] || argv['resume'])) {
+            return 'Cannot use --session-id with --continue or --resume. Use --session-id to start a new session with a specific ID, or use --continue/--resume to resume an existing session.';
+          }
+          if (argv['sessionId'] && !isValidUUID(argv['sessionId'] as string)) {
+            return `Invalid --session-id: "${argv['sessionId']}". Must be a valid UUID (e.g., "123e4567-e89b-12d3-a456-426614174000").`;
+          }
+          if (argv['resume'] && !isValidUUID(argv['resume'] as string)) {
+            return `Invalid --resume: "${argv['resume']}". Must be a valid UUID (e.g., "123e4567-e89b-12d3-a456-426614174000").`;
+          }
           return true;
         }),
     )
     // Register MCP subcommands
-    .command(mcpCommand);
-
-  if (settings?.experimental?.extensionManagement ?? true) {
-    yargsInstance.command(extensionsCommand);
-  }
+    .command(mcpCommand)
+    // Register Extension subcommands
+    .command(extensionsCommand);
 
   yargsInstance
     .version(await getCliVersion()) // This will enable the --version flag based on package.json
@@ -614,7 +619,7 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
 
   // Handle deprecated --experimental-acp flag
   if (result['experimentalAcp']) {
-    console.warn(
+    writeStderrLine(
       '\x1b[33m⚠ Warning: --experimental-acp is deprecated and will be removed in a future release. Please use --acp instead.\x1b[0m',
     );
     // Map experimental-acp to acp if acp is not explicitly set
@@ -637,13 +642,10 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
 export async function loadHierarchicalGeminiMemory(
   currentWorkingDirectory: string,
   includeDirectoriesToReadGemini: readonly string[] = [],
-  debugMode: boolean,
   fileService: FileDiscoveryService,
-  settings: Settings,
   extensionContextFilePaths: string[] = [],
   folderTrust: boolean,
   memoryImportFormat: 'flat' | 'tree' = 'tree',
-  fileFilteringOptions?: FileFilteringOptions,
 ): Promise<{ memoryContent: string; fileCount: number }> {
   // FIX: Use real, canonical paths for a reliable comparison to handle symlinks.
   const realCwd = fs.realpathSync(path.resolve(currentWorkingDirectory));
@@ -654,23 +656,14 @@ export async function loadHierarchicalGeminiMemory(
   // function to signal that it should skip the workspace search.
   const effectiveCwd = isHomeDirectory ? '' : currentWorkingDirectory;
 
-  if (debugMode) {
-    logger.debug(
-      `CLI: Delegating hierarchical memory load to server for CWD: ${currentWorkingDirectory} (memoryImportFormat: ${memoryImportFormat})`,
-    );
-  }
-
   // Directly call the server function with the corrected path.
   return loadServerHierarchicalMemory(
     effectiveCwd,
     includeDirectoriesToReadGemini,
-    debugMode,
     fileService,
     extensionContextFilePaths,
     folderTrust,
     memoryImportFormat,
-    fileFilteringOptions,
-    settings.context?.discoveryMaxDirs,
   );
 }
 
@@ -685,29 +678,16 @@ export function isDebugMode(argv: CliArgs): boolean {
 
 export async function loadCliConfig(
   settings: Settings,
-  extensions: Extension[],
-  extensionEnablementManager: ExtensionEnablementManager,
   argv: CliArgs,
   cwd: string = process.cwd(),
+  overrideExtensions?: string[],
 ): Promise<Config> {
   const debugMode = isDebugMode(argv);
-
-  const memoryImportFormat = settings.context?.importFormat || 'tree';
 
   const ideMode = settings.ide?.enabled ?? false;
 
   const folderTrust = settings.security?.folderTrust?.enabled ?? false;
   const trustedFolder = isWorkspaceTrusted(settings)?.isTrusted ?? true;
-
-  const allExtensions = annotateActiveExtensions(
-    extensions,
-    cwd,
-    extensionEnablementManager,
-  );
-
-  const activeExtensions = extensions.filter(
-    (_, i) => allExtensions[i].isActive,
-  );
 
   // Set the context filename in the server's memoryTool module BEFORE loading memory
   // TODO(b/343434939): This is a bit of a hack. The contextFileName should ideally be passed
@@ -720,51 +700,26 @@ export async function loadCliConfig(
     setServerGeminiMdFilename(getCurrentGeminiMdFilename());
   }
 
-  const extensionContextFilePaths = activeExtensions.flatMap(
-    (e) => e.contextFiles,
-  );
-
   // Automatically load output-language.md if it exists
-  const outputLanguageFilePath = path.join(
+  let outputLanguageFilePath: string | undefined = path.join(
     Storage.getGlobalQwenDir(),
     'output-language.md',
   );
   if (fs.existsSync(outputLanguageFilePath)) {
-    extensionContextFilePaths.push(outputLanguageFilePath);
-    if (debugMode) {
-      logger.debug(
-        `Found output-language.md, adding to context files: ${outputLanguageFilePath}`,
-      );
-    }
+    // output-language.md found - will be added to context files
+  } else {
+    outputLanguageFilePath = undefined;
   }
 
   const fileService = new FileDiscoveryService(cwd);
-
-  const fileFiltering = {
-    ...DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
-    ...settings.context?.fileFiltering,
-  };
 
   const includeDirectories = (settings.context?.includeDirectories || [])
     .map(resolvePath)
     .concat((argv.includeDirectories || []).map(resolvePath));
 
-  // Call the (now wrapper) loadHierarchicalGeminiMemory which calls the server's version
-  const { memoryContent, fileCount } = await loadHierarchicalGeminiMemory(
-    cwd,
-    settings.context?.loadMemoryFromIncludeDirectories
-      ? includeDirectories
-      : [],
-    debugMode,
-    fileService,
-    settings,
-    extensionContextFilePaths,
-    trustedFolder,
-    memoryImportFormat,
-    fileFiltering,
-  );
-
-  let mcpServers = mergeMcpServers(settings, activeExtensions);
+  // LSP configuration: enabled only via --experimental-lsp flag
+  const lspEnabled = argv.experimentalLsp === true;
+  let lspClient: LspClient | undefined;
   const question = argv.promptInteractive || argv.prompt || '';
   const inputFormat: InputFormat =
     (argv.inputFormat as InputFormat | undefined) ?? InputFormat.TEXT;
@@ -801,7 +756,7 @@ export async function loadCliConfig(
     approvalMode !== ApprovalMode.DEFAULT &&
     approvalMode !== ApprovalMode.PLAN
   ) {
-    logger.warn(
+    writeStderrLine(
       `Approval mode overridden to "default" because the current folder is not trusted.`,
     );
     approvalMode = ApprovalMode.DEFAULT;
@@ -902,37 +857,22 @@ export async function loadCliConfig(
 
   const excludeTools = mergeExcludeTools(
     settings,
-    activeExtensions,
     extraExcludes.length > 0 ? extraExcludes : undefined,
     argv.excludeTools,
   );
-  const blockedMcpServers: Array<{ name: string; extensionName: string }> = [];
 
-  if (!argv.allowedMcpServerNames) {
-    if (settings.mcp?.allowed) {
-      mcpServers = allowedMcpServers(
-        mcpServers,
-        settings.mcp.allowed,
-        blockedMcpServers,
-      );
-    }
-
-    if (settings.mcp?.excluded) {
-      const excludedNames = new Set(settings.mcp.excluded.filter(Boolean));
-      if (excludedNames.size > 0) {
-        mcpServers = Object.fromEntries(
-          Object.entries(mcpServers).filter(([key]) => !excludedNames.has(key)),
-        );
-      }
-    }
-  }
-
+  let allowedMcpServers: Set<string> | undefined;
+  let excludedMcpServers: Set<string> | undefined;
   if (argv.allowedMcpServerNames) {
-    mcpServers = allowedMcpServers(
-      mcpServers,
-      argv.allowedMcpServerNames,
-      blockedMcpServers,
-    );
+    allowedMcpServers = new Set(argv.allowedMcpServerNames.filter(Boolean));
+    excludedMcpServers = undefined;
+  } else {
+    allowedMcpServers = settings.mcp?.allowed
+      ? new Set(settings.mcp.allowed.filter(Boolean))
+      : undefined;
+    excludedMcpServers = settings.mcp?.excluded
+      ? new Set(settings.mcp.excluded.filter(Boolean))
+      : undefined;
   }
 
   const selectedAuthType =
@@ -983,15 +923,26 @@ export async function loadCliConfig(
       sessionData = await sessionService.loadSession(argv.resume);
       if (!sessionData) {
         const message = `No saved session found with ID ${argv.resume}. Run \`qwen --resume\` without an ID to choose from existing sessions.`;
-        console.log(message);
+        writeStderrLine(message);
         process.exit(1);
       }
     }
+  } else if (argv['sessionId']) {
+    // Use provided session ID without session resumption
+    // Check if session ID is already in use
+    const sessionService = new SessionService(cwd);
+    const exists = await sessionService.sessionExists(argv['sessionId']);
+    if (exists) {
+      const message = `Error: Session Id ${argv['sessionId']} is already in use.`;
+      writeStderrLine(message);
+      process.exit(1);
+    }
+    sessionId = argv['sessionId'];
   }
 
   const modelProvidersConfig = settings.modelProviders;
 
-  return new Config({
+  const config = new Config({
     sessionId,
     sessionData,
     embeddingModel: DEFAULT_QWEN_EMBEDDING_MODEL,
@@ -999,22 +950,24 @@ export async function loadCliConfig(
     targetDir: cwd,
     includeDirectories,
     loadMemoryFromIncludeDirectories:
-      settings.context?.loadMemoryFromIncludeDirectories || false,
+      settings.context?.loadFromIncludeDirectories || false,
+    importFormat: settings.context?.importFormat || 'tree',
     debugMode,
     question,
-    fullContext: argv.allFiles || false,
     coreTools: argv.coreTools || settings.tools?.core || undefined,
     allowedTools: argv.allowedTools || settings.tools?.allowed || undefined,
     excludeTools,
     toolDiscoveryCommand: settings.tools?.discoveryCommand,
     toolCallCommand: settings.tools?.callCommand,
     mcpServerCommand: settings.mcp?.serverCommand,
-    mcpServers,
-    userMemory: memoryContent,
-    geminiMdFileCount: fileCount,
+    mcpServers: settings.mcpServers || {},
+    allowedMcpServers: allowedMcpServers
+      ? Array.from(allowedMcpServers)
+      : undefined,
+    excludedMcpServers: excludedMcpServers
+      ? Array.from(excludedMcpServers)
+      : undefined,
     approvalMode,
-    showMemoryUsage:
-      argv.showMemoryUsage || settings.ui?.showMemoryUsage || false,
     accessibility: {
       ...settings.ui?.accessibility,
       screenReader,
@@ -1034,15 +987,13 @@ export async function loadCliConfig(
     fileDiscoveryService: fileService,
     bugCommand: settings.advanced?.bugCommand,
     model: resolvedModel,
-    extensionContextFilePaths,
+    outputLanguageFilePath,
     sessionTokenLimit: settings.model?.sessionTokenLimit ?? -1,
     maxSessionTurns:
       argv.maxSessionTurns ?? settings.model?.maxSessionTurns ?? -1,
     experimentalZedIntegration: argv.acp || argv.experimentalAcp || false,
-    experimentalSkills: argv.experimentalSkills || false,
     listExtensions: argv.listExtensions || false,
-    extensions: allExtensions,
-    blockedMcpServers,
+    overrideExtensions: overrideExtensions || argv.extensions,
     noBrowser: !!process.env['NO_BROWSER'],
     authType: selectedAuthType,
     inputFormat,
@@ -1070,7 +1021,6 @@ export async function loadCliConfig(
     truncateToolOutputLines: settings.tools?.truncateToolOutputLines,
     enableToolOutputTruncation: settings.tools?.enableToolOutputTruncation,
     eventEmitter: appEvents,
-    useSmartEdit: argv.useSmartEdit ?? settings.useSmartEdit,
     gitCoAuthor: settings.general?.gitCoAuthor,
     output: {
       format: outputSettingsFormat,
@@ -1081,64 +1031,40 @@ export async function loadCliConfig(
     // always be true and the settings file can never disable recording.
     chatRecording:
       argv.chatRecording ?? settings.general?.chatRecording ?? true,
+    defaultFileEncoding:
+      settings.general?.defaultFileEncoding ?? FileEncoding.UTF8,
+    lsp: {
+      enabled: lspEnabled,
+    },
   });
-}
 
-function allowedMcpServers(
-  mcpServers: { [x: string]: MCPServerConfig },
-  allowMCPServers: string[],
-  blockedMcpServers: Array<{ name: string; extensionName: string }>,
-) {
-  const allowedNames = new Set(allowMCPServers.filter(Boolean));
-  if (allowedNames.size > 0) {
-    mcpServers = Object.fromEntries(
-      Object.entries(mcpServers).filter(([key, server]) => {
-        const isAllowed = allowedNames.has(key);
-        if (!isAllowed) {
-          blockedMcpServers.push({
-            name: key,
-            extensionName: server.extensionName || '',
-          });
-        }
-        return isAllowed;
-      }),
-    );
-  } else {
-    blockedMcpServers.push(
-      ...Object.entries(mcpServers).map(([key, server]) => ({
-        name: key,
-        extensionName: server.extensionName || '',
-      })),
-    );
-    mcpServers = {};
-  }
-  return mcpServers;
-}
+  if (lspEnabled) {
+    try {
+      const lspService = new NativeLspService(
+        config,
+        config.getWorkspaceContext(),
+        appEvents,
+        fileService,
+        ideContextStore,
+        {
+          requireTrustedWorkspace: folderTrust,
+        },
+      );
 
-function mergeMcpServers(settings: Settings, extensions: Extension[]) {
-  const mcpServers = { ...(settings.mcpServers || {}) };
-  for (const extension of extensions) {
-    Object.entries(extension.config.mcpServers || {}).forEach(
-      ([key, server]) => {
-        if (mcpServers[key]) {
-          logger.warn(
-            `Skipping extension MCP config for server with key "${key}" as it already exists.`,
-          );
-          return;
-        }
-        mcpServers[key] = {
-          ...server,
-          extensionName: extension.config.name,
-        };
-      },
-    );
+      await lspService.discoverAndPrepare();
+      await lspService.start();
+      lspClient = new NativeLspClient(lspService);
+      config.setLspClient(lspClient);
+    } catch (err) {
+      debugLogger.warn('Failed to initialize native LSP service:', err);
+    }
   }
-  return mcpServers;
+
+  return config;
 }
 
 function mergeExcludeTools(
   settings: Settings,
-  extensions: Extension[],
   extraExcludes?: string[] | undefined,
   cliExcludeTools?: string[] | undefined,
 ): string[] {
@@ -1147,10 +1073,5 @@ function mergeExcludeTools(
     ...(settings.tools?.exclude || []),
     ...(extraExcludes || []),
   ]);
-  for (const extension of extensions) {
-    for (const tool of extension.config.excludeTools || []) {
-      allExcludeTools.add(tool);
-    }
-  }
   return [...allExcludeTools];
 }

@@ -16,11 +16,8 @@ import type {
   ToolMcpConfirmationDetails,
   Config,
   EditorType,
-} from '@mmmbuto/qwen-code-termux-core';
-import {
-  IdeClient,
-  ToolConfirmationOutcome,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
+import { IdeClient, ToolConfirmationOutcome } from '@qwen-code/qwen-code-core';
 import type { RadioSelectItem } from '../shared/RadioButtonSelect.js';
 import { RadioButtonSelect } from '../shared/RadioButtonSelect.js';
 import { MaxSizedBox } from '../shared/MaxSizedBox.js';
@@ -34,7 +31,7 @@ export interface ToolConfirmationMessageProps {
   config: Config;
   isFocused?: boolean;
   availableTerminalHeight?: number;
-  terminalWidth: number;
+  contentWidth: number;
   compactMode?: boolean;
 }
 
@@ -45,11 +42,10 @@ export const ToolConfirmationMessage: React.FC<
   config,
   isFocused = true,
   availableTerminalHeight,
-  terminalWidth,
+  contentWidth,
   compactMode = false,
 }) => {
   const { onConfirm } = confirmationDetails;
-  const childWidth = terminalWidth - 2; // 2 for padding
 
   const settings = useSettings();
   const preferredEditor = settings.merged.general?.preferredEditor as
@@ -229,7 +225,8 @@ export const ToolConfirmationMessage: React.FC<
         diffContent={confirmationDetails.fileDiff}
         filename={confirmationDetails.fileName}
         availableTerminalHeight={availableBodyContentHeight()}
-        terminalWidth={childWidth}
+        contentWidth={contentWidth}
+        settings={settings}
       />
     );
   } else if (confirmationDetails.type === 'exec') {
@@ -266,7 +263,7 @@ export const ToolConfirmationMessage: React.FC<
         <Box paddingX={1} marginLeft={1}>
           <MaxSizedBox
             maxHeight={bodyContentHeight}
-            maxWidth={Math.max(childWidth - 4, 1)}
+            maxWidth={Math.max(contentWidth, 1)}
           >
             <Box>
               <Text color={theme.text.link}>{executionProps.command}</Text>
@@ -301,7 +298,7 @@ export const ToolConfirmationMessage: React.FC<
           text={planProps.plan}
           isPending={false}
           availableTerminalHeight={availableBodyContentHeight()}
-          terminalWidth={childWidth}
+          contentWidth={contentWidth}
         />
       </Box>
     );
@@ -400,7 +397,7 @@ export const ToolConfirmationMessage: React.FC<
   }
 
   return (
-    <Box flexDirection="column" padding={1} width={childWidth}>
+    <Box flexDirection="column" padding={1} width={contentWidth}>
       {/* Body Content (Diff Renderer or Command Info) */}
       {/* No separate context display here anymore for edits */}
       <Box flexGrow={1} flexShrink={1} overflow="hidden" marginBottom={1}>

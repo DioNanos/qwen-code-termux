@@ -5,8 +5,8 @@
  */
 
 import { useEffect, useReducer, useRef } from 'react';
-import type { Config, FileSearch } from '@mmmbuto/qwen-code-termux-core';
-import { FileSearchFactory, escapePath } from '@mmmbuto/qwen-code-termux-core';
+import type { Config, FileSearch } from '@qwen-code/qwen-code-core';
+import { FileSearchFactory, escapePath } from '@qwen-code/qwen-code-core';
 import type { Suggestion } from '../components/SuggestionsDisplay.js';
 import { MAX_SUGGESTIONS_TO_SHOW } from '../components/SuggestionsDisplay.js';
 
@@ -166,8 +166,9 @@ export function useAtCompletion(props: UseAtCompletionProps): void {
           cacheTtl: 30, // 30 seconds
           enableRecursiveFileSearch:
             config?.getEnableRecursiveFileSearch() ?? true,
-          disableFuzzySearch:
-            config?.getFileFilteringDisableFuzzySearch() ?? false,
+          // Use enableFuzzySearch with !== false to default to true when undefined.
+          enableFuzzySearch:
+            config?.getFileFilteringEnableFuzzySearch() !== false,
         });
         await searcher.initialize();
         fileSearch.current = searcher;

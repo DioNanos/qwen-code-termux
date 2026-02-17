@@ -24,18 +24,18 @@ import type {
   Status as ToolCallStatusType,
   AnyDeclarativeTool,
   AnyToolInvocation,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import {
   DEFAULT_TRUNCATE_TOOL_OUTPUT_LINES,
   DEFAULT_TRUNCATE_TOOL_OUTPUT_THRESHOLD,
   ApprovalMode,
   MockTool,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { ToolCallStatus } from '../types.js';
 
 // Mocks
-vi.mock('@mmmbuto/qwen-code-termux-core', async () => {
-  const actual = await vi.importActual('@mmmbuto/qwen-code-termux-core');
+vi.mock('@qwen-code/qwen-code-core', async () => {
+  const actual = await vi.importActual('@qwen-code/qwen-code-core');
   return {
     ...actual,
     ToolRegistry: vi.fn(),
@@ -64,7 +64,6 @@ const mockConfig = {
     model: 'test-model',
     authType: 'gemini',
   }),
-  getUseSmartEdit: () => false,
   getUseModelRouter: () => false,
   getGeminiClient: () => null, // No client needed for these tests
   getShellExecutionConfig: () => ({ terminalWidth: 80, terminalHeight: 24 }),

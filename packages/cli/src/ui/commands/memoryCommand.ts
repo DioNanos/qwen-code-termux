@@ -9,7 +9,7 @@ import {
   getCurrentGeminiMdFilename,
   loadServerHierarchicalMemory,
   QWEN_DIR,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
@@ -309,14 +309,11 @@ export const memoryCommand: SlashCommand = {
                 config.shouldLoadMemoryFromIncludeDirectories()
                   ? config.getWorkspaceContext().getDirectories()
                   : [],
-                config.getDebugMode(),
                 config.getFileService(),
                 config.getExtensionContextFilePaths(),
                 config.getFolderTrust(),
                 context.services.settings.merged.context?.importFormat ||
                   'tree', // Use setting or default to 'tree'
-                config.getFileFilteringOptions(),
-                context.services.settings.merged.context?.discoveryMaxDirs,
               );
             config.setUserMemory(memoryContent);
             config.setGeminiMdFileCount(fileCount);

@@ -14,7 +14,7 @@ import { ToolCallStatus } from '../../types.js';
 import type {
   Config,
   ToolCallConfirmationDetails,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { TOOL_STATUS } from '../../constants.js';
 import { ConfigContext } from '../../contexts/ConfigContext.js';
 
@@ -83,7 +83,7 @@ describe('<ToolGroupMessage />', () => {
 
   const baseProps = {
     groupId: 1,
-    terminalWidth: 80,
+    contentWidth: 80,
     isFocused: true,
   };
 
@@ -244,7 +244,7 @@ describe('<ToolGroupMessage />', () => {
         <ToolGroupMessage
           {...baseProps}
           toolCalls={toolCalls}
-          terminalWidth={40}
+          contentWidth={40}
         />,
       );
       expect(lastFrame()).toMatchSnapshot();

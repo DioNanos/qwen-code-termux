@@ -8,7 +8,7 @@ import {
   type ApprovalMode,
   APPROVAL_MODES,
   type Config,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { useEffect, useState } from 'react';
 import { useKeypress } from './useKeypress.js';
 import type { HistoryItemWithoutId } from '../types.js';
@@ -18,12 +18,14 @@ export interface UseAutoAcceptIndicatorArgs {
   config: Config;
   addItem?: (item: HistoryItemWithoutId, timestamp: number) => void;
   onApprovalModeChange?: (mode: ApprovalMode) => void;
+  shouldBlockTab?: () => boolean;
 }
 
 export function useAutoAcceptIndicator({
   config,
   addItem,
   onApprovalModeChange,
+  shouldBlockTab,
 }: UseAutoAcceptIndicatorArgs): ApprovalMode {
   const currentConfigValue = config.getApprovalMode();
   const [showAutoAcceptIndicator, setShowAutoAcceptIndicator] =
@@ -36,7 +38,22 @@ export function useAutoAcceptIndicator({
   useKeypress(
     (key) => {
       // Handle Shift+Tab to cycle through all modes
-      if (key.shift && key.name === 'tab') {
+      // On Windows, Shift+Tab is indistinguishable from Tab (\t) in some terminals,
+      // so we allow Tab to switch modes as well to support the shortcut.
+      const isShiftTab = key.shift && key.name === 'tab';
+      const isWindowsTab =
+        process.platform === 'win32' &&
+        key.name === 'tab' &&
+        !key.ctrl &&
+        !key.meta;
+
+      if (isShiftTab || isWindowsTab) {
+        // On Windows, check if we should block Tab key when autocomplete is active
+        if (isWindowsTab && shouldBlockTab?.()) {
+          // Don't cycle approval mode when autocomplete is showing
+          return;
+        }
+
         const currentMode = config.getApprovalMode();
         const currentIndex = APPROVAL_MODES.indexOf(currentMode);
         const nextIndex =

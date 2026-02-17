@@ -4,10 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {
-  ChatRecord,
-  TaskResultDisplay,
-} from '@mmmbuto/qwen-code-termux-core';
+import type { ChatRecord, TaskResultDisplay } from '@qwen-code/qwen-code-core';
 import type {
   Content,
   GenerateContentResponseUsageMetadata,
@@ -24,10 +21,12 @@ import { ToolCallEmitter } from './emitters/ToolCallEmitter.js';
  * have appeared during the original session.
  */
 export class HistoryReplayer {
+  private readonly ctx: SessionContext;
   private readonly messageEmitter: MessageEmitter;
   private readonly toolCallEmitter: ToolCallEmitter;
 
   constructor(ctx: SessionContext) {
+    this.ctx = ctx;
     this.messageEmitter = new MessageEmitter(ctx);
     this.toolCallEmitter = new ToolCallEmitter(ctx);
   }
@@ -47,16 +46,21 @@ export class HistoryReplayer {
    * Replays a single chat record.
    */
   private async replayRecord(record: ChatRecord): Promise<void> {
+    this.setActiveRecordId(record.uuid, record.timestamp);
     switch (record.type) {
       case 'user':
         if (record.message) {
-          await this.replayContent(record.message, 'user');
+          await this.replayContent(record.message, 'user', record.timestamp);
         }
         break;
 
       case 'assistant':
         if (record.message) {
-          await this.replayContent(record.message, 'assistant');
+          await this.replayContent(
+            record.message,
+            'assistant',
+            record.timestamp,
+          );
         }
         if (record.usageMetadata) {
           await this.replayUsageMetadata(record.usageMetadata);
@@ -71,21 +75,32 @@ export class HistoryReplayer {
         // Skip system records (compression, telemetry, slash commands)
         break;
     }
+    this.setActiveRecordId(null);
   }
 
   /**
    * Replays content from a message (user or assistant).
    * Handles text parts, thought parts, and function calls.
+   *
+   * @param content - The content to replay
+   * @param role - The role (user or assistant)
+   * @param timestamp - Optional server-side timestamp from the JSONL record
    */
   private async replayContent(
     content: Content,
     role: 'user' | 'assistant',
+    timestamp?: string,
   ): Promise<void> {
     for (const part of content.parts ?? []) {
       // Text content
       if ('text' in part && part.text) {
         const isThought = (part as { thought?: boolean }).thought ?? false;
-        await this.messageEmitter.emitMessage(part.text, role, isThought);
+        await this.messageEmitter.emitMessage(
+          part.text,
+          role,
+          isThought,
+          timestamp,
+        );
       }
 
       // Function call (tool start)
@@ -98,6 +113,7 @@ export class HistoryReplayer {
           callId,
           args: part.functionCall.args as Record<string, unknown>,
           status: 'in_progress',
+          timestamp,
         });
       }
     }
@@ -137,6 +153,7 @@ export class HistoryReplayer {
       // For TodoWriteTool fallback, try to extract args from the record
       // Note: args aren't stored in tool_result records by default
       args: undefined,
+      timestamp: record.timestamp,
     });
 
     // Special handling: Task tool execution summary contains token usage
@@ -201,5 +218,14 @@ export class HistoryReplayer {
       }
     }
     return '';
+  }
+
+  private setActiveRecordId(recordId: string | null, timestamp?: string): void {
+    const context = this.ctx as unknown as {
+      setActiveRecordId?: (id: string | null, timestamp?: string) => void;
+    };
+    if (typeof context.setActiveRecordId === 'function') {
+      context.setActiveRecordId(recordId, timestamp);
+    }
   }
 }

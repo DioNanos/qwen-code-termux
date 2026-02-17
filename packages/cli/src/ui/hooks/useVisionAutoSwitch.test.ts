@@ -8,14 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { Part, PartListUnion } from '@google/genai';
-import {
-  AuthType,
-  type Config,
-  ApprovalMode,
-} from '@mmmbuto/qwen-code-termux-core';
+import { AuthType, type Config, ApprovalMode } from '@qwen-code/qwen-code-core';
 
 // Mock the image format functions from core package
-vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
+vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,

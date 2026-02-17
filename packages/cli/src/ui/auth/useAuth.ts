@@ -4,21 +4,36 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Config, ModelProvidersConfig } from '@mmmbuto/qwen-code-termux-core';
+import type {
+  Config,
+  ContentGeneratorConfig,
+  ModelProvidersConfig,
+  ProviderModelConfig,
+} from '@qwen-code/qwen-code-core';
 import {
   AuthEvent,
   AuthType,
   getErrorMessage,
   logAuth,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { useCallback, useEffect, useState } from 'react';
 import type { LoadedSettings } from '../../config/settings.js';
 import { getPersistScopeForModelSelection } from '../../config/modelProvidersScope.js';
-import type { OpenAICredentials } from '../components/OpenAIKeyPrompt.js';
+// OpenAICredentials type (previously imported from OpenAIKeyPrompt)
+export interface OpenAICredentials {
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
 import { useQwenAuth } from '../hooks/useQwenAuth.js';
 import { AuthState, MessageType } from '../types.js';
 import type { HistoryItem } from '../types.js';
 import { t } from '../../i18n/index.js';
+import {
+  CODING_PLAN_MODELS,
+  CODING_PLAN_ENV_KEY,
+  CODING_PLAN_VERSION,
+} from '../../constants/codingPlan.js';
 
 export type { QwenAuthState } from '../hooks/useQwenAuth.js';
 
@@ -26,6 +41,7 @@ export const useAuthCommand = (
   settings: LoadedSettings,
   config: Config,
   addItem: (item: Omit<HistoryItem, 'id'>, timestamp: number) => void,
+  onAuthChange?: () => void,
 ) => {
   const unAuthenticated = config.getAuthType() === undefined;
 
@@ -132,11 +148,10 @@ export const useAuthCommand = (
       setIsAuthDialogOpen(false);
       setIsAuthenticating(false);
 
-      // Log authentication success
-      const authEvent = new AuthEvent(authType, 'manual', 'success');
-      logAuth(config, authEvent);
+      // Trigger UI refresh to update header information
+      onAuthChange?.();
 
-      // Show success message
+      // Add success message to history
       addItem(
         {
           type: MessageType.INFO,
@@ -146,8 +161,12 @@ export const useAuthCommand = (
         },
         Date.now(),
       );
+
+      // Log authentication success
+      const authEvent = new AuthEvent(authType, 'manual', 'success');
+      logAuth(config, authEvent);
     },
-    [settings, handleAuthFailure, config, addItem],
+    [settings, handleAuthFailure, config, addItem, onAuthChange],
   );
 
   const performAuth = useCallback(
@@ -214,11 +233,19 @@ export const useAuthCommand = (
 
       if (authType === AuthType.USE_OPENAI) {
         if (credentials) {
-          config.updateCredentials({
-            apiKey: credentials.apiKey,
-            baseUrl: credentials.baseUrl,
-            model: credentials.model,
-          });
+          // Pass settings.model.generationConfig to updateCredentials so it can be merged
+          // after clearing provider-sourced config. This ensures settings.json generationConfig
+          // fields (e.g., samplingParams, timeout) are preserved.
+          const settingsGenerationConfig = settings.merged.model
+            ?.generationConfig as Partial<ContentGeneratorConfig> | undefined;
+          config.updateCredentials(
+            {
+              apiKey: credentials.apiKey,
+              baseUrl: credentials.baseUrl,
+              model: credentials.model,
+            },
+            settingsGenerationConfig,
+          );
           await performAuth(authType, credentials);
         }
         return;
@@ -226,7 +253,13 @@ export const useAuthCommand = (
 
       await performAuth(authType);
     },
-    [config, performAuth, isProviderManagedModel, onAuthError],
+    [
+      config,
+      performAuth,
+      isProviderManagedModel,
+      onAuthError,
+      settings.merged.model?.generationConfig,
+    ],
   );
 
   const openAuthDialog = useCallback(() => {
@@ -249,6 +282,129 @@ export const useAuthCommand = (
     setIsAuthDialogOpen(true);
     setAuthError(null);
   }, [isAuthenticating, pendingAuthType, cancelQwenAuth, config]);
+
+  /**
+   * Handle coding plan submission - generates configs from template and stores api-key
+   */
+  const handleCodingPlanSubmit = useCallback(
+    async (apiKey: string) => {
+      try {
+        setIsAuthenticating(true);
+        setAuthError(null);
+
+        const envKeyName = CODING_PLAN_ENV_KEY;
+
+        // Get persist scope
+        const persistScope = getPersistScopeForModelSelection(settings);
+
+        // Store api-key in settings.env
+        settings.setValue(persistScope, `env.${envKeyName}`, apiKey);
+
+        // Sync to process.env immediately so refreshAuth can read the apiKey
+        process.env[envKeyName] = apiKey;
+
+        // Generate model configs from template
+        const newConfigs: ProviderModelConfig[] = CODING_PLAN_MODELS.map(
+          (templateConfig) => ({
+            ...templateConfig,
+            envKey: envKeyName,
+          }),
+        );
+
+        // Get existing configs
+        const existingConfigs =
+          (
+            settings.merged.modelProviders as ModelProvidersConfig | undefined
+          )?.[AuthType.USE_OPENAI] || [];
+
+        // Identify Coding Plan configs by baseUrl + envKey
+        // Remove existing Coding Plan configs to ensure template changes are applied
+        const isCodingPlanConfig = (config: ProviderModelConfig) =>
+          config.envKey === envKeyName &&
+          CODING_PLAN_MODELS.some(
+            (template) => template.baseUrl === config.baseUrl,
+          );
+
+        // Filter out existing Coding Plan configs, keep user custom configs
+        const nonCodingPlanConfigs = existingConfigs.filter(
+          (existing) => !isCodingPlanConfig(existing),
+        );
+
+        // Add new Coding Plan configs at the beginning
+        const updatedConfigs = [...newConfigs, ...nonCodingPlanConfigs];
+
+        // Persist to modelProviders
+        settings.setValue(
+          persistScope,
+          `modelProviders.${AuthType.USE_OPENAI}`,
+          updatedConfigs,
+        );
+
+        // Also persist authType
+        settings.setValue(
+          persistScope,
+          'security.auth.selectedType',
+          AuthType.USE_OPENAI,
+        );
+
+        // Persist coding plan version for future update detection
+        settings.setValue(
+          persistScope,
+          'codingPlan.version',
+          CODING_PLAN_VERSION,
+        );
+
+        // If there are configs, use the first one as the model
+        if (updatedConfigs.length > 0 && updatedConfigs[0]?.id) {
+          settings.setValue(persistScope, 'model.name', updatedConfigs[0].id);
+        }
+
+        // Hot-reload model providers configuration before refreshAuth
+        // This ensures ModelsConfig has the latest configuration from settings.json
+        const updatedModelProviders: ModelProvidersConfig = {
+          ...(settings.merged.modelProviders as
+            | ModelProvidersConfig
+            | undefined),
+          [AuthType.USE_OPENAI]: updatedConfigs,
+        };
+        config.reloadModelProvidersConfig(updatedModelProviders);
+
+        // Refresh auth with the new configuration
+        await config.refreshAuth(AuthType.USE_OPENAI);
+
+        // Success handling
+        setAuthError(null);
+        setAuthState(AuthState.Authenticated);
+        setIsAuthDialogOpen(false);
+        setIsAuthenticating(false);
+
+        // Trigger UI refresh
+        onAuthChange?.();
+
+        // Add success message
+        addItem(
+          {
+            type: MessageType.INFO,
+            text: t(
+              'Authenticated successfully with Coding Plan. API key is stored in settings.env.',
+            ),
+          },
+          Date.now(),
+        );
+
+        // Log success
+        const authEvent = new AuthEvent(
+          AuthType.USE_OPENAI,
+          'coding-plan',
+          'success',
+        );
+        logAuth(config, authEvent);
+      } catch (error) {
+        handleAuthFailure(error);
+      }
+    },
+    [settings, config, handleAuthFailure, addItem, onAuthChange],
+  );
 
   /**
    /**
@@ -300,6 +456,7 @@ export const useAuthCommand = (
     pendingAuthType,
     qwenAuthState,
     handleAuthSelect,
+    handleCodingPlanSubmit,
     openAuthDialog,
     cancelAuthentication,
   };

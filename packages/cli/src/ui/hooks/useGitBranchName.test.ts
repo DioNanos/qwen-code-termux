@@ -10,16 +10,13 @@ import { act } from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { useGitBranchName } from './useGitBranchName.js';
 import { fs, vol } from 'memfs'; // For mocking fs
-import {
-  isCommandAvailable,
-  execCommand,
-} from '@mmmbuto/qwen-code-termux-core';
+import { isCommandAvailable, execCommand } from '@qwen-code/qwen-code-core';
 
-// Mock @mmmbuto/qwen-code-termux-core
-vi.mock('@mmmbuto/qwen-code-termux-core', async () => {
+// Mock @qwen-code/qwen-code-core
+vi.mock('@qwen-code/qwen-code-core', async () => {
   const original = await vi.importActual<
-    typeof import('@mmmbuto/qwen-code-termux-core')
-  >('@mmmbuto/qwen-code-termux-core');
+    typeof import('@qwen-code/qwen-code-core')
+  >('@qwen-code/qwen-code-core');
   return {
     ...original,
     execCommand: vi.fn(),
@@ -38,7 +35,10 @@ vi.mock('node:fs', async () => {
 
 vi.mock('node:fs/promises', async () => {
   const memfs = await vi.importActual<typeof import('memfs')>('memfs');
-  return memfs.fs.promises;
+  return {
+    ...memfs.fs.promises,
+    default: memfs.fs.promises,
+  };
 });
 
 const CWD = '/test/project';

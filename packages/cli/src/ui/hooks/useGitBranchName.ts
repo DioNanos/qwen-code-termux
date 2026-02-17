@@ -5,10 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import {
-  isCommandAvailable,
-  execCommand,
-} from '@mmmbuto/qwen-code-termux-core';
+import { isCommandAvailable, execCommand } from '@qwen-code/qwen-code-core';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';

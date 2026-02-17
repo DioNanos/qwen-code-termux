@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { getErrorMessage } from '@mmmbuto/qwen-code-termux-core';
+import { getErrorMessage } from '@qwen-code/qwen-code-core';
 
 const warningsFilePath = pathJoin(os.tmpdir(), 'qwen-code-warnings.txt');
 

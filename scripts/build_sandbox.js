@@ -85,28 +85,44 @@ if (!image.length) {
   );
 }
 
+// Build in dependency order to ensure packages are built before their dependents
+// This is the same order as defined in build.js
+const buildOrder = [
+  'packages/test-utils',
+  'packages/core',
+  'packages/cli',
+  'packages/webui',
+  'packages/sdk-typescript',
+  'packages/vscode-ide-companion',
+];
+
 if (!argv.s) {
   execSync('npm install', { stdio: 'inherit' });
-  execSync('npm run build --workspaces', { stdio: 'inherit' });
+  // Build in dependency order instead of using --workspaces
+  for (const workspace of buildOrder) {
+    execSync(`npm run build --workspace=${workspace}`, {
+      stdio: 'inherit',
+    });
+  }
 }
 
-console.log('packing @mmmbuto/qwen-code-termux ...');
+console.log('packing @qwen-code/qwen-code ...');
 const cliPackageDir = join('packages', 'cli');
 rmSync(join(cliPackageDir, 'dist', 'qwen-code-*.tgz'), { force: true });
 execSync(
-  `npm pack -w @mmmbuto/qwen-code-termux --pack-destination ./packages/cli/dist`,
+  `npm pack -w @qwen-code/qwen-code --pack-destination ./packages/cli/dist`,
   {
     stdio: 'ignore',
   },
 );
 
-console.log('packing @mmmbuto/qwen-code-termux-core ...');
+console.log('packing @qwen-code/qwen-code-core ...');
 const corePackageDir = join('packages', 'core');
 rmSync(join(corePackageDir, 'dist', 'qwen-code-core-*.tgz'), {
   force: true,
 });
 execSync(
-  `npm pack -w @mmmbuto/qwen-code-termux-core --pack-destination ./packages/core/dist`,
+  `npm pack -w @qwen-code/qwen-code-core --pack-destination ./packages/core/dist`,
   { stdio: 'ignore' },
 );
 

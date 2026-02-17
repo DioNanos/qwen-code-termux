@@ -119,7 +119,10 @@ const PATTERNS: Array<[RegExp, TokenCount]> = [
   // Commercial Qwen3-Coder-Flash: 1M token context
   [/^qwen3-coder-flash(-.*)?$/, LIMITS['1m']], // catches "qwen3-coder-flash" and date variants
 
-  // Generic coder-model: same as qwen3-coder-plus (1M token context)
+  // Commercial Qwen3.5-Plus: 1M token context
+  [/^qwen3\.5-plus(-.*)?$/, LIMITS['1m']], // catches "qwen3.5-plus" and date variants
+
+  // Generic coder-model: same as qwen3.5-plus (1M token context)
   [/^coder-model$/, LIMITS['1m']],
 
   // Commercial Qwen3-Max-Preview: 256K token context
@@ -161,6 +164,7 @@ const PATTERNS: Array<[RegExp, TokenCount]> = [
   [/^glm-4\.5-air(?:-.*)?$/, LIMITS['128k']],
   [/^glm-4\.5(?:-.*)?$/, LIMITS['128k']],
   [/^glm-4\.6(?:-.*)?$/, 202_752 as unknown as TokenCount], // exact limit from the model config file
+  [/^glm-4\.7(?:-.*)?$/, LIMITS['200k']],
 
   // -------------------
   // DeepSeek
@@ -170,10 +174,8 @@ const PATTERNS: Array<[RegExp, TokenCount]> = [
   // -------------------
   // Moonshot / Kimi
   // -------------------
-  [/^kimi-k2-0905$/, LIMITS['256k']], // Kimi-k2-0905-preview: 256K context
-  [/^kimi-k2-turbo.*$/, LIMITS['256k']], // Kimi-k2-turbo-preview: 256K context
-  [/^kimi-k2-0711$/, LIMITS['128k']], // Kimi-k2-0711-preview: 128K context
-  [/^kimi-k2-instruct.*$/, LIMITS['128k']], // Kimi-k2-instruct: 128K context
+  [/^kimi-2\.5.*$/, LIMITS['256k']], // Kimi-2.5: 256K context
+  [/^kimi-k2.*$/, LIMITS['256k']], // Kimi-k2 variants: 256K context
 
   // -------------------
   // GPT-OSS / Llama & Mistral examples
@@ -181,6 +183,11 @@ const PATTERNS: Array<[RegExp, TokenCount]> = [
   [/^gpt-oss.*$/, LIMITS['128k']],
   [/^llama-4-scout.*$/, LIMITS['10m']],
   [/^mistral-large-2.*$/, LIMITS['128k']],
+
+  // -------------------
+  // MiniMax
+  // -------------------
+  [/^minimax-m2\.1.*$/i, LIMITS['200k']], // MiniMax-M2.1: 200K context
 ];
 
 /**
@@ -195,7 +202,10 @@ const OUTPUT_PATTERNS: Array<[RegExp, TokenCount]> = [
   // Qwen3-Coder-Plus: 65,536 max output tokens
   [/^qwen3-coder-plus(-.*)?$/, LIMITS['64k']],
 
-  // Generic coder-model: same as qwen3-coder-plus (64K max output tokens)
+  // Qwen3.5-Plus: 65,536 max output tokens
+  [/^qwen3\.5-plus(-.*)?$/, LIMITS['64k']],
+
+  // Generic coder-model: same as qwen3.5-plus (64K max output tokens)
   [/^coder-model$/, LIMITS['64k']],
 
   // Qwen3-Max: 65,536 max output tokens
@@ -223,6 +233,10 @@ const OUTPUT_PATTERNS: Array<[RegExp, TokenCount]> = [
  * This function determines the maximum number of tokens for either input context
  * or output generation based on the model and token type. It uses the same
  * normalization logic for consistency across both input and output limits.
+ *
+ * This function is primarily used during config initialization to auto-detect
+ * token limits. After initialization, code should use contentGeneratorConfig.contextWindowSize
+ * or contentGeneratorConfig.maxOutputTokens directly.
  *
  * @param model - The model name to get the token limit for
  * @param type - The type of token limit ('input' for context window, 'output' for generation)

@@ -20,7 +20,8 @@ import type {
   PlanResultDisplay,
   AnsiOutput,
   Config,
-} from '@mmmbuto/qwen-code-termux-core';
+  McpToolProgressData,
+} from '@qwen-code/qwen-code-core';
 import { AgentExecutionDisplay } from '../subagents/index.js';
 import { PlanSummaryDisplay } from '../PlanSummaryDisplay.js';
 import { ShellInputPrompt } from '../ShellInputPrompt.js';
@@ -30,6 +31,8 @@ import {
   TOOL_STATUS,
 } from '../../constants.js';
 import { theme } from '../../semantic-colors.js';
+import { useSettings } from '../../contexts/SettingsContext.js';
+import type { LoadedSettings } from '../../../config/settings.js';
 
 const STATIC_HEIGHT = 1;
 const RESERVED_LINE_COUNT = 5; // for tool name, status, padding etc.
@@ -111,6 +114,22 @@ const useResultDisplayRenderer = (
       };
     }
 
+    // Check for McpToolProgressData
+    if (
+      typeof resultDisplay === 'object' &&
+      resultDisplay !== null &&
+      'type' in resultDisplay &&
+      resultDisplay.type === 'mcp_tool_progress'
+    ) {
+      const progress = resultDisplay as McpToolProgressData;
+      const msg = progress.message ?? `Progress: ${progress.progress}`;
+      const totalStr = progress.total != null ? `/${progress.total}` : '';
+      return {
+        type: 'string',
+        data: `⏳ [${progress.progress}${totalStr}] ${msg}`,
+      };
+    }
+
     // Check for AnsiOutput
     if (
       typeof resultDisplay === 'object' &&
@@ -186,7 +205,7 @@ const StringResultRenderer: React.FC<{
           text={displayData}
           isPending={false}
           availableTerminalHeight={availableHeight}
-          terminalWidth={childWidth}
+          contentWidth={childWidth}
         />
       </Box>
     );
@@ -210,18 +229,20 @@ const DiffResultRenderer: React.FC<{
   data: { fileDiff: string; fileName: string };
   availableHeight?: number;
   childWidth: number;
-}> = ({ data, availableHeight, childWidth }) => (
+  settings?: LoadedSettings;
+}> = ({ data, availableHeight, childWidth, settings }) => (
   <DiffRenderer
     diffContent={data.fileDiff}
     filename={data.fileName}
     availableTerminalHeight={availableHeight}
-    terminalWidth={childWidth}
+    contentWidth={childWidth}
+    settings={settings}
   />
 );
 
 export interface ToolMessageProps extends IndividualToolCallDisplay {
   availableTerminalHeight?: number;
-  terminalWidth: number;
+  contentWidth: number;
   emphasis?: TextEmphasis;
   renderOutputAsMarkdown?: boolean;
   activeShellPtyId?: number | null;
@@ -235,7 +256,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
   resultDisplay,
   status,
   availableTerminalHeight,
-  terminalWidth,
+  contentWidth,
   emphasis = 'medium',
   renderOutputAsMarkdown = true,
   activeShellPtyId,
@@ -243,6 +264,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
   ptyId,
   config,
 }) => {
+  const settings = useSettings();
   const isThisShellFocused =
     (name === SHELL_COMMAND_NAME || name === 'Shell') &&
     status === ToolCallStatus.Executing &&
@@ -291,6 +313,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
         MIN_LINES_SHOWN + 1, // enforce minimum lines shown
       )
     : undefined;
+  const innerWidth = contentWidth - STATUS_INDICATOR_WIDTH;
 
   // Long tool call response in MarkdownDisplay doesn't respect availableTerminalHeight properly,
   // we're forcing it to not render as markdown when the response is too long, it will fallback
@@ -298,8 +321,6 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
   if (availableHeight) {
     renderOutputAsMarkdown = false;
   }
-
-  const childWidth = terminalWidth - 3; // account for padding.
 
   // Use the custom hook to determine the display type
   const displayRenderer = useResultDisplayRenderer(resultDisplay);
@@ -333,14 +354,14 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
               <PlanResultRenderer
                 data={displayRenderer.data}
                 availableHeight={availableHeight}
-                childWidth={childWidth}
+                childWidth={innerWidth}
               />
             )}
             {displayRenderer.type === 'task' && config && (
               <SubagentExecutionRenderer
                 data={displayRenderer.data}
                 availableHeight={availableHeight}
-                childWidth={childWidth}
+                childWidth={innerWidth}
                 config={config}
               />
             )}
@@ -348,7 +369,8 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
               <DiffResultRenderer
                 data={displayRenderer.data}
                 availableHeight={availableHeight}
-                childWidth={childWidth}
+                childWidth={innerWidth}
+                settings={settings}
               />
             )}
             {displayRenderer.type === 'ansi' && (
@@ -362,7 +384,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 data={displayRenderer.data}
                 renderAsMarkdown={renderOutputAsMarkdown}
                 availableHeight={availableHeight}
-                childWidth={childWidth}
+                childWidth={innerWidth}
               />
             )}
           </Box>

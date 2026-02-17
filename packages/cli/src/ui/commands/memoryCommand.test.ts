@@ -7,7 +7,7 @@
 import type { Mock } from 'vitest';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { memoryCommand } from './memoryCommand.js';
-import type { SlashCommand, type CommandContext } from './types.js';
+import type { SlashCommand, CommandContext } from './types.js';
 import { createMockCommandContext } from '../../test-utils/mockCommandContext.js';
 import { MessageType } from '../types.js';
 import type { LoadedSettings } from '../../config/settings.js';
@@ -21,11 +21,11 @@ import {
   setGeminiMdFilename,
   type FileDiscoveryService,
   type LoadServerHierarchicalMemoryResponse,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 
-vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
+vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
   const original =
-    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
+    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
   return {
     ...original,
     getErrorMessage: vi.fn((error: unknown) => {
@@ -299,9 +299,7 @@ describe('memoryCommand', () => {
         services: {
           config: mockConfig,
           settings: {
-            merged: {
-              memoryDiscoveryMaxDirs: 1000,
-            },
+            merged: {},
           } as LoadedSettings,
         },
       });

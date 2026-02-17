@@ -16,7 +16,7 @@ import {
   USER_AGREEMENT_RATE_MEDIUM,
 } from '../utils/displayUtils.js';
 import { useSessionStats } from '../contexts/SessionContext.js';
-import type { ToolCallStats } from '@mmmbuto/qwen-code-termux-core';
+import type { ToolCallStats } from '@qwen-code/qwen-code-core';
 import { t } from '../../i18n/index.js';
 
 const TOOL_NAME_COL_WIDTH = 25;
@@ -53,7 +53,13 @@ const StatRow: React.FC<{
   );
 };
 
-export const ToolStatsDisplay: React.FC = () => {
+interface ToolStatsDisplayProps {
+  width?: number;
+}
+
+export const ToolStatsDisplay: React.FC<ToolStatsDisplayProps> = ({
+  width,
+}) => {
   const { stats } = useSessionStats();
   const { tools } = stats.metrics;
   const activeTools = Object.entries(tools.byName).filter(
@@ -67,6 +73,7 @@ export const ToolStatsDisplay: React.FC = () => {
         borderColor={theme.border.default}
         paddingY={1}
         paddingX={2}
+        width={width}
       >
         <Text color={theme.text.primary}>
           {t('No tool calls have been made in this session.')}
@@ -101,7 +108,7 @@ export const ToolStatsDisplay: React.FC = () => {
       flexDirection="column"
       paddingY={1}
       paddingX={2}
-      width={70}
+      width={width}
     >
       <Text bold color={theme.text.accent}>
         {t('Tool Stats For Nerds')}

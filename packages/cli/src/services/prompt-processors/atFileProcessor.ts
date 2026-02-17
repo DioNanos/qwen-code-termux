@@ -7,7 +7,8 @@
 import {
   flatMapTextParts,
   readPathFromWorkspace,
-} from '@mmmbuto/qwen-code-termux-core';
+  createDebugLogger,
+} from '@qwen-code/qwen-code-core';
 import type { CommandContext } from '../../ui/commands/types.js';
 import { MessageType } from '../../ui/types.js';
 import {
@@ -16,6 +17,8 @@ import {
   type PromptPipelineContent,
 } from './types.js';
 import { extractInjections } from './injectionParser.js';
+
+const debugLogger = createDebugLogger('AT_FILE_PROCESSOR');
 
 export class AtFileProcessor implements IPromptProcessor {
   constructor(private readonly commandName?: string) {}
@@ -68,7 +71,7 @@ export class AtFileProcessor implements IPromptProcessor {
             error instanceof Error ? error.message : String(error);
           const uiMessage = `Failed to inject content for '@{${pathStr}}': ${message}`;
 
-          console.error(
+          debugLogger.error(
             `[AtFileProcessor] ${uiMessage}. Leaving placeholder in prompt.`,
           );
           context.ui.addItem(

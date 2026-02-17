@@ -8,7 +8,7 @@ import * as vscode from 'vscode';
 import type {
   File,
   IdeContext,
-} from '@mmmbuto/qwen-code-termux-core/src/ide/types.js';
+} from '@qwen-code/qwen-code-core/src/ide/types.js';
 import {
   isFileUri,
   isNotebookFileUri,

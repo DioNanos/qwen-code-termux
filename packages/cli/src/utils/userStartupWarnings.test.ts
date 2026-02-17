@@ -10,11 +10,6 @@ import * as os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const isTermux = (): boolean =>
-  process.platform === 'android' ||
-  !!process.env['TERMUX_VERSION'] ||
-  !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'));
-
 // Mock os.homedir to control the home directory in tests
 vi.mock('os', async (importOriginal) => {
   const actualOs = await importOriginal<typeof os>();
@@ -56,15 +51,9 @@ describe('getUserStartupWarnings', () => {
         ...startupOptions,
         workspaceRoot: homeDir,
       });
-      if (isTermux()) {
-        expect(warnings).not.toContainEqual(
-          expect.stringContaining('home directory'),
-        );
-      } else {
-        expect(warnings).toContainEqual(
-          expect.stringContaining('home directory'),
-        );
-      }
+      expect(warnings).toContainEqual(
+        expect.stringContaining('home directory'),
+      );
     });
 
     it('should not return a warning when running in a project directory', async () => {
@@ -117,11 +106,7 @@ describe('getUserStartupWarnings', () => {
       });
       const expectedWarning =
         'Could not verify the current directory due to a file system error.';
-      if (isTermux()) {
-        expect(warnings).toEqual([expectedWarning]);
-      } else {
-        expect(warnings).toEqual([expectedWarning, expectedWarning]);
-      }
+      expect(warnings).toEqual([expectedWarning, expectedWarning]);
     });
   });
 });

@@ -7,18 +7,26 @@
 import { createContext, useContext } from 'react';
 import { type Key } from '../hooks/useKeypress.js';
 import { type IdeIntegrationNudgeResult } from '../IdeIntegrationNudge.js';
+import { type CommandMigrationNudgeResult } from '../CommandFormatMigrationNudge.js';
 import { type FolderTrustChoice } from '../components/FolderTrustDialog.js';
 import {
   type AuthType,
   type EditorType,
   type ApprovalMode,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { type SettingScope } from '../../config/settings.js';
 import type { AuthState } from '../types.js';
 import { type VisionSwitchOutcome } from '../components/ModelSwitchDialog.js';
-import { type OpenAICredentials } from '../components/OpenAIKeyPrompt.js';
+// OpenAICredentials type (previously imported from OpenAIKeyPrompt)
+export interface OpenAICredentials {
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
 
 export interface UIActions {
+  openThemeDialog: () => void;
+  openEditorDialog: () => void;
   handleThemeSelect: (
     themeName: string | undefined,
     scope: SettingScope,
@@ -32,8 +40,9 @@ export interface UIActions {
     authType: AuthType | undefined,
     credentials?: OpenAICredentials,
   ) => Promise<void>;
+  handleCodingPlanSubmit: (apiKey: string) => Promise<void>;
   setAuthState: (state: AuthState) => void;
-  onAuthError: (error: string) => void;
+  onAuthError: (error: string | null) => void;
   cancelAuthentication: () => void;
   handleEditorSelect: (
     editorType: EditorType | undefined,
@@ -42,18 +51,19 @@ export interface UIActions {
   exitEditorDialog: () => void;
   closeSettingsDialog: () => void;
   closeModelDialog: () => void;
+  dismissCodingPlanUpdate: () => void;
   closePermissionsDialog: () => void;
   setShellModeActive: (value: boolean) => void;
   vimHandleInput: (key: Key) => boolean;
   handleIdePromptComplete: (result: IdeIntegrationNudgeResult) => void;
+  handleCommandMigrationComplete: (result: CommandMigrationNudgeResult) => void;
   handleFolderTrustSelect: (choice: FolderTrustChoice) => void;
   setConstrainHeight: (value: boolean) => void;
   onEscapePromptChange: (show: boolean) => void;
+  onSuggestionsVisibilityChange: (visible: boolean) => void;
   refreshStatic: () => void;
   handleFinalSubmit: (value: string) => void;
   handleClearScreen: () => void;
-  onWorkspaceMigrationDialogOpen: () => void;
-  onWorkspaceMigrationDialogClose: () => void;
   // Vision switch dialog
   handleVisionSwitchSelect: (outcome: VisionSwitchOutcome) => void;
   // Welcome back dialog
@@ -66,6 +76,11 @@ export interface UIActions {
   openResumeDialog: () => void;
   closeResumeDialog: () => void;
   handleResume: (sessionId: string) => void;
+  // Feedback dialog
+  openFeedbackDialog: () => void;
+  closeFeedbackDialog: () => void;
+  temporaryCloseFeedbackDialog: () => void;
+  submitFeedback: (rating: number) => void;
 }
 
 export const UIActionsContext = createContext<UIActions | null>(null);

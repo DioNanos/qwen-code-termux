@@ -13,7 +13,7 @@ import { isSlashCommand } from '../utils/commandUtils.js';
 import { toCodePoints } from '../utils/textUtils.js';
 import { useAtCompletion } from './useAtCompletion.js';
 import { useSlashCompletion } from './useSlashCompletion.js';
-import type { Config } from '@mmmbuto/qwen-code-termux-core';
+import type { Config } from '@qwen-code/qwen-code-core';
 import { useCompletion } from './useCompletion.js';
 
 export enum CompletionMode {
@@ -45,6 +45,8 @@ export function useCommandCompletion(
   commandContext: CommandContext,
   reverseSearchActive: boolean = false,
   config?: Config,
+  // When false, suppresses showing suggestions (e.g., after history navigation)
+  active: boolean = true,
 ): UseCommandCompletionReturn {
   const {
     suggestions,
@@ -152,7 +154,11 @@ export function useCommandCompletion(
   }, [suggestions, setActiveSuggestionIndex, setVisibleStartIndex]);
 
   useEffect(() => {
-    if (completionMode === CompletionMode.IDLE || reverseSearchActive) {
+    if (
+      completionMode === CompletionMode.IDLE ||
+      reverseSearchActive ||
+      !active
+    ) {
       resetCompletionState();
       return;
     }
@@ -163,6 +169,7 @@ export function useCommandCompletion(
     suggestions.length,
     isLoadingSuggestions,
     reverseSearchActive,
+    active,
     resetCompletionState,
     setShowSuggestions,
   ]);

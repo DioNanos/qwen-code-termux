@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Config } from '@mmmbuto/qwen-code-termux-core';
+import type { Config } from '@qwen-code/qwen-code-core';
 import {
   getErrorMessage,
   getMCPServerPrompts,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import type {
   CommandContext,
   SlashCommand,

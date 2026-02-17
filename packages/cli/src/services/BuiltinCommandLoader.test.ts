@@ -8,7 +8,8 @@ vi.mock('../ui/commands/aboutCommand.js', async () => {
   const { CommandKind } = await import('../ui/commands/types.js');
   return {
     aboutCommand: {
-      name: 'about',
+      name: 'status',
+      altNames: ['about'],
       description: 'About the CLI',
       kind: CommandKind.BUILT_IN,
     },
@@ -49,7 +50,7 @@ vi.mock('../ui/commands/permissionsCommand.js', async () => {
 
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { BuiltinCommandLoader } from './BuiltinCommandLoader.js';
-import type { Config } from '@mmmbuto/qwen-code-termux-core';
+import type { Config } from '@qwen-code/qwen-code-core';
 import { CommandKind } from '../ui/commands/types.js';
 
 import { restoreCommand } from '../ui/commands/restoreCommand.js';
@@ -127,8 +128,8 @@ describe('BuiltinCommandLoader', () => {
     expect(ideCmd).toBeDefined();
 
     // Other commands should still be present.
-    const aboutCmd = commands.find((c) => c.name === 'about');
-    expect(aboutCmd).toBeDefined();
+    const statusCmd = commands.find((c) => c.name === 'status');
+    expect(statusCmd).toBeDefined();
   });
 
   it('should handle a null config gracefully when calling factories', async () => {
@@ -143,9 +144,9 @@ describe('BuiltinCommandLoader', () => {
     const loader = new BuiltinCommandLoader(mockConfig);
     const commands = await loader.loadCommands(new AbortController().signal);
 
-    const aboutCmd = commands.find((c) => c.name === 'about');
-    expect(aboutCmd).toBeDefined();
-    expect(aboutCmd?.kind).toBe(CommandKind.BUILT_IN);
+    const statusCmd = commands.find((c) => c.name === 'status');
+    expect(statusCmd).toBeDefined();
+    expect(statusCmd?.kind).toBe(CommandKind.BUILT_IN);
 
     const approvalModeCmd = commands.find((c) => c.name === 'approval-mode');
     expect(approvalModeCmd).toBeDefined();

@@ -10,7 +10,7 @@ import type {
   TaskResultDisplay,
   SubagentStatsSummary,
   Config,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { theme } from '../../../semantic-colors.js';
 import { useKeypress } from '../../../hooks/useKeypress.js';
 import { COLOR_OPTIONS } from '../constants.js';
@@ -172,7 +172,7 @@ export const AgentExecutionDisplay: React.FC<AgentExecutionDisplayProps> = ({
                   confirmationDetails={data.pendingConfirmation}
                   isFocused={true}
                   availableTerminalHeight={availableHeight}
-                  terminalWidth={childWidth}
+                  contentWidth={childWidth - 4}
                   compactMode={true}
                   config={config}
                 />
@@ -242,7 +242,7 @@ export const AgentExecutionDisplay: React.FC<AgentExecutionDisplayProps> = ({
             config={config}
             isFocused={true}
             availableTerminalHeight={availableHeight}
-            terminalWidth={childWidth}
+            contentWidth={childWidth - 4}
             compactMode={true}
           />
         </Box>

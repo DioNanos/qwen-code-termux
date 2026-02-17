@@ -5,8 +5,8 @@
  */
 
 import * as path from 'node:path';
-import type { Config } from '@mmmbuto/qwen-code-termux-core';
-import { Storage } from '@mmmbuto/qwen-code-termux-core';
+import type { Config } from '@qwen-code/qwen-code-core';
+import { Storage } from '@qwen-code/qwen-code-core';
 import mock from 'mock-fs';
 import { FileCommandLoader } from './FileCommandLoader.js';
 import { assert, vi } from 'vitest';
@@ -57,9 +57,9 @@ vi.mock('./prompt-processors/argumentProcessor.js', async (importOriginal) => {
       .mockImplementation(() => new original.DefaultArgumentProcessor()),
   };
 });
-vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
+vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
   const original =
-    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
+    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
   return {
     ...original,
     Storage: original.Storage,
@@ -662,8 +662,8 @@ describe('FileCommandLoader', () => {
       const result2 = await commands[2].action?.(
         createMockCommandContext({
           invocation: {
-            raw: '/deploy',
-            name: 'deploy',
+            raw: '/test-ext.deploy',
+            name: 'test-ext.deploy',
             args: '',
           },
         }),
@@ -812,8 +812,8 @@ describe('FileCommandLoader', () => {
       const result = await nestedCmd!.action?.(
         createMockCommandContext({
           invocation: {
-            raw: '/b:c',
-            name: 'b:c',
+            raw: '/a.b:c',
+            name: 'a.b:c',
             args: '',
           },
         }),

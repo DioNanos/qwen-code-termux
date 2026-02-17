@@ -7,8 +7,6 @@
 import { Box, Text } from 'ink';
 import { useAppContext } from '../contexts/AppContext.js';
 import { useUIState } from '../contexts/UIStateContext.js';
-import { useSettings } from '../contexts/SettingsContext.js';
-import { useConfig } from '../contexts/ConfigContext.js';
 import { theme } from '../semantic-colors.js';
 import { StreamingState } from '../types.js';
 import { UpdateNotification } from './UpdateNotification.js';
@@ -16,19 +14,10 @@ import { UpdateNotification } from './UpdateNotification.js';
 export const Notifications = () => {
   const { startupWarnings } = useAppContext();
   const { initError, streamingState, updateInfo } = useUIState();
-  const settings = useSettings();
-  const config = useConfig();
 
-  const showStartupWarnings =
-    !settings.merged.ui?.hideBanner &&
-    !config.getScreenReader() &&
-    startupWarnings.length > 0;
+  const showStartupWarnings = startupWarnings.length > 0;
   const showInitError =
     initError && streamingState !== StreamingState.Responding;
-
-  if (!showStartupWarnings && !showInitError && !updateInfo) {
-    return null;
-  }
 
   return (
     <>

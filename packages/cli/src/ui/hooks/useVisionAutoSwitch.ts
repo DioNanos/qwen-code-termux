@@ -5,11 +5,7 @@
  */
 
 import { type PartListUnion, type Part } from '@google/genai';
-import {
-  AuthType,
-  type Config,
-  ApprovalMode,
-} from '@mmmbuto/qwen-code-termux-core';
+import { AuthType, type Config, ApprovalMode } from '@qwen-code/qwen-code-core';
 import { useCallback, useRef } from 'react';
 import { VisionSwitchOutcome } from '../components/ModelSwitchDialog.js';
 import {
@@ -21,7 +17,7 @@ import type { UseHistoryManagerReturn } from './useHistoryManager.js';
 import {
   isSupportedImageMimeType,
   getUnsupportedImageFormatWarning,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 
 /**
  * Checks if a PartListUnion contains image parts

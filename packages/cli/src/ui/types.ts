@@ -11,7 +11,7 @@ import type {
   ToolCallConfirmationDetails,
   ToolConfirmationOutcome,
   ToolResultDisplay,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import type { PartListUnion } from '@google/genai';
 import { type ReactNode } from 'react';
 
@@ -125,6 +125,11 @@ export type HistoryItemError = HistoryItemBase & {
 
 export type HistoryItemWarning = HistoryItemBase & {
   type: 'warning';
+  text: string;
+};
+
+export type HistoryItemRetryCountdown = HistoryItemBase & {
+  type: 'retry_countdown';
   text: string;
 };
 
@@ -265,6 +270,7 @@ export type HistoryItemWithoutId =
   | HistoryItemInfo
   | HistoryItemError
   | HistoryItemWarning
+  | HistoryItemRetryCountdown
   | HistoryItemAbout
   | HistoryItemHelp
   | HistoryItemToolGroup
@@ -413,4 +419,24 @@ export interface ConfirmationRequest {
 
 export interface LoopDetectionConfirmationRequest {
   onComplete: (result: { userSelection: 'disable' | 'keep' }) => void;
+}
+
+export interface SettingInputRequest {
+  settingName: string;
+  settingDescription: string;
+  sensitive: boolean;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}
+
+export interface PluginChoice {
+  name: string;
+  description?: string;
+}
+
+export interface PluginChoiceRequest {
+  marketplaceName: string;
+  plugins: PluginChoice[];
+  onSelect: (pluginName: string) => void;
+  onCancel: () => void;
 }

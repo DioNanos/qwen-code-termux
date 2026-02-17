@@ -20,10 +20,11 @@ COPY . /home/node/app
 WORKDIR /home/node/app
 
 # Install dependencies and build packages
+# Use scripts/build.js which handles workspace dependencies in correct order
 RUN npm ci \
-  && npm run build --workspaces \
-  && npm pack -w @mmmbuto/qwen-code-termux --pack-destination ./packages/cli/dist \
-  && npm pack -w @mmmbuto/qwen-code-termux-core --pack-destination ./packages/core/dist
+  && npm run build \
+  && npm pack -w @qwen-code/qwen-code --pack-destination ./packages/cli/dist \
+  && npm pack -w @qwen-code/qwen-code-core --pack-destination ./packages/core/dist
 
 # Runtime stage
 FROM docker.io/library/node:20-slim

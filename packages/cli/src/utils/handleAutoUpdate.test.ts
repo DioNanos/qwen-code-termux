@@ -57,7 +57,7 @@ describe('handleAutoUpdate', () => {
         latest: '2.0.0',
         current: '1.0.0',
         type: 'major',
-        name: '@mmmbuto/qwen-code-termux',
+        name: '@qwen-code/qwen-code',
       },
       message: 'An update is available!',
     };
@@ -65,7 +65,7 @@ describe('handleAutoUpdate', () => {
     mockSettings = {
       merged: {
         general: {
-          disableAutoUpdate: false,
+          enableAutoUpdate: true,
         },
       },
     } as LoadedSettings;
@@ -94,32 +94,29 @@ describe('handleAutoUpdate', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it('should do nothing if update nag is disabled', () => {
-    mockSettings.merged.general!.disableUpdateNag = true;
-    handleAutoUpdate(mockUpdateInfo, mockSettings, '/root', mockSpawn);
-    expect(mockGetInstallationInfo).not.toHaveBeenCalled();
-    expect(mockUpdateEventEmitter.emit).not.toHaveBeenCalled();
-    expect(mockSpawn).not.toHaveBeenCalled();
-  });
-
-  it('should emit "update-received" but not update if auto-updates are disabled', () => {
-    mockSettings.merged.general!.disableAutoUpdate = true;
+  it('should show manual update message when enableAutoUpdate is false', () => {
+    // When enableAutoUpdate is false, gemini.tsx won't call checkForUpdates(),
+    // but if handleAutoUpdate is still called, it should show a manual update message.
+    mockSettings.merged.general!.enableAutoUpdate = false;
     mockGetInstallationInfo.mockReturnValue({
-      updateCommand: 'npm i -g @mmmbuto/qwen-code-termux@latest',
-      updateMessage: 'Please update manually.',
+      updateCommand: 'npm i -g @qwen-code/qwen-code@latest',
+      updateMessage:
+        'Please run npm i -g @qwen-code/qwen-code@latest to update',
       isGlobal: true,
       packageManager: PackageManager.NPM,
     });
 
     handleAutoUpdate(mockUpdateInfo, mockSettings, '/root', mockSpawn);
 
-    expect(mockUpdateEventEmitter.emit).toHaveBeenCalledTimes(1);
+    // Should still emit update-received with manual update message
     expect(mockUpdateEventEmitter.emit).toHaveBeenCalledWith(
       'update-received',
       {
-        message: 'An update is available!\nPlease update manually.',
+        message:
+          'An update is available!\nPlease run npm i -g @qwen-code/qwen-code@latest to update',
       },
     );
+    // Should NOT spawn update when enableAutoUpdate is false
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
@@ -164,7 +161,7 @@ describe('handleAutoUpdate', () => {
 
   it('should attempt to perform an update when conditions are met', async () => {
     mockGetInstallationInfo.mockReturnValue({
-      updateCommand: 'npm i -g @mmmbuto/qwen-code-termux@latest',
+      updateCommand: 'npm i -g @qwen-code/qwen-code@latest',
       updateMessage: 'This is an additional message.',
       isGlobal: false,
       packageManager: PackageManager.NPM,
@@ -183,7 +180,7 @@ describe('handleAutoUpdate', () => {
   it('should emit "update-failed" when the update process fails', async () => {
     await new Promise<void>((resolve) => {
       mockGetInstallationInfo.mockReturnValue({
-        updateCommand: 'npm i -g @mmmbuto/qwen-code-termux@latest',
+        updateCommand: 'npm i -g @qwen-code/qwen-code@latest',
         updateMessage: 'This is an additional message.',
         isGlobal: false,
         packageManager: PackageManager.NPM,
@@ -201,14 +198,14 @@ describe('handleAutoUpdate', () => {
 
     expect(mockUpdateEventEmitter.emit).toHaveBeenCalledWith('update-failed', {
       message:
-        'Automatic update failed. Please try updating manually. (command: npm i -g @mmmbuto/qwen-code-termux@2.0.0, stderr: An error occurred)',
+        'Automatic update failed. Please try updating manually. (command: npm i -g @qwen-code/qwen-code@2.0.0, stderr: An error occurred)',
     });
   });
 
   it('should emit "update-failed" when the spawn function throws an error', async () => {
     await new Promise<void>((resolve) => {
       mockGetInstallationInfo.mockReturnValue({
-        updateCommand: 'npm i -g @mmmbuto/qwen-code-termux@latest',
+        updateCommand: 'npm i -g @qwen-code/qwen-code@latest',
         updateMessage: 'This is an additional message.',
         isGlobal: false,
         packageManager: PackageManager.NPM,
@@ -232,7 +229,7 @@ describe('handleAutoUpdate', () => {
   it('should use the "@nightly" tag for nightly updates', async () => {
     mockUpdateInfo.update.latest = '2.0.0-nightly';
     mockGetInstallationInfo.mockReturnValue({
-      updateCommand: 'npm i -g @mmmbuto/qwen-code-termux@latest',
+      updateCommand: 'npm i -g @qwen-code/qwen-code@latest',
       updateMessage: 'This is an additional message.',
       isGlobal: false,
       packageManager: PackageManager.NPM,
@@ -241,9 +238,12 @@ describe('handleAutoUpdate', () => {
     handleAutoUpdate(mockUpdateInfo, mockSettings, '/root', mockSpawn);
 
     expect(mockSpawn).toHaveBeenCalledWith(
-      'npm i -g @mmmbuto/qwen-code-termux@nightly',
+      expect.stringMatching(/^(bash|cmd\.exe)$/),
+      expect.arrayContaining([
+        expect.stringMatching(/^(-c|\/c)$/),
+        'npm i -g @qwen-code/qwen-code@nightly',
+      ]),
       {
-        shell: true,
         stdio: 'pipe',
       },
     );
@@ -252,7 +252,7 @@ describe('handleAutoUpdate', () => {
   it('should emit "update-success" when the update process succeeds', async () => {
     await new Promise<void>((resolve) => {
       mockGetInstallationInfo.mockReturnValue({
-        updateCommand: 'npm i -g @mmmbuto/qwen-code-termux@latest',
+        updateCommand: 'npm i -g @qwen-code/qwen-code@latest',
         updateMessage: 'This is an additional message.',
         isGlobal: false,
         packageManager: PackageManager.NPM,

@@ -9,7 +9,7 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import type { CommandContext } from '../ui/commands/types.js';
 import { getCliVersion } from './version.js';
-import { IdeClient, AuthType } from '@mmmbuto/qwen-code-termux-core';
+import { IdeClient, AuthType } from '@qwen-code/qwen-code-core';
 import { formatMemoryUsage } from '../ui/utils/formatters.js';
 import { GIT_COMMIT_INFO } from '../generated/git-commit.js';
 
@@ -29,6 +29,7 @@ export interface SystemInfo {
   selectedAuthType: string;
   ideClient: string;
   sessionId: string;
+  proxy?: string;
 }
 
 /**
@@ -38,6 +39,7 @@ export interface ExtendedSystemInfo extends SystemInfo {
   memoryUsage: string;
   baseUrl?: string;
   gitCommit?: string;
+  proxy?: string;
 }
 
 /**
@@ -118,6 +120,7 @@ export async function getSystemInfo(
   const selectedAuthType = context.services.config?.getAuthType() || '';
   const ideClient = await getIdeClientName(context);
   const sessionId = context.services.config?.getSessionId() || 'unknown';
+  const proxy = context.services.config?.getProxy();
 
   return {
     cliVersion,
@@ -131,6 +134,7 @@ export async function getSystemInfo(
     selectedAuthType,
     ideClient,
     sessionId,
+    proxy,
   };
 }
 

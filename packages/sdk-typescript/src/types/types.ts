@@ -3,10 +3,11 @@ import type {
   PermissionSuggestion,
   SubagentConfig,
   SDKMcpServerConfig,
+  AuthType,
 } from './protocol.js';
 import type { SpawnInfo } from '../utils/cliPath.js';
 
-export type { PermissionMode };
+export type { PermissionMode, AuthType };
 
 export type TransportOptions = {
   pathToQwenExecutable?: string;
@@ -23,8 +24,26 @@ export type TransportOptions = {
   coreTools?: string[];
   excludeTools?: string[];
   allowedTools?: string[];
-  authType?: string;
+  authType?: AuthType;
   includePartialMessages?: boolean;
+  /**
+   * Resume the most recent session for the current project.
+   * Equivalent to CLI's --continue flag.
+   * @default false
+   */
+  continue?: boolean;
+  /**
+   * Resume a specific session by its ID.
+   * Equivalent to CLI's --resume flag.
+   * When provided, takes precedence over `continue`.
+   */
+  resume?: string;
+  /**
+   * Session ID to use for this session.
+   * Passed to CLI via --session-id to ensure consistent session ID.
+   * When resume is provided, this should match the resume ID.
+   */
+  sessionId?: string;
 };
 
 type ToolInput = Record<string, unknown>;
@@ -82,7 +101,7 @@ export type McpAuthProviderType =
  * - Streamable HTTP: httpUrl, headers
  * - WebSocket: tcp
  *
- * This interface aligns with MCPServerConfig in @mmmbuto/qwen-code-termux-core.
+ * This interface aligns with MCPServerConfig in @qwen-code/qwen-code-core.
  */
 export interface CLIMcpServerConfig {
   // For stdio transport
@@ -384,7 +403,7 @@ export interface QueryOptions {
    * Though we support 'qwen-oauth', it's not recommended to use it in the SDK.
    * Because the credentials are stored in `~/.qwen` and may need to refresh periodically.
    */
-  authType?: 'openai' | 'qwen-oauth';
+  authType?: AuthType;
 
   /**
    * Configuration for subagents that can be invoked during the session.
@@ -401,6 +420,21 @@ export interface QueryOptions {
    * @default false
    */
   includePartialMessages?: boolean;
+
+  /**
+   * Resume a previous session by providing its session ID.
+   * This is equivalent to using the `--resume` flag in the Qwen CLI.
+   * @example '123e4567-e89b-12d3-a456-426614174000'
+   */
+  resume?: string;
+
+  /**
+   * Specify a session ID for the new session.
+   * This ensures the SDK and CLI use the same session ID without resuming a previous session.
+   * Equivalent to CLI's `--session-id` flag.
+   * @example '123e4567-e89b-12d3-a456-426614174000'
+   */
+  sessionId?: string;
 
   /**
    * Timeout configuration for various SDK operations.

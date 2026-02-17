@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import * as os from 'node:os';
 import path from 'node:path';
-import { canUseRipgrep } from '@mmmbuto/qwen-code-termux-core';
+import { canUseRipgrep } from '@qwen-code/qwen-code-core';
 
 type WarningCheckOptions = {
   workspaceRoot: string;
@@ -19,16 +19,6 @@ type WarningCheck = {
   id: string;
   check: (options: WarningCheckOptions) => Promise<string | null>;
 };
-
-function isTermux(): boolean {
-  return (
-    process.platform === 'android' ||
-    !!process.env['TERMUX_VERSION'] ||
-    !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'))
-  );
-}
-
-const IS_TERMUX = isTermux();
 
 // Individual warning checks
 const homeDirectoryCheck: WarningCheck = {
@@ -73,10 +63,6 @@ const rootDirectoryCheck: WarningCheck = {
 const ripgrepAvailabilityCheck: WarningCheck = {
   id: 'ripgrep-availability',
   check: async (options: WarningCheckOptions) => {
-    if (IS_TERMUX) {
-      // Termux users often don't have rg installed; avoid noisy startup warning.
-      return null;
-    }
     if (!options.useRipgrep) {
       return null;
     }
@@ -95,7 +81,7 @@ const ripgrepAvailabilityCheck: WarningCheck = {
 
 // All warning checks
 const WARNING_CHECKS: readonly WarningCheck[] = [
-  ...(IS_TERMUX ? [] : [homeDirectoryCheck]),
+  homeDirectoryCheck,
   rootDirectoryCheck,
   ripgrepAvailabilityCheck,
 ];

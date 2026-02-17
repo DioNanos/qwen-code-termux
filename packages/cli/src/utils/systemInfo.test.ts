@@ -16,7 +16,7 @@ import type { CommandContext } from '../ui/commands/types.js';
 import { createMockCommandContext } from '../test-utils/mockCommandContext.js';
 import * as child_process from 'node:child_process';
 import os from 'node:os';
-import { IdeClient } from '@mmmbuto/qwen-code-termux-core';
+import { IdeClient } from '@qwen-code/qwen-code-core';
 import * as versionUtils from './version.js';
 import type { ExecSyncOptions } from 'node:child_process';
 
@@ -32,9 +32,9 @@ vi.mock('./version.js', () => ({
   getCliVersion: vi.fn(),
 }));
 
-vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
+vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
+    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
   return {
     ...actual,
     IdeClient: {
@@ -58,6 +58,7 @@ describe('systemInfo', () => {
           getIdeMode: vi.fn().mockReturnValue(true),
           getSessionId: vi.fn().mockReturnValue('test-session-id'),
           getAuthType: vi.fn().mockReturnValue('test-auth'),
+          getProxy: vi.fn().mockReturnValue(undefined),
           getContentGeneratorConfig: vi.fn().mockReturnValue({
             baseUrl: 'https://api.openai.com',
           }),
@@ -235,6 +236,7 @@ describe('systemInfo', () => {
         selectedAuthType: 'test-auth',
         ideClient: 'test-ide',
         sessionId: 'test-session-id',
+        proxy: undefined,
       });
     });
 
@@ -270,7 +272,7 @@ describe('systemInfo', () => {
         },
       );
 
-      const { AuthType } = await import('@mmmbuto/qwen-code-termux-core');
+      const { AuthType } = await import('@qwen-code/qwen-code-core');
       // Update the mock context to use OpenAI auth
       mockContext.services.settings.merged.security!.auth!.selectedType =
         AuthType.USE_OPENAI;

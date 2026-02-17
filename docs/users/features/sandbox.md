@@ -7,7 +7,7 @@ This document explains how to run Qwen Code inside a sandbox to reduce risk when
 Before using sandboxing, you need to install and set up Qwen Code:
 
 ```bash
-npm install -g @mmmbuto/qwen-code-termux
+npm install -g @qwen-code/qwen-code
 ```
 
 To verify the installation

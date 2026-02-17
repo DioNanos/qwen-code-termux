@@ -93,31 +93,51 @@ if (fs.existsSync(localesSourceDir)) {
   console.warn(`Warning: locales folder not found at ${localesSourceDir}`);
 }
 
+// Copy extensions folder
+console.log('Copying extension examples folder...');
+const extensionExamplesDir = path.join(
+  rootDir,
+  'packages',
+  'cli',
+  'src',
+  'commands',
+  'extensions',
+  'examples',
+);
+const extensionExamplesDestDir = path.join(distDir, 'examples');
+
+if (fs.existsSync(extensionExamplesDir)) {
+  // Recursive copy function
+  function copyRecursiveSync(src, dest) {
+    const stats = fs.statSync(src);
+    if (stats.isDirectory()) {
+      if (!fs.existsSync(dest)) {
+        fs.mkdirSync(dest, { recursive: true });
+      }
+      const entries = fs.readdirSync(src);
+      for (const entry of entries) {
+        const srcPath = path.join(src, entry);
+        const destPath = path.join(dest, entry);
+        copyRecursiveSync(srcPath, destPath);
+      }
+    } else {
+      fs.copyFileSync(src, dest);
+    }
+  }
+
+  copyRecursiveSync(extensionExamplesDir, extensionExamplesDestDir);
+  console.log('Copied extension examples folder');
+} else {
+  console.warn(
+    `Warning: extension examples folder not found at ${extensionExamplesDir}`,
+  );
+}
+
 // Copy package.json from root and modify it for publishing
 console.log('Creating package.json for distribution...');
 const rootPackageJson = JSON.parse(
   fs.readFileSync(path.join(rootDir, 'package.json'), 'utf-8'),
 );
-const corePackageJson = JSON.parse(
-  fs.readFileSync(
-    path.join(rootDir, 'packages', 'core', 'package.json'),
-    'utf-8',
-  ),
-);
-
-const runtimeDependencies = {};
-if (corePackageJson.dependencies?.tiktoken) {
-  runtimeDependencies.tiktoken = corePackageJson.dependencies.tiktoken;
-}
-const isTermuxBuild =
-  process.platform === 'android' ||
-  !!process.env['TERMUX_VERSION'] ||
-  !!(process.env['PREFIX'] && process.env['PREFIX'].includes('com.termux'));
-const optionalDependencies = isTermuxBuild
-  ? {
-      '@mmmbuto/node-pty-android-arm64': '1.1.0',
-    }
-  : undefined;
 
 // Create a clean package.json for the published package
 const distPackageJson = {
@@ -131,19 +151,18 @@ const distPackageJson = {
   bin: {
     qwen: 'cli.js',
   },
-  files: [
-    'cli.js',
-    'vendor',
-    '*.sb',
-    'tiktoken_bg.wasm',
-    'README.md',
-    'LICENSE',
-    'locales',
-  ],
+  files: ['cli.js', 'vendor', '*.sb', 'README.md', 'LICENSE', 'locales'],
   config: rootPackageJson.config,
-  dependencies: runtimeDependencies,
+  dependencies: {},
+  optionalDependencies: {
+    '@lydell/node-pty': '1.1.0',
+    '@lydell/node-pty-darwin-arm64': '1.1.0',
+    '@lydell/node-pty-darwin-x64': '1.1.0',
+    '@lydell/node-pty-linux-x64': '1.1.0',
+    '@lydell/node-pty-win32-arm64': '1.1.0',
+    '@lydell/node-pty-win32-x64': '1.1.0',
+  },
   engines: rootPackageJson.engines,
-  ...(optionalDependencies ? { optionalDependencies } : {}),
 };
 
 fs.writeFileSync(

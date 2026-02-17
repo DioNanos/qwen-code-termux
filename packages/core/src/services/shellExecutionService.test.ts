@@ -21,7 +21,7 @@ const mockGetPty = vi.hoisted(() => vi.fn());
 const mockSerializeTerminalToObject = vi.hoisted(() => vi.fn());
 
 // Top-level Mocks
-vi.mock('@mmmbuto/node-pty-android-arm64', () => ({
+vi.mock('@lydell/node-pty', () => ({
   spawn: mockPtySpawn,
 }));
 vi.mock('child_process', () => ({
@@ -114,7 +114,7 @@ describe('ShellExecutionService', () => {
     mockPlatform.mockReturnValue('linux');
     mockGetPty.mockResolvedValue({
       module: { spawn: mockPtySpawn },
-      name: 'mmmbuto-node-pty',
+      name: 'mock-pty',
     });
 
     onOutputEventMock = vi.fn();
@@ -580,9 +580,11 @@ describe('ShellExecutionService child_process fallback', () => {
       });
 
       expect(mockCpSpawn).toHaveBeenCalledWith(
-        'ls -l',
-        [],
-        expect.objectContaining({ shell: 'bash' }),
+        'bash',
+        ['-c', 'ls -l'],
+        expect.objectContaining({
+          detached: true,
+        }),
       );
       expect(result.exitCode).toBe(0);
       expect(result.signal).toBeNull();
@@ -825,10 +827,9 @@ describe('ShellExecutionService child_process fallback', () => {
       );
 
       expect(mockCpSpawn).toHaveBeenCalledWith(
-        'dir "foo bar"',
-        [],
+        'cmd.exe',
+        ['/c', 'dir "foo bar"'],
         expect.objectContaining({
-          shell: true,
           detached: false,
           windowsHide: true,
         }),
@@ -840,10 +841,9 @@ describe('ShellExecutionService child_process fallback', () => {
       await simulateExecution('ls "foo bar"', (cp) => cp.emit('exit', 0, null));
 
       expect(mockCpSpawn).toHaveBeenCalledWith(
-        'ls "foo bar"',
-        [],
+        'bash',
+        ['-c', 'ls "foo bar"'],
         expect.objectContaining({
-          shell: 'bash',
           detached: true,
         }),
       );
@@ -886,7 +886,7 @@ describe('ShellExecutionService execution method selection', () => {
     mockPtySpawn.mockReturnValue(mockPtyProcess);
     mockGetPty.mockResolvedValue({
       module: { spawn: mockPtySpawn },
-      name: 'mmmbuto-node-pty',
+      name: 'mock-pty',
     });
 
     // Mock for child_process
@@ -920,7 +920,7 @@ describe('ShellExecutionService execution method selection', () => {
     expect(mockGetPty).toHaveBeenCalled();
     expect(mockPtySpawn).toHaveBeenCalled();
     expect(mockCpSpawn).not.toHaveBeenCalled();
-    expect(result.executionMethod).toBe('mmmbuto-node-pty');
+    expect(result.executionMethod).toBe('mock-pty');
   });
 
   it('should use child_process when shouldUseNodePty is false', async () => {

@@ -16,9 +16,10 @@ import type {
   ThoughtSummary,
   ToolCallRequestInfo,
   GeminiErrorEventValue,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import {
   GeminiEventType as ServerGeminiEventType,
+  createDebugLogger,
   getErrorMessage,
   isNodeError,
   MessageSenderType,
@@ -34,7 +35,7 @@ import {
   ToolConfirmationOutcome,
   logApiCancel,
   ApiCancelEvent,
-} from '@mmmbuto/qwen-code-termux-core';
+} from '@qwen-code/qwen-code-core';
 import { type Part, type PartListUnion, FinishReason } from '@google/genai';
 import type {
   HistoryItem,
@@ -62,8 +63,10 @@ import {
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { useSessionStats } from '../contexts/SessionContext.js';
-import { useKeypress } from './useKeypress.js';
 import type { LoadedSettings } from '../../config/settings.js';
+import { t } from '../../i18n/index.js';
+
+const debugLogger = createDebugLogger('GEMINI_STREAM');
 
 enum StreamProcessingStatus {
   Completed,
@@ -112,7 +115,6 @@ export const useGeminiStream = (
     persistSessionModel?: string;
     showGuidance?: boolean;
   }>,
-  isShellFocused?: boolean,
 ) => {
   const [initError, setInitError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -122,6 +124,16 @@ export const useGeminiStream = (
   const [thought, setThought] = useState<ThoughtSummary | null>(null);
   const [pendingHistoryItem, pendingHistoryItemRef, setPendingHistoryItem] =
     useStateAndRef<HistoryItemWithoutId | null>(null);
+  const [pendingRetryErrorItem, setPendingRetryErrorItem] =
+    useState<HistoryItemWithoutId | null>(null);
+  const [
+    pendingRetryCountdownItem,
+    pendingRetryCountdownItemRef,
+    setPendingRetryCountdownItem,
+  ] = useStateAndRef<HistoryItemWithoutId | null>(null);
+  const retryCountdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const processedMemoryToolsRef = useRef<Set<string>>(new Set());
   const {
     startNewPrompt,
@@ -185,6 +197,69 @@ export const useGeminiStream = (
   ] = useState<{
     onComplete: (result: { userSelection: 'disable' | 'keep' }) => void;
   } | null>(null);
+
+  const stopRetryCountdownTimer = useCallback(() => {
+    if (retryCountdownTimerRef.current) {
+      clearInterval(retryCountdownTimerRef.current);
+      retryCountdownTimerRef.current = null;
+    }
+  }, []);
+
+  const clearRetryCountdown = useCallback(() => {
+    stopRetryCountdownTimer();
+    setPendingRetryErrorItem(null);
+    setPendingRetryCountdownItem(null);
+  }, [setPendingRetryCountdownItem, stopRetryCountdownTimer]);
+
+  const startRetryCountdown = useCallback(
+    (retryInfo: {
+      message?: string;
+      attempt: number;
+      maxRetries: number;
+      delayMs: number;
+    }) => {
+      stopRetryCountdownTimer();
+      const startTime = Date.now();
+      const { message, attempt, maxRetries, delayMs } = retryInfo;
+      const retryReasonText =
+        message ?? t('Rate limit exceeded. Please wait and try again.');
+
+      // Error line stays static (red with ✕ prefix)
+      setPendingRetryErrorItem({
+        type: MessageType.ERROR,
+        text: retryReasonText,
+      });
+
+      // Countdown line updates every second (dim/secondary color)
+      const updateCountdown = () => {
+        const elapsedMs = Date.now() - startTime;
+        const remainingMs = Math.max(0, delayMs - elapsedMs);
+        const remainingSec = Math.ceil(remainingMs / 1000);
+
+        setPendingRetryCountdownItem({
+          type: 'retry_countdown',
+          text: t(
+            'Retrying in {{seconds}} seconds… (attempt {{attempt}}/{{maxRetries}})',
+            {
+              seconds: String(remainingSec),
+              attempt: String(attempt),
+              maxRetries: String(maxRetries),
+            },
+          ),
+        } as HistoryItemWithoutId);
+
+        if (remainingMs <= 0) {
+          stopRetryCountdownTimer();
+        }
+      };
+
+      updateCountdown();
+      retryCountdownTimerRef.current = setInterval(updateCountdown, 1000);
+    },
+    [setPendingRetryCountdownItem, stopRetryCountdownTimer],
+  );
+
+  useEffect(() => () => stopRetryCountdownTimer(), [stopRetryCountdownTimer]);
 
   const onExec = useCallback(async (done: Promise<void>) => {
     setIsResponding(true);
@@ -292,6 +367,7 @@ export const useGeminiStream = (
       Date.now(),
     );
     setPendingHistoryItem(null);
+    clearRetryCountdown();
     onCancelSubmit();
     setIsResponding(false);
     setShellInputFocused(false);
@@ -302,18 +378,10 @@ export const useGeminiStream = (
     onCancelSubmit,
     pendingHistoryItemRef,
     setShellInputFocused,
+    clearRetryCountdown,
     config,
     getPromptCount,
   ]);
-
-  useKeypress(
-    (key) => {
-      if (key.name === 'escape' && !isShellFocused) {
-        cancelOngoingRequest();
-      }
-    },
-    { isActive: streamingState === StreamingState.Responding },
-  );
 
   const prepareQueryForGemini = useCallback(
     async (
@@ -336,7 +404,7 @@ export const useGeminiStream = (
 
       if (typeof query === 'string') {
         const trimmedQuery = query.trim();
-        onDebugMessage(`User query: '${trimmedQuery}'`);
+        onDebugMessage(`Received user query (${trimmedQuery.length} chars)`);
         await logger?.logMessage(MessageSenderType.USER, trimmedQuery);
 
         // Handle UI-only commands first
@@ -382,34 +450,28 @@ export const useGeminiStream = (
           return { queryToSend: null, shouldProceed: false };
         }
 
+        localQueryToSendToGemini = trimmedQuery;
+
+        addItem(
+          { type: MessageType.USER, text: trimmedQuery },
+          userMessageTimestamp,
+        );
+
         // Handle @-commands (which might involve tool calls)
         if (isAtCommand(trimmedQuery)) {
           const atCommandResult = await handleAtCommand({
             query: trimmedQuery,
             config,
-            addItem,
             onDebugMessage,
             messageId: userMessageTimestamp,
             signal: abortSignal,
+            addItem,
           });
-
-          // Add user's turn after @ command processing is done.
-          addItem(
-            { type: MessageType.USER, text: trimmedQuery },
-            userMessageTimestamp,
-          );
 
           if (!atCommandResult.shouldProceed) {
             return { queryToSend: null, shouldProceed: false };
           }
           localQueryToSendToGemini = atCommandResult.processedQuery;
-        } else {
-          // Normal query for Gemini
-          addItem(
-            { type: MessageType.USER, text: trimmedQuery },
-            userMessageTimestamp,
-          );
-          localQueryToSendToGemini = trimmedQuery;
         }
       } else {
         // It's a function response (PartListUnion that isn't a string)
@@ -612,10 +674,17 @@ export const useGeminiStream = (
         { type: MessageType.INFO, text: 'User cancelled the request.' },
         userMessageTimestamp,
       );
+      clearRetryCountdown();
       setIsResponding(false);
       setThought(null); // Reset thought when user cancels
     },
-    [addItem, pendingHistoryItemRef, setPendingHistoryItem, setThought],
+    [
+      addItem,
+      pendingHistoryItemRef,
+      setPendingHistoryItem,
+      setThought,
+      clearRetryCountdown,
+    ],
   );
 
   const handleErrorEvent = useCallback(
@@ -634,9 +703,17 @@ export const useGeminiStream = (
         },
         userMessageTimestamp,
       );
+      clearRetryCountdown();
       setThought(null); // Reset thought when there's an error
     },
-    [addItem, pendingHistoryItemRef, setPendingHistoryItem, config, setThought],
+    [
+      addItem,
+      pendingHistoryItemRef,
+      setPendingHistoryItem,
+      config,
+      setThought,
+      clearRetryCountdown,
+    ],
   );
 
   const handleCitationEvent = useCallback(
@@ -696,8 +773,9 @@ export const useGeminiStream = (
           userMessageTimestamp,
         );
       }
+      clearRetryCountdown();
     },
-    [addItem],
+    [addItem, clearRetryCountdown],
   );
 
   const handleChatCompressionEvent = useCallback(
@@ -856,7 +934,16 @@ export const useGeminiStream = (
             loopDetectedRef.current = true;
             break;
           case ServerGeminiEventType.Retry:
-            // Will add the missing logic later
+            // Clear any pending partial content from the failed attempt
+            if (pendingHistoryItemRef.current) {
+              setPendingHistoryItem(null);
+            }
+            // Show retry info if available (rate-limit / throttling errors)
+            if (event.retryInfo) {
+              startRetryCountdown(event.retryInfo);
+            } else if (!pendingRetryCountdownItemRef.current) {
+              clearRetryCountdown();
+            }
             break;
           default: {
             // enforces exhaustive switch-case
@@ -881,7 +968,12 @@ export const useGeminiStream = (
       handleMaxSessionTurnsEvent,
       handleSessionTokenLimitExceededEvent,
       handleCitationEvent,
+      startRetryCountdown,
+      clearRetryCountdown,
       setThought,
+      pendingHistoryItemRef,
+      setPendingHistoryItem,
+      pendingRetryCountdownItemRef,
     ],
   );
 
@@ -981,6 +1073,7 @@ export const useGeminiStream = (
             prompt_id!,
             options,
           );
+
           const processingStatus = await processGeminiStreamEvents(
             stream,
             userMessageTimestamp,
@@ -990,7 +1083,7 @@ export const useGeminiStream = (
           if (processingStatus === StreamProcessingStatus.UserCancelled) {
             // Restore original model if it was temporarily overridden
             restoreOriginalModel().catch((error) => {
-              console.error('Failed to restore original model:', error);
+              debugLogger.error('Failed to restore original model:', error);
             });
             isSubmittingQueryRef.current = false;
             return;
@@ -1007,12 +1100,12 @@ export const useGeminiStream = (
 
           // Restore original model if it was temporarily overridden
           restoreOriginalModel().catch((error) => {
-            console.error('Failed to restore original model:', error);
+            debugLogger.error('Failed to restore original model:', error);
           });
         } catch (error: unknown) {
           // Restore original model if it was temporarily overridden
           restoreOriginalModel().catch((error) => {
-            console.error('Failed to restore original model:', error);
+            debugLogger.error('Failed to restore original model:', error);
           });
 
           if (error instanceof UnauthorizedError) {
@@ -1082,7 +1175,7 @@ export const useGeminiStream = (
                 ToolConfirmationOutcome.ProceedOnce,
               );
             } catch (error) {
-              console.error(
+              debugLogger.error(
                 `Failed to auto-approve tool call ${call.request.callId}:`,
                 error,
               );
@@ -1218,10 +1311,18 @@ export const useGeminiStream = (
 
   const pendingHistoryItems = useMemo(
     () =>
-      [pendingHistoryItem, pendingToolCallGroupDisplay].filter(
-        (i) => i !== undefined && i !== null,
-      ),
-    [pendingHistoryItem, pendingToolCallGroupDisplay],
+      [
+        pendingHistoryItem,
+        pendingRetryErrorItem,
+        pendingRetryCountdownItem,
+        pendingToolCallGroupDisplay,
+      ].filter((i) => i !== undefined && i !== null),
+    [
+      pendingHistoryItem,
+      pendingRetryErrorItem,
+      pendingRetryCountdownItem,
+      pendingToolCallGroupDisplay,
+    ],
   );
 
   useEffect(() => {

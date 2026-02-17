@@ -15,6 +15,19 @@ import type { OpenAICompatibleProvider } from './provider/index.js';
 import { OpenAIContentConverter } from './converter.js';
 import type { ErrorHandler, RequestContext } from './errorHandler.js';
 
+/**
+ * Error thrown when the API returns an error embedded as stream content
+ * instead of a proper HTTP error. Some providers (e.g., certain OpenAI-compatible
+ * endpoints) return throttling errors as a normal SSE chunk with
+ * finish_reason="error_finish" and the error message in delta.content.
+ */
+export class StreamContentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StreamContentError';
+  }
+}
+
 export interface PipelineConfig {
   cliConfig: Config;
   provider: OpenAICompatibleProvider;
@@ -117,6 +130,17 @@ export class ContentGenerationPipeline {
     try {
       // Stage 2a: Convert and yield each chunk while preserving original
       for await (const chunk of stream) {
+        // Detect API errors returned as stream content.
+        // Some providers return errors (e.g., TPM throttling) as a normal SSE chunk
+        // with finish_reason="error_finish" and the error in delta.content,
+        // instead of returning a proper HTTP error status.
+        if ((chunk.choices?.[0]?.finish_reason as string) === 'error_finish') {
+          const errorContent =
+            chunk.choices?.[0]?.delta?.content?.trim() ||
+            'Unknown stream error';
+          throw new StreamContentError(errorContent);
+        }
+
         const response = this.converter.convertOpenAIChunkToGemini(chunk);
 
         // Stage 2b: Filter empty responses to avoid downstream issues
@@ -158,6 +182,12 @@ export class ContentGenerationPipeline {
     } catch (error) {
       // Clear streaming tool calls on error to prevent data pollution
       this.converter.resetStreamingToolCalls();
+
+      // Re-throw StreamContentError directly so it can be handled by
+      // the caller's retry logic (e.g., TPM throttling retry in sendMessageStream)
+      if (error instanceof StreamContentError) {
+        throw error;
+      }
 
       // Use shared error handling logic
       await this.handleError(error, context, request);
@@ -320,13 +350,15 @@ export class ContentGenerationPipeline {
         'frequency_penalty',
         'frequencyPenalty',
       ),
-      ...this.buildReasoningConfig(),
+      ...this.buildReasoningConfig(request),
     };
 
     return params;
   }
 
-  private buildReasoningConfig(): Record<string, unknown> {
+  private buildReasoningConfig(
+    request: GenerateContentParameters,
+  ): Record<string, unknown> {
     // Reasoning configuration for OpenAI-compatible endpoints is highly fragmented.
     // For example, across common providers and models:
     //
@@ -336,13 +368,21 @@ export class ContentGenerationPipeline {
     //   - gpt-5.x series      — thinking is enabled by default; can be disabled via `reasoning.effort`
     //   - qwen3 series        — model-dependent; can be manually disabled via `extra_body.enable_thinking`
     //
-    // Given this inconsistency, we choose not to set any reasoning config here and
-    // instead rely on each model’s default behavior.
+    // Given this inconsistency, we avoid mapping values and only pass through the
+    // configured reasoning object when explicitly enabled. This keeps provider- and
+    // model-specific semantics intact while honoring request-level opt-out.
 
-    // We plan to introduce provider- and model-specific settings to enable more
-    // fine-grained control over reasoning configuration.
+    if (request.config?.thinkingConfig?.includeThoughts === false) {
+      return {};
+    }
 
-    return {};
+    const reasoning = this.contentGeneratorConfig.reasoning;
+
+    if (reasoning === false || reasoning === undefined) {
+      return {};
+    }
+
+    return { reasoning };
   }
 
   /**
