@@ -111,6 +111,7 @@ This project is based on [Google Gemini CLI](https://github.com/google-gemini/ge
 
 ## License
 
-Apache License 2.0 (Termux fork, based on upstream Qwen Code / Gemini CLI lineage) with maintenance by Davide A. Guglielmi.<br>
+Apache License 2.0 (upstream Qwen Code) with Termux-port maintenance by Davide A. Guglielmi.<br>
+Original project by Qwen Team: https://github.com/QwenLM/qwen-code<br>
 See [LICENSE](./LICENSE) for details and upstream terms.<br>
 Made in Italy 🇮🇹
