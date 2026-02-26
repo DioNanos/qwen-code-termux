@@ -106,3 +106,11 @@ If this Termux edition helps you, you can support the project on Ko-fi:
 ## Acknowledgments
 
 This project is based on [Google Gemini CLI](https://github.com/google-gemini/gemini-cli). We acknowledge and appreciate the excellent work of the Gemini CLI team. Our main contribution focuses on parser-level adaptations to better support Qwen-Coder models.
+
+---
+
+## License
+
+Apache License 2.0 (Termux fork, based on upstream Qwen Code / Gemini CLI lineage) with maintenance by Davide A. Guglielmi.<br>
+See [LICENSE](./LICENSE) for details and upstream terms.<br>
+Made in Italy 🇮🇹
