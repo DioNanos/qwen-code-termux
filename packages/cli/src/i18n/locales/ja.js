@@ -783,6 +783,27 @@ export default {
   "Starting OAuth authentication for MCP server '{{name}}'...":
     "MCPサーバー '{{name}}' のOAuth認証を開始中...",
   // Startup Tips
+  'Tips:': 'ヒント：',
+  'Use /compress when the conversation gets long to summarize history and free up context.':
+    '会話が長くなったら /compress で履歴を要約し、コンテキストを解放できます。',
+  'Start a fresh idea with /clear or /new; the previous session stays available in history.':
+    '/clear または /new で新しいアイデアを始められます。前のセッションは履歴に残ります。',
+  'Use /bug to submit issues to the maintainers when something goes off.':
+    '問題が発生したら /bug でメンテナーに報告できます。',
+  'Switch auth type quickly with /auth.':
+    '/auth で認証タイプをすばやく切り替えられます。',
+  'You can run any shell commands from Qwen Code using ! (e.g. !ls).':
+    'Qwen Code から ! を使って任意のシェルコマンドを実行できます（例: !ls）。',
+  'Type / to open the command popup; Tab autocompletes slash commands and saved prompts.':
+    '/ を入力してコマンドポップアップを開きます。Tab でスラッシュコマンドと保存済みプロンプトを補完できます。',
+  'You can resume a previous conversation by running qwen --continue or qwen --resume.':
+    'qwen --continue または qwen --resume で前の会話を再開できます。',
+  'You can switch permission mode quickly with Shift+Tab or /approval-mode.':
+    'Shift+Tab または /approval-mode で権限モードをすばやく切り替えられます。',
+  'You can switch permission mode quickly with Tab or /approval-mode.':
+    'Tab または /approval-mode で権限モードをすばやく切り替えられます。',
+  'Try /insight to generate personalized insights from your chat history.':
+    '/insight でチャット履歴からパーソナライズされたインサイトを生成できます。',
   'Tips for getting started:': '始めるためのヒント:',
   '1. Ask questions, edit files, or run commands.':
     '1. 質問したり、ファイルを編集したり、コマンドを実行したりできます',
@@ -928,8 +949,13 @@ export default {
   // Auth Dialog - View Titles and Labels
   // ============================================================================
   'Coding Plan': 'Coding Plan',
+  'Coding Plan (Bailian, China)': 'Coding Plan (Bailian, 中国)',
+  'Coding Plan (Bailian, Global/Intl)':
+    'Coding Plan (Bailian, グローバル/国際)',
   "Paste your api key of Bailian Coding Plan and you're all set!":
     'Bailian Coding PlanのAPIキーを貼り付けるだけで準備完了です！',
+  "Paste your api key of Coding Plan (Bailian, Global/Intl) and you're all set!":
+    'Coding Plan (Bailian, グローバル/国際) のAPIキーを貼り付けるだけで準備完了です！',
   Custom: 'カスタム',
   'More instructions about configuring `modelProviders` manually.':
     '`modelProviders`を手動で設定する方法の詳細はこちら。',
@@ -938,4 +964,18 @@ export default {
   '(Press Enter to submit, Escape to cancel)':
     '(Enterで送信、Escapeでキャンセル)',
   'More instructions please check:': '詳細な手順はこちらをご確認ください：',
+
+  // ============================================================================
+  // Coding Plan International Updates
+  // ============================================================================
+  'New model configurations are available for {{region}}. Update now?':
+    '{{region}} の新しいモデル設定が利用可能です。今すぐ更新しますか？',
+  'New model configurations are available for Bailian Coding Plan (China). Update now?':
+    'Bailian Coding Plan (中国) の新しいモデル設定が利用可能です。今すぐ更新しますか？',
+  'New model configurations are available for Coding Plan (Bailian, Global/Intl). Update now?':
+    'Coding Plan (Bailian, グローバル/国際) の新しいモデル設定が利用可能です。今すぐ更新しますか？',
+  '{{region}} configuration updated successfully. Model switched to "{{model}}".':
+    '{{region}} の設定が正常に更新されました。モデルが "{{model}}" に切り替わりました。',
+  'Authenticated successfully with {{region}}. API key and model configs saved to settings.json (backed up).':
+    '{{region}} での認証に成功しました。APIキーとモデル設定が settings.json に保存されました（バックアップ済み）。',
 };
