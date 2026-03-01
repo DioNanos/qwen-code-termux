@@ -40,7 +40,7 @@ execSync('npm run generate', { stdio: 'inherit', cwd: root });
 // 4. cli (depends on core, test-utils, web-templates)
 // 5. webui (shared UI components - used by vscode companion)
 // 6. sdk (no internal dependencies)
-// 7. vscode-ide-companion (depends on webui)
+// 7. vscode-ide-companion (depends on webui) - SKIPPED for Termux
 const buildOrder = [
   'packages/test-utils',
   'packages/core',
@@ -48,7 +48,7 @@ const buildOrder = [
   'packages/cli',
   'packages/webui',
   'packages/sdk-typescript',
-  'packages/vscode-ide-companion',
+  // 'packages/vscode-ide-companion', // Not needed for Termux
 ];
 
 for (const workspace of buildOrder) {

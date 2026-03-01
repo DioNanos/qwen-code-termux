@@ -14,7 +14,7 @@ import type {
   InsightProgressCallback,
 } from '../types/StaticInsightTypes.js';
 
-import { createDebugLogger, type Config } from '@qwen-code/qwen-code-core';
+import { createDebugLogger, type Config } from '@mmmbuto/qwen-code-termux-core';
 
 const logger = createDebugLogger('StaticInsightGenerator');
 

@@ -12,22 +12,15 @@ const isTermux =
   process.env.TERMUX_VERSION ||
   (process.env.PREFIX && process.env.PREFIX.includes('com.termux'));
 
+// Skip everything on Termux (bundle is pre-built in npm package)
 if (isTermux) {
+  console.log('Termux detected: skipping husky and bundle');
   process.exit(0);
 }
 
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-
-let result = spawnSync(npmCmd, ['exec', 'husky'], {
-  stdio: 'inherit',
-  env: process.env,
-});
-if (result.status !== 0) {
-  process.exit(result.status === null ? 1 : result.status);
-}
-
-result = spawnSync(npmCmd, ['run', 'bundle'], {
-  stdio: 'inherit',
-  env: process.env,
-});
-process.exit(result.status === null ? 1 : result.status);
+// On Mac/Linux/Windows during npm install, skip bundle
+// Bundle should be run explicitly via 'npm run build && npm run bundle' 
+// This avoids issues with unbuilt workspace packages
+console.log('Skipping bundle during npm install.');
+console.log('Run "npm run build && npm run bundle" manually if needed.');
+process.exit(0);

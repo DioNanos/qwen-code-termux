@@ -12,7 +12,7 @@ import {
   getCodingPlanConfig,
   CodingPlanRegion,
 } from '../../constants/codingPlan.js';
-import { AuthType } from '@qwen-code/qwen-code-core';
+import { AuthType } from '@mmmbuto/qwen-code-termux-core';
 
 // Get region configs for testing
 const chinaConfig = getCodingPlanConfig(CodingPlanRegion.CHINA);
