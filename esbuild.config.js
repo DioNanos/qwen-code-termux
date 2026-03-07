@@ -26,15 +26,9 @@ const pkg = require(path.resolve(__dirname, 'package.json'));
 rmSync(path.resolve(__dirname, 'dist'), { recursive: true, force: true });
 
 const external = [
-  '@lydell/node-pty',
-  'node-pty',
-  'node-pty-android-arm64',
-  '@lydell/node-pty-darwin-arm64',
-  '@lydell/node-pty-darwin-x64',
+  '@mmmbuto/pty-termux-utils',
+  '@mmmbuto/node-pty-android-arm64',
   '@lydell/node-pty-linux-arm64',
-  '@lydell/node-pty-linux-x64',
-  '@lydell/node-pty-win32-arm64',
-  '@lydell/node-pty-win32-x64',
   '@teddyzhu/clipboard',
   '@teddyzhu/clipboard-darwin-arm64',
   '@teddyzhu/clipboard-darwin-x64',
