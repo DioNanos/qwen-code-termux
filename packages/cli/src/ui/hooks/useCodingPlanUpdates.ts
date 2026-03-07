@@ -71,7 +71,7 @@ export function useCodingPlanUpdates(
         );
 
         // Get the configuration for the current region
-        const { template, version, regionName } = getCodingPlanConfig(region);
+        const { template, version } = getCodingPlanConfig(region);
 
         // Generate new configs from template
         const newConfigs = template.map((templateConfig) => ({
@@ -120,7 +120,7 @@ export function useCodingPlanUpdates(
             type: 'info',
             text: t(
               '{{region}} configuration updated successfully. Model switched to "{{model}}".',
-              { region: regionName, model: activeModel },
+              { region: t('Alibaba Cloud Coding Plan'), model: activeModel },
             ),
           },
           Date.now(),
@@ -173,11 +173,10 @@ export function useCodingPlanUpdates(
 
     // Check if version matches
     if (savedVersion !== currentVersion) {
-      const { regionName } = getCodingPlanConfig(region);
       setUpdateRequest({
         prompt: t(
           'New model configurations are available for {{region}}. Update now?',
-          { region: regionName },
+          { region: t('Alibaba Cloud Coding Plan') },
         ),
         onConfirm: async (confirmed: boolean) => {
           setUpdateRequest(undefined);

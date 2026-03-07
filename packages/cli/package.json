@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Qwen Code",
   "repository": {
     "type": "git",
@@ -33,14 +33,14 @@
     "dist"
   ],
   "config": {
-    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.11.0-termux"
+    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.11.1-termux"
   },
   "dependencies": {
     "@google/genai": "1.30.0",
     "@iarna/toml": "^2.2.5",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "@mmmbuto/qwen-code-termux-core": "file:../core",
-    "@qwen-code/web-templates": "file:../web-templates",
+    "@mmmbuto/web-templates": "file:../web-templates",
     "@types/update-notifier": "^6.0.8",
     "ansi-regex": "^6.2.2",
     "command-exists": "^1.2.9",
