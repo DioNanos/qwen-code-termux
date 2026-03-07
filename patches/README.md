@@ -210,6 +210,41 @@ process.noDeprecation = true;
 
 ---
 
+### 8. Auto-Update Command Fix (v0.11.2+)
+
+**Files**: `packages/cli/src/utils/installationInfo.ts`
+
+**Problem**: Auto-update commands used wrong package name (`@mmmbuto/qwen-code` instead of `@mmmbuto/qwen-code-termux`)
+
+**Change (v0.11.2-termux)**:
+
+```typescript
+// BEFORE (wrong package name)
+const updateCommand = 'npm install -g @mmmbuto/qwen-code@latest';
+
+// AFTER (correct Termux package name)
+const updateCommand = 'npm install -g @mmmbuto/qwen-code-termux@latest';
+```
+
+**Updated Commands**:
+
+| Package Manager | Update Command                                     |
+| --------------- | -------------------------------------------------- |
+| npm             | `npm install -g @mmmbuto/qwen-code-termux@latest`  |
+| pnpm            | `pnpm add -g @mmmbuto/qwen-code-termux@latest`     |
+| yarn            | `yarn global add @mmmbuto/qwen-code-termux@latest` |
+| bun             | `bun add -g @mmmbuto/qwen-code-termux@latest`      |
+
+**Impact**:
+
+- ✅ Auto-update now installs correct package
+- ✅ No more "package not found" errors
+- ✅ Tag is always `latest` (simplifies update logic)
+
+**Note**: The `updateCheck.ts` file already uses `packageJson.name` which correctly reads `@mmmbuto/qwen-code-termux` from package.json, so no changes were needed there.
+
+---
+
 ## Versioning Strategy
 
 | Component       | Version             | Example              |
@@ -252,6 +287,7 @@ Found a Termux-specific bug? Please open an issue with:
 ---
 
 **Last Updated**: 2026-03-07
-**Patches Applied**: 7 (including PTY unified library v0.11.1+)
+**Patches Applied**: 8 (including auto-update fix v0.11.2+)
 **Based on**: QwenLM/qwen-code v0.11.1
 **Platform**: Android Termux ARM64 (+ Linux ARM64 fallback)
+**Current Release**: v0.11.2-termux
