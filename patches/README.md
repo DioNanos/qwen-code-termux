@@ -2,7 +2,7 @@
 
 This document describes the Termux-specific patches applied to the upstream Qwen Code CLI so that it works correctly on Android Termux.
 
-**Current Release**: v0.11.1-termux
+**Current Release**: v0.11.3-termux
 **Upstream Base**: QwenLM/qwen-code v0.11.1
 
 ---
@@ -249,8 +249,8 @@ const updateCommand = 'npm install -g @mmmbuto/qwen-code-termux@latest';
 
 | Component       | Version             | Example              |
 | --------------- | ------------------- | -------------------- |
-| **npm package** | `<upstream>-termux` | `0.11.1-termux`      |
-| **Binary**      | Same as npm         | `qwen 0.11.1-termux` |
+| **npm package** | `<upstream>-termux` | `0.11.3-termux`      |
+| **Binary**      | Same as npm         | `qwen 0.11.3-termux` |
 
 **Why**:
 
@@ -287,7 +287,7 @@ Found a Termux-specific bug? Please open an issue with:
 ---
 
 **Last Updated**: 2026-03-07
-**Patches Applied**: 8 (including auto-update fix v0.11.2+)
+**Patches Applied**: 8 (including auto-update fix v0.11.2+, bundle version fix v0.11.3+)
 **Based on**: QwenLM/qwen-code v0.11.1
 **Platform**: Android Termux ARM64 (+ Linux ARM64 fallback)
-**Current Release**: v0.11.2-termux
+**Current Release**: v0.11.3-termux

@@ -1,6 +1,6 @@
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "Qwen Code",
   "repository": {
     "type": "git",
@@ -33,7 +33,7 @@
     "dist"
   ],
   "config": {
-    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.11.2-termux"
+    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.11.3-termux"
   },
   "dependencies": {
     "@google/genai": "1.30.0",
