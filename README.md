@@ -30,7 +30,7 @@ Upstream Qwen Code targets macOS/Linux/Windows. On Android/Termux, installs may 
 
 Termux Edition focuses on:
 
-- **Android PTY support** via `node-pty-android-arm64` (optional dependency)
+- **Android PTY support** via `@mmmbuto/pty-termux-utils` + `@mmmbuto/node-pty-android-arm64` (optional dependency)
 - **Termux runtime patches** (polyfills/quirks, clipboard behavior)
 - **Termux-safe install** (avoid node-gyp/husky pitfalls where possible)
 - **Tested on-device** — see [test-reports/](test-reports/README.md)
