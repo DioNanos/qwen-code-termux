@@ -33,7 +33,7 @@ Termux Edition focuses on:
 - **Android PTY support** via `node-pty-android-arm64` (optional dependency)
 - **Termux runtime patches** (polyfills/quirks, clipboard behavior)
 - **Termux-safe install** (avoid node-gyp/husky pitfalls where possible)
-- **Tested on-device** — see [test-reports/0.11.3-termux/](test-reports/0.11.3-termux/README.md)
+- **Tested on-device** — see [test-reports/](test-reports/README.md)
 
 ## Installation (Termux / Android)
 
@@ -74,7 +74,7 @@ qwen /auth        # Authentication
 
 ## Resources
 
-- **Test Reports**: [test-reports/0.11.3-termux/](test-reports/0.11.3-termux/README.md)
+- **Test Reports**: [test-reports/](test-reports/README.md)
 - **Patches**: [patches/](patches/README.md)
 - **Build**: [docs/developers/BUILDING.md](docs/developers/BUILDING.md)
 - **Config**: [docs/users/configuration.md](docs/users/configuration.md)
