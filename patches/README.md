@@ -2,8 +2,8 @@
 
 This document describes the Termux-specific patches applied to the upstream Qwen Code CLI so that it works correctly on Android Termux.
 
-**Current Release**: v0.10.3-termux
-**Upstream Base**: QwenLM/qwen-code v0.10.3
+**Current Release**: v0.11.1-termux
+**Upstream Base**: QwenLM/qwen-code v0.11.1
 
 ---
 
@@ -98,13 +98,14 @@ if (isTermux) {
 - `packages/cli/package.json`
 - `packages/core/package.json`
 - `packages/test-utils/package.json`
+- `packages/web-templates/package.json`
 
 #### Change
 
 ```json
 {
   "name": "@mmmbuto/qwen-code-termux",
-  "version": "0.10.3-termux"
+  "version": "0.11.1-termux"
 }
 ```
 
@@ -117,30 +118,54 @@ if (isTermux) {
 **Impact**:
 
 - ✅ npm install: `@mmmbuto/qwen-code-termux@latest`
-- ✅ Version: `0.10.3-termux`
+- ✅ Version: `0.11.1-termux`
 - ✅ Clear separation from upstream
 
 ---
 
-### 5. PTY Android Dependency
+### 5. PTY Unified Library (v0.11.1+)
 
-**File**: `package.json`
+**Files**: `package.json`, `packages/core/package.json`, `packages/core/src/utils/getPty.ts`
 
-#### Change
+#### Change (v0.11.1-termux)
 
 ```json
+// packages/core/package.json
+"dependencies": {
+  "@mmmbuto/pty-termux-utils": "^1.1.4"
+}
+
 "optionalDependencies": {
-  "@mmmbuto/node-pty-android-arm64": "1.1.0"
+  "@mmmbuto/node-pty-android-arm64": "~1.1.0",
+  "@lydell/node-pty-linux-arm64": "~1.2.0-beta.2"
 }
 ```
 
-**Purpose**: Pre-built PTY for Android ARM64
+**PTY Fallback Chain**:
+
+```
+1° @mmmbuto/node-pty-android-arm64    (Termux/Android - Priority 1)
+2° @lydell/node-pty-linux-arm64       (Linux ARM64 - Priority 2)
+3° child_process adapter              (Universal fallback - Priority 3)
+```
+
+**Purpose**: Unified PTY handling via shared library (`@mmmbuto/pty-termux-utils`)
 
 **Impact**:
 
-- ✅ No node-gyp compilation on Termux
-- ✅ PTY support for shell execution
-- ✅ Graceful fallback if unavailable
+- ✅ Aligned with `gemini-cli-termux` PTY strategy
+- ✅ Simplified dependencies (7 → 2 optionalDependencies)
+- ✅ Native Android ARM64 support (pre-built, no node-gyp)
+- ✅ Linux ARM64 native support added
+- ✅ Graceful fallback if no native PTY available
+
+**Implementation**:
+
+```typescript
+// packages/core/src/utils/getPty.ts
+export type { PtyImplementation, IPty } from '@mmmbuto/pty-termux-utils';
+export { getPty, spawnPty } from '@mmmbuto/pty-termux-utils';
+```
 
 ---
 
@@ -152,7 +177,7 @@ if (isTermux) {
 
 ```json
 "config": {
-  "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.10.3-termux"
+  "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.11.1-termux"
 }
 ```
 
@@ -189,8 +214,8 @@ process.noDeprecation = true;
 
 | Component       | Version             | Example              |
 | --------------- | ------------------- | -------------------- |
-| **npm package** | `<upstream>-termux` | `0.10.3-termux`      |
-| **Binary**      | Same as npm         | `qwen 0.10.3-termux` |
+| **npm package** | `<upstream>-termux` | `0.11.1-termux`      |
+| **Binary**      | Same as npm         | `qwen 0.11.1-termux` |
 
 **Why**:
 
@@ -207,9 +232,10 @@ Before each release:
 - [ ] `prepare-termux.cjs` exits on Termux
 - [ ] `postinstall.cjs` runs without errors
 - [ ] No deprecation warnings in output
-- [ ] PTY dependency resolves
+- [ ] PTY dependency resolves (check `@mmmbuto/pty-termux-utils`)
 - [ ] Version shows `-termux` suffix
 - [ ] npm install completes in < 10s
+- [ ] Shell execution works via PTY
 
 ---
 
@@ -225,7 +251,7 @@ Found a Termux-specific bug? Please open an issue with:
 
 ---
 
-**Last Updated**: 2026-02-17
-**Patches Applied**: 7
-**Based on**: QwenLM/qwen-code v0.10.3
-**Platform**: Android Termux ARM64
+**Last Updated**: 2026-03-07
+**Patches Applied**: 7 (including PTY unified library v0.11.1+)
+**Based on**: QwenLM/qwen-code v0.11.1
+**Platform**: Android Termux ARM64 (+ Linux ARM64 fallback)
