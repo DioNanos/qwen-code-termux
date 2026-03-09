@@ -19,6 +19,81 @@ const packageRoot = path.join(__dirname, '..');
 const vendorDir = path.join(packageRoot, 'vendor', 'ripgrep');
 
 /**
+ * Check if running on Android/Termux
+ */
+function isTermux() {
+  return (
+    process.platform === 'android' ||
+    process.env.TERMUX_VERSION ||
+    (process.env.PREFIX && process.env.PREFIX.includes('com.termux'))
+  );
+}
+
+/**
+ * Install PTY dependencies for Termux
+ */
+function installPtyDependencies() {
+  if (!isTermux()) {
+    console.log('ℹ Not running on Termux, skipping PTY installation');
+    return;
+  }
+
+  console.log('📱 Termux detected: Installing PTY dependencies...');
+
+  try {
+    // Check if @mmmbuto/node-pty-android-arm64 is already installed
+    const nodeModulesDir = path.join(packageRoot, 'node_modules', '@mmmbuto');
+    const ptyInstalled = fs.existsSync(
+      path.join(nodeModulesDir, 'node-pty-android-arm64'),
+    );
+
+    if (ptyInstalled) {
+      console.log('✓ @mmmbuto/node-pty-android-arm64 already installed');
+    } else {
+      console.log('📦 Installing @mmmbuto/node-pty-android-arm64...');
+      execSync('npm install --no-save @mmmbuto/node-pty-android-arm64@~1.1.0', {
+        cwd: packageRoot,
+        stdio: 'inherit',
+      });
+      console.log('✓ PTY dependency installed successfully');
+    }
+
+    // Also try to install Linux ARM64 fallback if on Linux (not Android)
+    if (process.platform === 'linux' && process.arch === 'arm64') {
+      const lydellInstalled = fs.existsSync(
+        path.join(nodeModulesDir, '..', 'lydell', 'node-pty-linux-arm64'),
+      );
+      if (!lydellInstalled) {
+        console.log(
+          '📦 Installing @lydell/node-pty-linux-arm64 as fallback...',
+        );
+        try {
+          execSync(
+            'npm install --no-save @lydell/node-pty-linux-arm64@~1.2.0-beta.2',
+            {
+              cwd: packageRoot,
+              stdio: 'inherit',
+            },
+          );
+          console.log('✓ Linux ARM64 PTY fallback installed');
+        } catch (_e) {
+          console.log(
+            '⚠ Could not install Linux ARM64 fallback (not critical)',
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error(
+      `⚠ Failed to install PTY dependencies: ${error.message || 'Unknown error'}`,
+    );
+    console.error(
+      '  PTY features may not work. Try manual install: npm install @mmmbuto/node-pty-android-arm64',
+    );
+  }
+}
+
+/**
  * Remove quarantine attribute and set executable permissions on macOS/Linux
  * This script never throws errors to avoid blocking npm workflows.
  */
@@ -92,6 +167,10 @@ function setupRipgrepBinaries() {
 
 // Wrap the entire execution to ensure no errors escape to npm
 try {
+  // Install PTY dependencies for Termux FIRST
+  installPtyDependencies();
+
+  // Then setup ripgrep binaries
   setupRipgrepBinaries();
 } catch {
   // Last resort catch - never let errors block npm
