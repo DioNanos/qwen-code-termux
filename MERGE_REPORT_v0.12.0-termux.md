@@ -15,7 +15,7 @@
 - **Conflitti risolti**: 22 file
 - **Commit**: `22469227a` - "Merge upstream v0.12.0 into Termux fork"
 
-### 2. Patch Termux Mantenute (8/8)
+### 2. Patch Termux Mantenute (9/9)
 
 | #   | Patch                   | Stato      | File                                         |
 | --- | ----------------------- | ---------- | -------------------------------------------- |
@@ -27,6 +27,7 @@
 | 6   | ✅ installationInfo.ts  | Verificato | `packages/cli/src/utils/installationInfo.ts` |
 | 7   | ✅ start.js             | Verificato | `scripts/start.js`                           |
 | 8   | ✅ prepare-package.js   | Fixato     | `scripts/prepare-package.js`                 |
+| 9   | ✅ **postinstall.js**   | **NUOVO**  | Auto-install PTY su Termux                   |
 
 ### 3. Fix Tecnici Applicati
 
@@ -92,6 +93,8 @@ Usage: qwen [options] [command] ✅
 ## 📝 Commit History
 
 ```
+3aefe07ea fix: Auto-install PTY dependencies on Termux
+a8c15bf59 docs: Add merge report for v0.12.0-termux
 194fbac2a fix: Termux compatibility patches for v0.12.0
 0a3fdf706 docs: Update README and CHANGELOG for v0.12.0-termux
 22469227a Merge upstream v0.12.0 into Termux fork
