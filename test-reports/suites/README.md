@@ -4,7 +4,7 @@ Runnable test checklists for Qwen Code Termux Edition.
 
 ## Index
 
-- **Latest**: `latest/` — Current release (v0.10.3-termux)
+- **Latest**: `latest/` — Current release (v0.12.0-termux)
 - **Legacy**: `legacy/` — Historical versions
 
 ## Available Suites

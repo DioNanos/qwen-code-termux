@@ -2,7 +2,7 @@
 
 **Purpose**: Validate Qwen Code Termux Edition (`@mmmbuto/qwen-code-termux`)
 
-**Version**: v0.10.3-termux
+**Version**: v0.12.0-termux
 
 WARNING: Run this suite before relying on this release in production.
 
@@ -16,7 +16,7 @@ Confirm you are testing the Termux package (not upstream):
 npm ls -g --depth=0 @mmmbuto/qwen-code-termux || true
 ```
 
-**Expected**: installed version ends with `-termux` (example `0.10.3-termux`).
+**Expected**: installed version ends with `-termux` (example `0.12.0-termux`).
 
 Confirm the command is the global one:
 
@@ -35,7 +35,7 @@ The CLI should report the Termux version:
 qwen --version
 ```
 
-**Expected**: `0.10.3-termux`
+**Expected**: `0.12.0-termux`
 
 ---
 
@@ -162,13 +162,13 @@ qwen -p "What is the current date?"
 After running tests, save your report in:
 
 ```
-test-reports/0.10.3-termux/TEST-REPORT-YYYY-MM-DD.md
+test-reports/0.12.0-termux/TEST-REPORT-YYYY-MM-DD.md
 ```
 
 Use this template:
 
 ```markdown
-# Test Report: v0.10.3-termux
+# Test Report: v0.12.0-termux
 
 **Date**: YYYY-MM-DD
 **Tester**: Your name
@@ -198,5 +198,5 @@ Describe any issues...
 
 ---
 
-**Last Updated**: 2026-02-17
+**Last Updated**: 2026-03-09
 **Maintainer**: @DioNanos

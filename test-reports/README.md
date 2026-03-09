@@ -4,12 +4,13 @@ This folder contains human-run validation reports for Qwen Code Termux Edition.
 
 ## Latest Release
 
-- **v0.11.0-termux**: `0.11.0-termux/`
+- **v0.12.0-termux**: `0.12.0-termux/`
 
 ## Report Index
 
 | Version        | Report                                      | Date       | Status        |
 | -------------- | ------------------------------------------- | ---------- | ------------- |
+| v0.12.0-termux | `0.12.0-termux/TEST-REPORT-2026-03-09.md`   | 2026-03-09 | 🧪 In Progress|
 | v0.11.0-termux | `0.11.0-termux/TEST-REPORT-2026-03-01.md`   | 2026-03-01 | ✅ Current    |
 | v0.10.3-termux | `0.10.3-termux/TEST-REPORT-2026-02-17.md`   | 2026-02-17 | 📦 Historical |
 | v0.7.1-termux  | (legacy)                                    | 2026-01-17 | 📦 Historical |
