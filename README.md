@@ -112,6 +112,6 @@ This project is based on [Google Gemini CLI](https://github.com/google-gemini/ge
 
 Original project by Qwen Team: https://github.com/QwenLM/qwen-code<br>
 Apache License 2.0 (upstream Qwen Code)<br>
-Termux-port maintenance by WellaNet.Dev<br>
+Termux-port maintenance by Davide A. Guglielmi<br>
 See [LICENSE](./LICENSE) for details and upstream terms.<br>
 Made in Italy 🇮🇹
