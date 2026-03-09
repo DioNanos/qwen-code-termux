@@ -8,7 +8,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Box, Text } from 'ink';
 import { theme } from '../../../semantic-colors.js';
 import { useKeypress } from '../../../hooks/useKeypress.js';
-import { type Extension } from '@qwen-code/qwen-code-core';
+import { type Extension } from '@mmmbuto/qwen-code-termux-core';
 import { t } from '../../../../i18n/index.js';
 import { ExtensionUpdateState } from '../../../state/extensions.js';
 

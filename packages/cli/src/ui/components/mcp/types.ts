@@ -7,7 +7,7 @@
 import type {
   MCPServerConfig,
   MCPServerStatus,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 /**
  * MCP管理步骤定义

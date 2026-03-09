@@ -55,7 +55,7 @@ import {
   SETTINGS_VERSION_KEY,
 } from './settings.js';
 import { needsMigration } from './migration/index.js';
-import { FatalConfigError, QWEN_DIR } from '@qwen-code/qwen-code-core';
+import { FatalConfigError, QWEN_DIR } from '@mmmbuto/qwen-code-termux-core';
 
 const MOCK_WORKSPACE_DIR = '/mock/workspace';
 // Use the (mocked) SETTINGS_DIRECTORY_NAME for consistency

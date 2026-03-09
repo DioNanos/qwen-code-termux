@@ -5,12 +5,11 @@
  */
 
 import stripAnsi from 'strip-ansi';
-import type { PtyImplementation } from '../utils/getPty.js';
+import type { PtyImplementation, IPty } from '../utils/getPty.js';
 import { getPty } from '../utils/getPty.js';
 import { spawn as cpSpawn, spawnSync } from 'node:child_process';
 import { TextDecoder } from 'node:util';
 import os from 'node:os';
-import type { IPty } from '@lydell/node-pty';
 import { getCachedEncodingForBuffer } from '../utils/systemEncoding.js';
 import { isBinary } from '../utils/textUtils.js';
 import { getShellConfiguration } from '../utils/shell-utils.js';
@@ -618,48 +617,45 @@ export class ShellExecutionService {
           );
         };
 
-        ptyProcess.onData((data: string) => {
+        ptyProcess.on('data', (data: string) => {
           const bufferData = Buffer.from(data, 'utf-8');
           handleOutput(bufferData);
         });
 
-        ptyProcess.onExit(
-          ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
-            exited = true;
-            abortSignal.removeEventListener('abort', abortHandler);
-            this.activePtys.delete(ptyProcess.pid);
+        ptyProcess.on('exit', (exitCode: number, signal: number) => {
+          exited = true;
+          abortSignal.removeEventListener('abort', abortHandler);
+          this.activePtys.delete(ptyProcess.pid);
 
-            const finalize = () => {
-              render(true);
-              const finalBuffer = Buffer.concat(outputChunks);
+          const finalize = () => {
+            render(true);
+            const finalBuffer = Buffer.concat(outputChunks);
 
-              resolve({
-                rawOutput: finalBuffer,
-                output: getFullBufferText(headlessTerminal),
-                exitCode,
-                signal: signal ?? null,
-                error,
-                aborted: abortSignal.aborted,
-                pid: ptyProcess.pid,
-                executionMethod:
-                  (ptyInfo?.name as 'node-pty' | 'lydell-node-pty') ??
-                  'node-pty',
-              });
-            };
-
-            // Always try to flush pending terminal writes before
-            // finalizing so result.output is as complete as possible.
-            // Race against abort or a short timeout to avoid hanging.
-            const processingComplete = processingChain.then(() => 'processed');
-            const deadline = new Promise<'timeout'>((res) =>
-              setTimeout(() => res('timeout'), SIGKILL_TIMEOUT_MS),
-            );
-
-            void Promise.race([processingComplete, deadline]).then(() => {
-              finalize();
+            resolve({
+              rawOutput: finalBuffer,
+              output: getFullBufferText(headlessTerminal),
+              exitCode,
+              signal: signal ?? null,
+              error,
+              aborted: abortSignal.aborted,
+              pid: ptyProcess.pid,
+              executionMethod:
+                (ptyInfo?.name as 'node-pty' | 'lydell-node-pty') ?? 'node-pty',
             });
-          },
-        );
+          };
+
+          // Always try to flush pending terminal writes before
+          // finalizing so result.output is as complete as possible.
+          // Race against abort or a short timeout to avoid hanging.
+          const processingComplete = processingChain.then(() => 'processed');
+          const deadline = new Promise<'timeout'>((res) =>
+            setTimeout(() => res('timeout'), SIGKILL_TIMEOUT_MS),
+          );
+
+          void Promise.race([processingComplete, deadline]).then(() => {
+            finalize();
+          });
+        });
 
         const abortHandler = async () => {
           if (ptyProcess.pid && !exited) {

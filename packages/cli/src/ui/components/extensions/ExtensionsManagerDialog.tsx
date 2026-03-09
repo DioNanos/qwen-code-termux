@@ -18,8 +18,11 @@ import { theme } from '../../semantic-colors.js';
 import { useKeypress } from '../../hooks/useKeypress.js';
 import { useUIState } from '../../contexts/UIStateContext.js';
 import { t } from '../../../i18n/index.js';
-import type { Extension, Config } from '@qwen-code/qwen-code-core';
-import { SettingScope, createDebugLogger } from '@qwen-code/qwen-code-core';
+import type { Extension, Config } from '@mmmbuto/qwen-code-termux-core';
+import {
+  SettingScope,
+  createDebugLogger,
+} from '@mmmbuto/qwen-code-termux-core';
 import { ExtensionUpdateState } from '../../state/extensions.js';
 import { getErrorMessage } from '../../../utils/errors.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';

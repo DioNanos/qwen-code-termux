@@ -6,7 +6,7 @@
 
 import { Box, Text } from 'ink';
 import { theme } from '../../../semantic-colors.js';
-import { type Extension } from '@qwen-code/qwen-code-core';
+import { type Extension } from '@mmmbuto/qwen-code-termux-core';
 import { t } from '../../../../i18n/index.js';
 
 interface ExtensionDetailStepProps {

@@ -18,7 +18,7 @@ import {
   type Config,
   type ConversationRecord,
   type DeviceAuthorizationData,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   AgentSideConnection,
   RequestError,

@@ -6,8 +6,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { AskUserQuestionDialog } from './AskUserQuestionDialog.js';
-import type { ToolAskUserQuestionConfirmationDetails } from '@qwen-code/qwen-code-core';
-import { ToolConfirmationOutcome } from '@qwen-code/qwen-code-core';
+import type { ToolAskUserQuestionConfirmationDetails } from '@mmmbuto/qwen-code-termux-core';
+import { ToolConfirmationOutcome } from '@mmmbuto/qwen-code-termux-core';
 import { renderWithProviders } from '../../../test-utils/render.js';
 
 const wait = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
