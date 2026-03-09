@@ -28,6 +28,7 @@ import { useKeypress } from '../../hooks/useKeypress.js';
 import { useSettings } from '../../contexts/SettingsContext.js';
 import { theme } from '../../semantic-colors.js';
 import { t } from '../../../i18n/index.js';
+import { AskUserQuestionDialog } from './AskUserQuestionDialog.js';
 
 export interface ToolConfirmationMessageProps {
   confirmationDetails: ToolCallConfirmationDetails;
@@ -347,6 +348,15 @@ export const ToolConfirmationMessage: React.FC<
           </Box>
         )}
       </Box>
+    );
+  } else if (confirmationDetails.type === 'ask_user_question') {
+    // Use dedicated dialog for ask_user_question type
+    return (
+      <AskUserQuestionDialog
+        confirmationDetails={confirmationDetails}
+        isFocused={isFocused}
+        onConfirm={onConfirm}
+      />
     );
   } else {
     // mcp tool confirmation

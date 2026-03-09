@@ -15,7 +15,7 @@ import type {
 } from ' @mmmbuto/webui';
 import { getApprovalModeInfoFromString } from '../../../types/acpTypes.js';
 import type { ApprovalModeValue } from '../../../types/approvalModeValueTypes.js';
-import type { ModelInfo } from '../../../types/acpTypes.js';
+import type { ModelInfo } from '@agentclientprotocol/sdk';
 import { ModelSelector } from './ModelSelector.js';
 
 /**
