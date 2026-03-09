@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.12.0-termux
+
+- **Merged upstream QwenLM/qwen-code v0.12.0**
+- **Extension Management TUI** - New UI for managing MCP extensions
+- **Hook System** - Support for custom hooks (session start/end, stop)
+- **Ask User Question Tool** - New tool for user interactions
+- **ACP SDK Migration** - Migrated to `@agentclientprotocol/sdk`
+- **Shell PTY Default** - PTY enabled by default for shell execution
+- **New dependency**: `iconv-lite` for character encoding
+- **Termux patches maintained**:
+  - PTY handler via `@mmmbuto/pty-termux-utils`
+  - Android runtime polyfills (base64, punycode suppression)
+  - Skip husky/bundle on Termux install
+  - Correct package naming for auto-update commands
+
+### Termux-Specific Changes
+
+- Version suffix: `-termux` across all workspace packages
+- Sandbox image: `ghcr.io/mmmbuto/qwen-code-termux:0.12.0-termux`
+- Optional dependencies: `@mmmbuto/node-pty-android-arm64`, `@lydell/node-pty-linux-arm64`
+- All upstream compatibility patches preserved
+
+## 0.11.3-termux
+
+- Bundle version fix
+
+## 0.11.2-termux
+
+- Auto-update command fix (correct package name)
+
+## 0.11.1-termux
+
+- PTY unified library (`@mmmbuto/pty-termux-utils`)
+- Reduced optionalDependencies (7 → 2)
+- Native Android ARM64 support
+- Linux ARM64 fallback support
+
+---
+
 ## 0.0.14
 
 - Added plan mode support for task planning

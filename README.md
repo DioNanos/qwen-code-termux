@@ -1,6 +1,6 @@
 <div align="center">
 
-[![npm version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
+[![npm version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux/0.12.0-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux/v/0.12.0-termux)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 [![Downloads](https://img.shields.io/npm/dm/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
