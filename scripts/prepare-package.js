@@ -44,7 +44,7 @@ if (!fs.existsSync(vendorDir)) {
 
 // Copy README and LICENSE
 console.log('Copying documentation files...');
-const filesToCopy = ['README.md', 'LICENSE'];
+const filesToCopy = ['README.md', 'LICENSE', 'CHANGELOG.md'];
 for (const file of filesToCopy) {
   const sourcePath = path.join(rootDir, file);
   const destPath = path.join(distDir, file);
@@ -151,7 +151,15 @@ const distPackageJson = {
   bin: {
     qwen: 'cli.js',
   },
-  files: ['cli.js', 'vendor', '*.sb', 'README.md', 'LICENSE', 'locales'],
+  files: [
+    'cli.js',
+    'vendor',
+    '*.sb',
+    'README.md',
+    'LICENSE',
+    'CHANGELOG.md',
+    'locales',
+  ],
   config: rootPackageJson.config,
   dependencies: {},
   optionalDependencies: {
