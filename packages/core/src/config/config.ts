@@ -44,6 +44,7 @@ import { GitService } from '../services/gitService.js';
 
 // Tools
 import { AskUserQuestionTool } from '../tools/askUserQuestion.js';
+import { TtsNotificationTool } from '../tools/tts-notification.js';
 import { EditTool } from '../tools/edit.js';
 import { ExitPlanModeTool } from '../tools/exitPlanMode.js';
 import { GlobTool } from '../tools/glob.js';
@@ -2181,6 +2182,8 @@ export class Config {
     await registerCoreTool(MemoryTool);
     await registerCoreTool(TodoWriteTool, this);
     await registerCoreTool(AskUserQuestionTool, this);
+    // TERMUX PATCH: TTS notification tool
+    await registerCoreTool(TtsNotificationTool, this.messageBus);
     !this.sdkMode && (await registerCoreTool(ExitPlanModeTool, this));
     await registerCoreTool(WebFetchTool, this);
     // Conditionally register web search tool if web search provider is configured

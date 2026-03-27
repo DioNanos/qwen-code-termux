@@ -1,13 +1,13 @@
 <div align="center">
 
-[![npm version](https://img.shields.io/npm/v/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
+[![npm version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 [![License](https://img.shields.io/github/license/QwenLM/qwen-code.svg)](./LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
-[![Downloads](https://img.shields.io/npm/dm/@qwen-code/qwen-code.svg)](https://www.npmjs.com/package/@qwen-code/qwen-code)
+[![Downloads](https://img.shields.io/npm/dm/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
 <a href="https://trendshift.io/repositories/15287" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15287" alt="QwenLM%2Fqwen-code | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-**An open-source AI agent that lives in your terminal.**
+**An open-source AI agent that lives in your terminal — Termux Edition.**
 
 <a href="https://qwenlm.github.io/qwen-code-docs/zh/users/overview">中文</a> |
 <a href="https://qwenlm.github.io/qwen-code-docs/de/users/overview">Deutsch</a> |
@@ -49,6 +49,15 @@ curl -fsSL -o %TEMP%\install-qwen.bat https://qwen-code-assets.oss-cn-hangzhou.a
 
 > **Note**: It's recommended to restart your terminal after installation to ensure environment variables take effect.
 
+#### Termux / Android
+
+```bash
+npm install -g @mmmbuto/qwen-code-termux@latest
+qwen --version
+```
+
+Requires: Termux (F-Droid), Node.js 20+, termux-api package (optional for TTS).
+
 ### Manual Installation
 
 #### Prerequisites
@@ -59,6 +68,7 @@ Make sure you have Node.js 20 or later installed. Download it from [nodejs.org](
 
 ```bash
 npm install -g @qwen-code/qwen-code@latest
+# Termux/Android: use @mmmbuto/qwen-code-termux
 ```
 
 #### Homebrew (macOS, Linux)

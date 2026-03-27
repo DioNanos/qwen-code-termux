@@ -26,6 +26,8 @@ export const ToolNames = {
   LS: 'list_directory',
   LSP: 'lsp',
   ASK_USER_QUESTION: 'ask_user_question',
+  // TERMUX PATCH
+  TTS_NOTIFICATION: 'tts_notification',
 } as const;
 
 /**
@@ -50,6 +52,8 @@ export const ToolDisplayNames = {
   LS: 'ListFiles',
   LSP: 'Lsp',
   ASK_USER_QUESTION: 'AskUserQuestion',
+  // TERMUX PATCH
+  TTS_NOTIFICATION: 'TTS Notification',
 } as const;
 
 // Migration from old tool names to new tool names
