@@ -1,13 +1,11 @@
 <div align="center">
 
 [![npm version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
-[![License](https://img.shields.io/github/license/QwenLM/qwen-code.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 [![Downloads](https://img.shields.io/npm/dm/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
-<a href="https://trendshift.io/repositories/15287" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15287" alt="QwenLM%2Fqwen-code | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-**An open-source AI agent that lives in your terminal — Termux Edition.**
+**An open-source AI agent that lives in your terminal — Termux Edition (Android).**
 
 <a href="https://qwenlm.github.io/qwen-code-docs/zh/users/overview">中文</a> |
 <a href="https://qwenlm.github.io/qwen-code-docs/de/users/overview">Deutsch</a> |
@@ -18,60 +16,55 @@
 
 </div>
 
-> 🎉 **News (2026-02-16)**: Qwen3.5-Plus is now live! Sign in via Qwen OAuth to use it directly, or get an API key from [Alibaba Cloud ModelStudio](https://modelstudio.console.alibabacloud.com?tab=doc#/doc/?type=model&url=2840914_2&modelId=group-qwen3.5-plus) to access it through the OpenAI-compatible API.
+> 🎉 **News (2026-03-27)**: Termux Edition v0.13.1 is here! TTS notifications,
+> full upstream v0.13.1 sync, and a streamlined install experience on Android.
 
-Qwen Code is an open-source AI agent for the terminal, optimized for [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder). It helps you understand large codebases, automate tedious work, and ship faster.
+Qwen Code is an open-source AI agent for the terminal, optimized for [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder).
+This **Termux Edition** fork keeps upstream behaviour while fixing what breaks on Android/Termux.
 
-![](https://gw.alicdn.com/imgextra/i1/O1CN01D2DviS1wwtEtMwIzJ_!!6000000006373-2-tps-1600-900.png)
+## Why a Termux Edition?
 
-## Why Qwen Code?
+Upstream Qwen Code targets macOS/Linux/Windows. On Android/Termux, installs fail due to
+native dependency issues (PTY, node-gyp) and environment quirks.
 
-- **Multi-protocol, OAuth free tier**: use OpenAI / Anthropic / Gemini-compatible APIs, or sign in with Qwen OAuth for 1,000 free requests/day.
-- **Open-source, co-evolving**: both the framework and the Qwen3-Coder model are open-source—and they ship and evolve together.
-- **Agentic workflow, feature-rich**: rich built-in tools (Skills, SubAgents) for a full agentic workflow and a Claude Code-like experience.
-- **Terminal-first, IDE-friendly**: built for developers who live in the command line, with optional integration for VS Code, Zed, and JetBrains IDEs.
+Termux Edition fixes:
 
-## Installation
+- **Android PTY support** via `@mmmbuto/pty-termux-utils`
+- **Termux runtime patches** (base64 polyfills, character encoding)
+- **Termux-safe install** (skips husky + sandbox bundle on npm install)
+- **TTS Notifications** — speak completion/alerts via `termux-tts-speak`
+- **Tested on-device** — see [test-reports/](test-reports/)
 
-### Quick Install (Recommended)
-
-#### Linux / macOS
-
-```bash
-bash -c "$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)"
-```
-
-#### Windows (Run as Administrator CMD)
-
-```cmd
-curl -fsSL -o %TEMP%\install-qwen.bat https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.bat && %TEMP%\install-qwen.bat
-```
-
-> **Note**: It's recommended to restart your terminal after installation to ensure environment variables take effect.
-
-#### Termux / Android
+## Installation (Termux / Android)
 
 ```bash
+# Requires: Termux (F-Droid), Node.js 20+
 npm install -g @mmmbuto/qwen-code-termux@latest
 qwen --version
 ```
 
-Requires: Termux (F-Droid), Node.js 20+, termux-api package (optional for TTS).
+**Requirements:**
 
-### Manual Installation
+- [Termux (F-Droid)](https://f-droid.org/packages/com.termux/) — Google Play version has issues
+- Node.js 20+ (`pkg install nodejs-lts`)
+- `termux-api` package (optional, for TTS): `pkg install termux-api`
 
-#### Prerequisites
+> **Not on Termux?** Use upstream instead:
+> `npm install -g @qwen-code/qwen-code@latest`
 
-Make sure you have Node.js 20 or later installed. Download it from [nodejs.org](https://nodejs.org/en/download).
+## Installation (Linux / macOS / Windows)
 
-#### NPM
+For non-Termux platforms, use the official upstream:
 
 ```bash
-npm install -g @qwen-code/qwen-code@latest
-# Termux/Android: use @mmmbuto/qwen-code-termux
+# Linux / macOS
+bash -c "$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)"
+
+# Windows (Admin CMD)
+curl -fsSL -o %TEMP%\install-qwen.bat https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.bat && %TEMP%\install-qwen.bat
 ```
 
-#### Homebrew (macOS, Linux)
+Or via Homebrew:
 
 ```bash
 brew install qwen-code
@@ -80,15 +73,15 @@ brew install qwen-code
 ## Quick Start
 
 ```bash
-# Start Qwen Code (interactive)
+cd your-project/
 qwen
 
-# Then, in the session:
+# Then inside the session:
 /help
 /auth
 ```
 
-On first use, you'll be prompted to sign in. You can run `/auth` anytime to switch authentication methods.
+On first use, you'll be prompted to sign in. Run `/auth` anytime to switch auth method.
 
 Example prompts:
 
@@ -99,377 +92,152 @@ Help me refactor this function.
 Generate unit tests for this module.
 ```
 
-<details>
-<summary>Click to watch a demo video</summary>
-
-<video src="https://cloud.video.taobao.com/vod/HLfyppnCHplRV9Qhz2xSqeazHeRzYtG-EYJnHAqtzkQ.mp4" controls>
-Your browser does not support the video tag.
-</video>
-
-</details>
-
 ## Authentication
 
-Qwen Code supports two authentication methods:
+Two methods — API-KEY is recommended for headless/Termux environments.
 
-- **Qwen OAuth (recommended & free)**: sign in with your `qwen.ai` account in a browser.
-- **API-KEY**: use an API key to connect to any supported provider (OpenAI, Anthropic, Google GenAI, Alibaba Cloud ModelStudio, and other compatible endpoints).
+### API-KEY (recommended)
 
-#### Qwen OAuth (recommended)
-
-Start `qwen`, then run:
-
-```bash
-/auth
-```
-
-Choose **Qwen OAuth** and complete the browser flow. Your credentials are cached locally so you usually won't need to log in again.
-
-> **Note:** In non-interactive or headless environments (e.g., CI, SSH, containers), you typically **cannot** complete the OAuth browser login flow. In these cases, please use the API-KEY authentication method.
-
-#### API-KEY (flexible)
-
-Use this if you want more flexibility over which provider and model to use. Supports multiple protocols:
-
-- **OpenAI-compatible**: Alibaba Cloud ModelStudio, ModelScope, OpenAI, OpenRouter, and other OpenAI-compatible providers
-- **Anthropic**: Claude models
-- **Google GenAI**: Gemini models
-
-The **recommended** way to configure models and providers is by editing `~/.qwen/settings.json` (create it if it doesn't exist). This file lets you define all available models, API keys, and default settings in one place.
-
-##### Quick Setup in 3 Steps
-
-**Step 1:** Create or edit `~/.qwen/settings.json`
-
-Here is a complete example:
+Set up `~/.qwen/settings.json`:
 
 ```json
 {
   "modelProviders": {
     "openai": [
       {
-        "id": "qwen3-coder-plus",
-        "name": "qwen3-coder-plus",
-        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "description": "Qwen3-Coder via Dashscope",
-        "envKey": "DASHSCOPE_API_KEY"
+        "id": "qwen3.5-plus",
+        "name": "qwen3.5-plus",
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
       }
     ]
   },
   "env": {
-    "DASHSCOPE_API_KEY": "sk-xxxxxxxxxxxxx"
+    "DASHSCOPE_API_KEY": "sk-your-key"
   },
-  "security": {
-    "auth": {
-      "selectedType": "openai"
-    }
-  },
-  "model": {
-    "name": "qwen3-coder-plus"
-  }
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "qwen3.5-plus" }
 }
 ```
 
-**Step 2:** Understand each field
-
-| Field                        | What it does                                                                                                                          |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `modelProviders`             | Declares which models are available and how to connect to them. Keys like `openai`, `anthropic`, `gemini` represent the API protocol. |
-| `modelProviders[].id`        | The model ID sent to the API (e.g. `qwen3-coder-plus`, `gpt-4o`).                                                                     |
-| `modelProviders[].envKey`    | The name of the environment variable that holds your API key.                                                                         |
-| `modelProviders[].baseUrl`   | The API endpoint URL (required for non-default endpoints).                                                                            |
-| `env`                        | A fallback place to store API keys (lowest priority; prefer `.env` files or `export` for sensitive keys).                             |
-| `security.auth.selectedType` | The protocol to use on startup (`openai`, `anthropic`, `gemini`, `vertex-ai`).                                                        |
-| `model.name`                 | The default model to use when Qwen Code starts.                                                                                       |
-
-**Step 3:** Start Qwen Code — your configuration takes effect automatically:
+### Qwen OAuth
 
 ```bash
 qwen
+/auth
+# Complete browser flow
 ```
 
-Use the `/model` command at any time to switch between all configured models.
-
-##### More Examples
-
-<details>
-<summary>Coding Plan (Alibaba Cloud ModelStudio) — fixed monthly fee, higher quotas</summary>
-
-```json
-{
-  "modelProviders": {
-    "openai": [
-      {
-        "id": "qwen3.5-plus",
-        "name": "qwen3.5-plus (Coding Plan)",
-        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
-        "description": "qwen3.5-plus with thinking enabled from ModelStudio Coding Plan",
-        "envKey": "BAILIAN_CODING_PLAN_API_KEY",
-        "generationConfig": {
-          "extra_body": {
-            "enable_thinking": true
-          }
-        }
-      },
-      {
-        "id": "qwen3-coder-plus",
-        "name": "qwen3-coder-plus (Coding Plan)",
-        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
-        "description": "qwen3-coder-plus from ModelStudio Coding Plan",
-        "envKey": "BAILIAN_CODING_PLAN_API_KEY"
-      },
-      {
-        "id": "qwen3-coder-next",
-        "name": "qwen3-coder-next (Coding Plan)",
-        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
-        "description": "qwen3-coder-next with thinking enabled from ModelStudio Coding Plan",
-        "envKey": "BAILIAN_CODING_PLAN_API_KEY",
-        "generationConfig": {
-          "extra_body": {
-            "enable_thinking": true
-          }
-        }
-      },
-      {
-        "id": "glm-4.7",
-        "name": "glm-4.7 (Coding Plan)",
-        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
-        "description": "glm-4.7 with thinking enabled from ModelStudio Coding Plan",
-        "envKey": "BAILIAN_CODING_PLAN_API_KEY",
-        "generationConfig": {
-          "extra_body": {
-            "enable_thinking": true
-          }
-        }
-      },
-      {
-        "id": "kimi-k2.5",
-        "name": "kimi-k2.5 (Coding Plan)",
-        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
-        "description": "kimi-k2.5 with thinking enabled from ModelStudio Coding Plan",
-        "envKey": "BAILIAN_CODING_PLAN_API_KEY",
-        "generationConfig": {
-          "extra_body": {
-            "enable_thinking": true
-          }
-        }
-      }
-    ]
-  },
-  "env": {
-    "BAILIAN_CODING_PLAN_API_KEY": "sk-xxxxxxxxxxxxx"
-  },
-  "security": {
-    "auth": {
-      "selectedType": "openai"
-    }
-  },
-  "model": {
-    "name": "qwen3-coder-plus"
-  }
-}
-```
-
-> Subscribe to the Coding Plan and get your API key at [Alibaba Cloud ModelStudio(Beijing)](https://bailian.console.aliyun.com/cn-beijing?tab=coding-plan#/efm/coding-plan-index) or [Alibaba Cloud ModelStudio(intl)](https://modelstudio.console.alibabacloud.com/?tab=coding-plan#/efm/coding-plan-index).
-
-</details>
-
-<details>
-<summary>Multiple providers (OpenAI + Anthropic + Gemini)</summary>
-
-```json
-{
-  "modelProviders": {
-    "openai": [
-      {
-        "id": "gpt-4o",
-        "name": "GPT-4o",
-        "envKey": "OPENAI_API_KEY",
-        "baseUrl": "https://api.openai.com/v1"
-      }
-    ],
-    "anthropic": [
-      {
-        "id": "claude-sonnet-4-20250514",
-        "name": "Claude Sonnet 4",
-        "envKey": "ANTHROPIC_API_KEY"
-      }
-    ],
-    "gemini": [
-      {
-        "id": "gemini-2.5-pro",
-        "name": "Gemini 2.5 Pro",
-        "envKey": "GEMINI_API_KEY"
-      }
-    ]
-  },
-  "env": {
-    "OPENAI_API_KEY": "sk-xxxxxxxxxxxxx",
-    "ANTHROPIC_API_KEY": "sk-ant-xxxxxxxxxxxxx",
-    "GEMINI_API_KEY": "AIzaxxxxxxxxxxxxx"
-  },
-  "security": {
-    "auth": {
-      "selectedType": "openai"
-    }
-  },
-  "model": {
-    "name": "gpt-4o"
-  }
-}
-```
-
-</details>
-
-<details>
-<summary>Enable thinking mode (for supported models like qwen3.5-plus)</summary>
-
-```json
-{
-  "modelProviders": {
-    "openai": [
-      {
-        "id": "qwen3.5-plus",
-        "name": "qwen3.5-plus (thinking)",
-        "envKey": "DASHSCOPE_API_KEY",
-        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "generationConfig": {
-          "extra_body": {
-            "enable_thinking": true
-          }
-        }
-      }
-    ]
-  },
-  "env": {
-    "DASHSCOPE_API_KEY": "sk-xxxxxxxxxxxxx"
-  },
-  "security": {
-    "auth": {
-      "selectedType": "openai"
-    }
-  },
-  "model": {
-    "name": "qwen3.5-plus"
-  }
-}
-```
-
-</details>
-
-> **Tip:** You can also set API keys via `export` in your shell or `.env` files, which take higher priority than `settings.json` → `env`. See the [authentication guide](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/) for full details.
-
-> **Security note:** Never commit API keys to version control. The `~/.qwen/settings.json` file is in your home directory and should stay private.
+> OAuth requires a browser — not available over SSH/headless. Use API-KEY instead.
 
 ## Usage
 
-As an open-source terminal agent, you can use Qwen Code in four primary ways:
-
-1. Interactive mode (terminal UI)
-2. Headless mode (scripts, CI)
-3. IDE integration (VS Code, Zed)
-4. TypeScript SDK
-
-#### Interactive mode
+### Interactive mode
 
 ```bash
-cd your-project/
 qwen
+# Use @ to reference files: @src/main.ts
 ```
 
-Run `qwen` in your project folder to launch the interactive terminal UI. Use `@` to reference local files (for example `@src/main.ts`).
-
-#### Headless mode
+### Headless mode
 
 ```bash
-cd your-project/
 qwen -p "your question"
 ```
 
-Use `-p` to run Qwen Code without the interactive UI—ideal for scripts, automation, and CI/CD. Learn more: [Headless mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless).
+### Session commands
 
-#### IDE integration
+| Command     | Description                     |
+| ----------- | ------------------------------- |
+| `/help`     | Available commands              |
+| `/clear`    | Clear history                   |
+| `/compress` | Compress history to save tokens |
+| `/stats`    | Session info                    |
+| `/bug`      | Submit bug report               |
+| `/exit`     | Quit                            |
 
-Use Qwen Code inside your editor (VS Code, Zed, and JetBrains IDEs):
+### Keyboard shortcuts
 
-- [Use in VS Code](https://qwenlm.github.io/qwen-code-docs/en/users/integration-vscode/)
-- [Use in Zed](https://qwenlm.github.io/qwen-code-docs/en/users/integration-zed/)
-- [Use in JetBrains IDEs](https://qwenlm.github.io/qwen-code-docs/en/users/integration-jetbrains/)
+- `Ctrl+C` — Cancel operation
+- `Ctrl+D` — Exit (empty line)
+- `Up/Down` — Command history
 
-#### TypeScript SDK
+## Termux-Specific Features
 
-Build on top of Qwen Code with the TypeScript SDK:
+### TTS Notifications
 
-- [Use the Qwen Code SDK](./packages/sdk-typescript/README.md)
+When a task completes or needs your attention, Qwen Code can speak a notification
+using Android's text-to-speech engine:
 
-## Commands & Shortcuts
+```bash
+# Install termux-api for TTS
+pkg install termux-api
 
-### Session Commands
+# TTS is used automatically by the tts_notification tool
+```
 
-- `/help` - Display available commands
-- `/clear` - Clear conversation history
-- `/compress` - Compress history to save tokens
-- `/stats` - Show current session information
-- `/bug` - Submit a bug report
-- `/exit` or `/quit` - Exit Qwen Code
+### PTY Support
 
-### Keyboard Shortcuts
+Shell execution uses a PTY (pseudo-terminal) for proper ANSI colour and interactive
+command support. On Termux, PTY deps are auto-installed on first `npm install`.
 
-- `Ctrl+C` - Cancel current operation
-- `Ctrl+D` - Exit (on empty line)
-- `Up/Down` - Navigate command history
+### Runtime Patches
 
-> Learn more about [Commands](https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/)
->
-> **Tip**: In YOLO mode (`--yolo`), vision switching happens automatically without prompts when images are detected. Learn more about [Approval Mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/)
+| File                                          | Purpose                        |
+| --------------------------------------------- | ------------------------------ |
+| `packages/core/src/patches/termux-runtime.ts` | Android base64 polyfill        |
+| `scripts/prepare-termux.cjs`                  | Skip husky + bundle on Termux  |
+| `scripts/postinstall.cjs`                     | Termux install confirmation    |
+| `packages/core/src/utils/termux-detect.ts`    | `isTermux()` detection utility |
+
+## Building from Source
+
+```bash
+git clone https://github.com/DioNanos/qwen-code-termux.git
+cd qwen-code-termux
+npm install
+npm run build
+npm run bundle
+
+# Install globally
+npm install -g
+```
+
+See [docs/developers/BUILDING.md](docs/developers/BUILDING.md) for full details.
 
 ## Configuration
 
-Qwen Code can be configured via `settings.json`, environment variables, and CLI flags.
+| File                    | Scope   | Description                   |
+| ----------------------- | ------- | ----------------------------- |
+| `~/.qwen/settings.json` | User    | Global settings (recommended) |
+| `.qwen/settings.json`   | Project | Project-level overrides       |
 
-| File                    | Scope         | Description                                                                             |
-| ----------------------- | ------------- | --------------------------------------------------------------------------------------- |
-| `~/.qwen/settings.json` | User (global) | Applies to all your Qwen Code sessions. **Recommended for `modelProviders` and `env`.** |
-| `.qwen/settings.json`   | Project       | Applies only when running Qwen Code in this project. Overrides user settings.           |
+See the [authentication guide](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/) for all options.
 
-The most commonly used top-level fields in `settings.json`:
-
-| Field                        | Description                                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `modelProviders`             | Define available models per protocol (`openai`, `anthropic`, `gemini`, `vertex-ai`).                 |
-| `env`                        | Fallback environment variables (e.g. API keys). Lower priority than shell `export` and `.env` files. |
-| `security.auth.selectedType` | The protocol to use on startup (e.g. `openai`).                                                      |
-| `model.name`                 | The default model to use when Qwen Code starts.                                                      |
-
-> See the [Authentication](#api-key-flexible) section above for complete `settings.json` examples, and the [settings reference](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/) for all available options.
-
-## Benchmark Results
-
-### Terminal-Bench Performance
-
-| Agent     | Model              | Accuracy |
-| --------- | ------------------ | -------- |
-| Qwen Code | Qwen3-Coder-480A35 | 37.5%    |
-| Qwen Code | Qwen3-Coder-30BA3B | 31.3%    |
-
-## Ecosystem
-
-Looking for a graphical interface?
-
-- [**AionUi**](https://github.com/iOfficeAI/AionUi) A modern GUI for command-line AI tools including Qwen Code
-- [**Gemini CLI Desktop**](https://github.com/Piebald-AI/gemini-cli-desktop) A cross-platform desktop/web/mobile UI for Qwen Code
+> **Security note:** Never commit API keys to version control.
 
 ## Troubleshooting
 
-If you encounter issues, check the [troubleshooting guide](https://qwenlm.github.io/qwen-code-docs/en/users/support/troubleshooting/).
+- [Qwen Code docs](https://qwenlm.github.io/qwen-code-docs/en/users/support/troubleshooting/)
+- From the CLI: run `/bug` for a bug report template
+- [Test reports](test-reports/) — Termux-specific test results
 
-To report a bug from within the CLI, run `/bug` and include a short title and repro steps.
+## Ecosystem
 
-## Connect with Us
+- [**AionUi**](https://github.com/iOfficeAI/AionUi) — Modern GUI for Qwen Code
+- [**Gemini CLI Desktop**](https://github.com/Piebald-AI/gemini-cli-desktop) — Cross-platform desktop UI
 
-- Discord: https://discord.gg/RN7tqZCeDK
-- Dingtalk: https://qr.dingtalk.com/action/joingroup?code=v1,k1,+FX6Gf/ZDlTahTIRi8AEQhIaBlqykA0j+eBKKdhLeAE=&_dt_no_comment=1&origin=1
+## Connect
+
+- [Discord](https://discord.gg/RN7tqZCeDK)
+- [Dingtalk](https://qr.dingtalk.com/action/joingroup?code=v1,k1,+FX6Gf/ZDlTahTIRi8AEQhIaBlqykA0j+eBKKdhLeAE=&_dt_no_comment=1&origin=1)
 
 ## Acknowledgments
 
-This project is based on [Google Gemini CLI](https://github.com/google-gemini/gemini-cli). We acknowledge and appreciate the excellent work of the Gemini CLI team. Our main contribution focuses on parser-level adaptations to better support Qwen-Coder models.
+This project is based on [Google Gemini CLI](https://github.com/google-gemini/gemini-cli) and
+[Qwen Code](https://github.com/QwenLM/qwen-code). We acknowledge and appreciate the excellent
+work of both teams. This fork focuses on Termux/Android compatibility and Termux-specific
+features.
+
+## License
+
+Apache-2.0 — see [LICENSE](./LICENSE)

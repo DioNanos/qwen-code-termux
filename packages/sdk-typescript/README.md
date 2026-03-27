@@ -1,4 +1,7 @@
-# @qwen-code/sdk
+# @mmmbuto/qwen-code-termux-sdk
+
+> Part of the **qwen-code-termux** fork. Works with both upstream Qwen Code and
+> the Termux Edition (`@mmmbuto/qwen-code-termux`). The npm package is `@qwen-code/sdk`.
 
 A minimum experimental TypeScript SDK for programmatic access to Qwen Code.
 

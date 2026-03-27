@@ -1,6 +1,109 @@
 # Changelog
 
-## 0.0.14
+All notable changes to **qwen-code-termux** are documented here.
+Fork base: [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code).
+
+## [0.13.1-termux] - 2026-03-27
+
+### Added
+
+- **TTS Notification Tool** — new `tts_notification` tool using `termux-tts-speak`
+  for spoken completion/alerts on Termux
+- **termux-detect.ts** — `isTermux()` utility for runtime Termux detection
+
+### Changed
+
+- **Merged upstream QwenLM/qwen-code v0.13.1**
+- Badge updates, multi-language docs links, Qwen3.5-Plus support
+- ACP SDK from upstream
+
+### Termux Patches Maintained
+
+1. `prepare-termux.cjs` — skip husky + bundle on Termux
+2. `termux-runtime.ts` — Android base64 polyfill
+3. `getPty.ts` — re-export from `@mmmbuto/pty-termux-utils`
+4. `package.json` — `@mmmbuto/qwen-code-termux` name/version/sandboxImageUri
+5. `optionalDependencies` — Android ARM64 + Linux ARM64 PTY deps
+6. `termux-detect.ts` — `isTermux()` environment detection
+7. `tts-notification.ts` — TTS tool via `termux-tts-speak`
+8. `ttsNotificationTool` — registered in Config
+9. `postinstall.cjs` — Termux install confirmation message
+
+---
+
+## [0.12.0-termux] - 2026-03-09
+
+### Added
+
+- **Extension Management TUI** — manage MCP extensions via interactive UI
+- **Hook System** — custom hooks (session start/end, stop)
+- **Ask User Question Tool** — interactive user prompts
+- **ACP SDK Migration** — migrated to `@agentclientprotocol/sdk`
+- **Auto PTY Installation** — postinstall script auto-installs PTY deps on Termux
+
+### Changed
+
+- **Merged upstream QwenLM/qwen-code v0.12.0**
+- **Shell PTY Default** — PTY enabled by default for shell execution
+- **New dependency**: `iconv-lite` for character encoding
+- Version suffix: `-termux` across all workspace packages
+- Sandbox image: `ghcr.io/mmmbuto/qwen-code-termux:0.12.0-termux`
+
+### Fixed
+
+- **shellExecutionService.ts** — adapted to use `@mmmbuto/pty-termux-utils` IPty interface
+- **Import paths** — all `@qwen-code/qwen-code-core` → `@mmmbuto/qwen-code-termux-core`
+- **prepare-package.js** — Termux-specific optionalDependencies
+
+### Termux Patches Maintained (9/9)
+
+1. `prepare-termux.cjs` — skip husky/bundle on Termux
+2. `termux-runtime.ts` — Android runtime polyfills
+3. `getPty.ts` — re-export from `@mmmbuto/pty-termux-utils`
+4. `package.json` — Termux name/version/sandboxImageUri
+5. `optionalDependencies` — Android ARM64 + Linux ARM64
+6. `installationInfo.ts` — correct update commands
+7. `start.js` — deprecation warning suppression
+8. `prepare-package.js` — NPM package preparation
+9. `postinstall.js` — auto-install PTY on Termux
+
+---
+
+## [0.11.3-termux] - 2026-03-04
+
+### Fixed
+
+- Bundle version fix
+
+---
+
+## [0.11.2-termux] - 2026-03-02
+
+### Fixed
+
+- Auto-update command fix (correct package name `@mmmbuto/qwen-code-termux`)
+
+---
+
+## [0.11.1-termux] - 2026-03-01
+
+### Added
+
+- PTY unified library (`@mmmbuto/pty-termux-utils`)
+
+---
+
+## [0.11.0-termux] - 2026-02-28
+
+### Added
+
+- Initial Termux fork based on upstream v0.11.0
+- Termux runtime patches
+- Skip husky/bundle on Termux install
+
+---
+
+## [0.0.14]
 
 - Added plan mode support for task planning
 - Fixed unreliable editCorrector that injects extra escape characters
@@ -8,114 +111,82 @@
 - Added Qwen3-VL-Plus token limits (256K input, 32K output) and highres support
 - Enhanced dashScope cache control
 
-## 0.0.13
+## [0.0.13]
 
-- Added YOLO mode support for automatic vision model switching with CLI arguments and environment variables.
-- Fixed ripgrep lazy loading to resolve VS Code IDE companion startup issues.
-- Fixed authentication hang when selecting Qwen OAuth.
-- Added OpenAI and Qwen OAuth authentication support to Zed ACP integration.
-- Fixed output token limit for Qwen models.
-- Fixed Markdown list display issues on Windows.
-- Enhanced vision model instructions and documentation.
-- Improved authentication method compatibility across different IDE integrations.
+- Added YOLO mode support for automatic vision model switching
+- Fixed ripgrep lazy loading for VS Code IDE companion
+- Fixed authentication hang with Qwen OAuth
+- Added OpenAI and Qwen OAuth authentication to Zed ACP integration
+- Fixed output token limit for Qwen models
+- Fixed Markdown list display issues on Windows
+- Enhanced vision model instructions
 
-## 0.0.12
+## [0.0.12]
 
-- Added vision model support for Qwen-OAuth authentication.
-- Synced upstream `gemini-cli` to v0.3.4 with numerous improvements and bug fixes.
-- Enhanced subagent functionality with system reminders and improved user experience.
-- Added tool call type coercion for better compatibility.
-- Fixed arrow key navigation issues on Windows.
-- Fixed missing tool call chunks for OpenAI logging.
-- Fixed system prompt issues to avoid malformed tool calls.
-- Fixed terminal flicker when subagent is executing.
-- Fixed duplicate subagents configuration when running in home directory.
-- Fixed Esc key unable to cancel subagent dialog.
-- Added confirmation prompt for `/init` command when context file exists.
-- Added `skipLoopDetection` configuration option.
-- Fixed `is_background` parameter reset issues.
-- Enhanced Windows compatibility with multi-line paste handling.
-- Improved subagent documentation and branding consistency.
-- Fixed various linting errors and improved code quality.
-- Miscellaneous improvements and bug fixes.
+- Added vision model support for Qwen-OAuth authentication
+- Synced upstream `gemini-cli` to v0.3.4
+- Enhanced subagent functionality
+- Added tool call type coercion
+- Fixed arrow key navigation on Windows
+- Fixed missing tool call chunks for OpenAI logging
+- Fixed terminal flicker with subagent execution
+- Added `skipLoopDetection` configuration option
+- Enhanced Windows multi-line paste handling
 
-## 0.0.11
+## [0.0.11]
 
-- Added subagents feature with file-based configuration system for specialized AI assistants.
-- Added Welcome Back Dialog with project summary and enhanced quit options.
-- Fixed performance issues with SharedTokenManager causing 20-minute delays.
-- Fixed tool calls UI issues and improved user experience.
-- Fixed credential clearing when switching authentication types.
-- Enhanced subagent capabilities to use tools requiring user confirmation.
-- Improved ReadManyFiles tool with shared line limits across files.
-- Re-implemented tokenLimits class for better compatibility with Qwen and other model types.
-- Fixed chunk validation to avoid unnecessary retries.
-- Resolved EditTool naming inconsistency causing agent confusion loops.
-- Fixed unexpected re-authentication when auth-token is expired.
-- Added Terminal Bench integration tests.
-- Updated multilingual documentation links in README.
-- Fixed various Windows compatibility issues.
-- Miscellaneous improvements and bug fixes.
+- Added subagents feature with file-based configuration
+- Added Welcome Back Dialog
+- Fixed SharedTokenManager performance issues
+- Enhanced ReadManyFiles tool
+- Re-implemented tokenLimits class
+- Resolved EditTool naming inconsistency
+- Fixed unexpected re-authentication issues
+- Added Terminal Bench integration tests
 
-## 0.0.10
+## [0.0.10]
 
-- Synced upstream `gemini-cli` to v0.2.1.
-- Add todo write tool for task management and progress tracking.
+- Synced upstream `gemini-cli` to v0.2.1
+- Added todo write tool
 
-## 0.0.9
+## [0.0.9]
 
-- Synced upstream `gemini-cli` to v0.1.21.
-- Fixed token synchronization among multiple Qwen sessions.
-- Improved tool execution with early stop on invalid tool calls.
-- Added explicit `is_background` parameter for shell tool.
-- Enhanced memory management with sub-commands to switch between project and global memory operations.
-- Renamed `GEMINI_DIR` to `QWEN_DIR` for better branding consistency.
-- Added support for Qwen Markdown selection.
-- Fixed parallel tool usage and improved tool reliability.
-- Upgraded integration tests to use Vitest framework.
-- Enhanced VS Code IDE integration with launch configurations.
-- Added terminal setup command for Shift+Enter and Ctrl+Enter support.
-- Fixed GitHub Workflows configuration issues.
-- Improved settings directory and command descriptions.
-- Fixed locale handling in yargs configuration.
-- Added support for `trustedFolders.json` configuration file.
-- Enhanced cross-platform compatibility for sandbox build scripts.
-- Improved error handling and fixed ambiguous literals.
-- Updated documentation links and added IDE integration documentation.
-- Miscellaneous improvements and bug fixes.
+- Synced upstream `gemini-cli` to v0.1.21
+- Fixed token synchronization among multiple sessions
+- Improved tool execution with early stop
+- Added explicit `is_background` parameter for shell tool
+- Enhanced memory management
+- Renamed `GEMINI_DIR` to `QWEN_DIR`
+- Added support for Qwen Markdown selection
+- Fixed parallel tool usage
+- Upgraded to Vitest framework
 
-## 0.0.8
+## [0.0.8]
 
-- Synced upstream `gemini-cli` to v0.1.19.
-- Updated documentation branding from **Gemini CLI** to **Qwen Code**.
-- Added multilingual docs links in `README.md`.
-- Added deterministic cache control for the DashScope provider.
-- Added option to choose a project-level or global save location.
-- Limited `grep` results to 25 items by default.
-- `grep` now respects `.qwenignore`.
-- Miscellaneous improvements and bug fixes.
+- Synced upstream `gemini-cli` to v0.1.19
+- Updated branding from Gemini CLI to Qwen Code
+- Added multilingual docs links
+- Added deterministic cache control for DashScope
+- Limited `grep` results to 25 items default
+- `grep` respects `.qwenignore`
 
-## 0.0.7
+## [0.0.7]
 
-- Synced upstream `gemini-cli` to v0.1.18.
-- Fixed MCP tools.
-- Fixed Web Fetch tool.
-- Fixed Web Search tool by switching from Google/Gemini to the Tavily API.
-- Made tool calls tolerant of invalid-JSON parameters occasionally returned by the LLM.
-- Prevented concurrent query submissions in rare cases.
-- Corrected Qwen logger exit-handler setup.
-- Separated static QR code and dynamic spinner components.
+- Synced upstream `gemini-cli` to v0.1.18
+- Fixed MCP tools and Web Fetch/Search tools
+- Made tool calls tolerant of invalid-JSON parameters
+- Prevented concurrent query submissions
+- Corrected Qwen logger exit-handler setup
 
-## 0.0.6
+## [0.0.6]
 
-- Added usage statistics logging for Qwen integration.
-- Made `/init` respect the configured context filename and aligned docs with `QWEN.md`.
-- Fixed `EPERM` error when running `qwen --sandbox` on macOS.
-- Fixed terminal flicker while waiting for login.
-- Fixed `glm-4.5` model request error.
+- Added usage statistics logging
+- Fixed `EPERM` error with `--sandbox` on macOS
+- Fixed terminal flicker
+- Fixed `glm-4.5` model request error
 
-## 0.0.5
+## [0.0.5]
 
-- Added Qwen OAuth login and up to 1,000 free requests per day.
-- Synced upstream `gemini-cli` to v0.1.17.
-- Added the `systemPromptMappings` configuration option.
+- Added Qwen OAuth login (1,000 free requests/day)
+- Synced upstream `gemini-cli` to v0.1.17
+- Added `systemPromptMappings` configuration option
