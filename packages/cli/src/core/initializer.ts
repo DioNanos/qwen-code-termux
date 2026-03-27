@@ -10,8 +10,8 @@ import {
   IdeConnectionType,
   logIdeConnection,
   type Config,
-} from '@mmmbuto/qwen-code-termux-core';
-import { type LoadedSettings, SettingScope } from '../config/settings.js';
+} from '@qwen-code/qwen-code-core';
+import { type LoadedSettings } from '../config/settings.js';
 import { performInitialAuth } from './auth.js';
 import { validateTheme } from './theme.js';
 import { initializeI18n, type SupportedLanguage } from '../i18n/index.js';
@@ -46,14 +46,6 @@ export async function initializeApp(
   const authType = config.getModelsConfig().getCurrentAuthType();
   const authError = await performInitialAuth(config, authType);
 
-  // Fallback to user select when initial authentication fails
-  if (authError) {
-    settings.setValue(
-      SettingScope.User,
-      'security.auth.selectedType',
-      undefined,
-    );
-  }
   const themeError = validateTheme(settings);
 
   const shouldOpenAuthDialog =

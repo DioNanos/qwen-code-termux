@@ -1,10 +1,10 @@
 {
-  "name": "@mmmbuto/qwen-code-termux-core",
-  "version": "0.12.0-termux",
+  "name": "@qwen-code/qwen-code-core",
+  "version": "0.13.1",
   "description": "Qwen Code Core",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DioNanos/qwen-code-termux.git"
+    "url": "git+https://github.com/QwenLM/qwen-code.git"
   },
   "type": "module",
   "main": "dist/index.js",
@@ -26,7 +26,6 @@
     "@anthropic-ai/sdk": "^0.36.1",
     "@google/genai": "1.30.0",
     "@iarna/toml": "^2.2.5",
-    "@mmmbuto/pty-termux-utils": "^1.1.4",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-logs-otlp-grpc": "^0.203.0",
@@ -43,6 +42,7 @@
     "ajv-formats": "^3.0.0",
     "async-mutex": "^0.5.0",
     "chardet": "^2.1.0",
+    "iconv-lite": "^0.6.3",
     "chokidar": "^4.0.3",
     "diff": "^7.0.0",
     "dotenv": "^17.1.0",
@@ -70,14 +70,19 @@
     "tar": "^7.5.2",
     "undici": "^6.22.0",
     "uuid": "^9.0.1",
+    "web-tree-sitter": "^0.24.7",
     "ws": "^8.18.0"
   },
   "optionalDependencies": {
-    "@mmmbuto/node-pty-android-arm64": "~1.1.0",
-    "@lydell/node-pty-linux-arm64": "~1.2.0-beta.2"
+    "@lydell/node-pty": "1.1.0",
+    "@lydell/node-pty-darwin-arm64": "1.1.0",
+    "@lydell/node-pty-darwin-x64": "1.1.0",
+    "@lydell/node-pty-linux-x64": "1.1.0",
+    "@lydell/node-pty-win32-arm64": "1.1.0",
+    "@lydell/node-pty-win32-x64": "1.1.0"
   },
   "devDependencies": {
-    "@mmmbuto/qwen-code-termux-test-utils": "file:../test-utils",
+    "@qwen-code/qwen-code-test-utils": "file:../test-utils",
     "@types/diff": "^7.0.2",
     "@types/dotenv": "^6.1.1",
     "@types/fast-levenshtein": "^0.0.4",
@@ -87,6 +92,7 @@
     "@types/tar": "^6.1.13",
     "@types/ws": "^8.5.10",
     "msw": "^2.3.4",
+    "tree-sitter-wasms": "^0.1.13",
     "typescript": "^5.3.3",
     "vitest": "^3.1.1"
   },

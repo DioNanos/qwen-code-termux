@@ -4,10 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {
-  Config,
-  ToolCallRequestInfo,
-} from '@mmmbuto/qwen-code-termux-core';
+import type { Config, ToolCallRequestInfo } from '@qwen-code/qwen-code-core';
 import { isSlashCommand } from './ui/utils/commandUtils.js';
 import type { LoadedSettings } from './config/settings.js';
 import {
@@ -22,7 +19,8 @@ import {
   uiTelemetryService,
   parseAndFormatApiError,
   createDebugLogger,
-} from '@mmmbuto/qwen-code-termux-core';
+  SendMessageType,
+} from '@qwen-code/qwen-code-core';
 import type { Content, Part, PartListUnion } from '@google/genai';
 import type { CLIUserMessage, PermissionMode } from './nonInteractive/types.js';
 import type { JsonOutputAdapterInterface } from './nonInteractive/io/BaseJsonOutputAdapter.js';
@@ -45,7 +43,7 @@ import {
   extractPartsFromUserMessage,
   buildSystemMessage,
   createToolProgressHandler,
-  createTaskToolProgressHandler,
+  createAgentToolProgressHandler,
   computeUsageFromMetrics,
 } from './utils/nonInteractiveHelpers.js';
 
@@ -268,7 +266,11 @@ export async function runNonInteractive(
           currentMessages[0]?.parts || [],
           abortController.signal,
           prompt_id,
-          { isContinuation: !isFirstTurn },
+          {
+            type: isFirstTurn
+              ? SendMessageType.UserQuery
+              : SendMessageType.ToolResult,
+          },
         );
         isFirstTurn = false;
 
@@ -318,12 +320,12 @@ export async function runNonInteractive(
                 : undefined;
 
             // Build outputUpdateHandler for this tool call.
-            // Task tool has its own complex handler (subagent messages).
+            // Agent tool has its own complex handler (subagent messages).
             // All other tools with canUpdateOutput=true (e.g., MCP tools)
             // get a generic handler that emits progress via the adapter.
-            const isTaskTool = finalRequestInfo.name === 'task';
-            const { handler: outputUpdateHandler } = isTaskTool
-              ? createTaskToolProgressHandler(
+            const isAgentTool = finalRequestInfo.name === 'agent';
+            const { handler: outputUpdateHandler } = isAgentTool
+              ? createAgentToolProgressHandler(
                   config,
                   finalRequestInfo.callId,
                   adapter,
@@ -388,6 +390,16 @@ export async function runNonInteractive(
         }
       }
     } catch (error) {
+      // Ensure message_start / message_stop (and content_block events) are
+      // properly paired even when an error aborts the turn mid-stream.
+      // The call is safe when no message was started (throws → caught) or
+      // when already finalized (idempotent guard inside the adapter).
+      try {
+        adapter.finalizeAssistantMessage();
+      } catch {
+        // Expected when no message was started or already finalized
+      }
+
       // For JSON and STREAM_JSON modes, compute usage from metrics
       const message = error instanceof Error ? error.message : String(error);
       const metrics = uiTelemetryService.getMetrics();

@@ -7,6 +7,7 @@ import { AcpConnection } from './acpConnection.js';
 import type {
   ModelInfo,
   AvailableCommand,
+  ContentBlock,
   RequestPermissionRequest,
   SessionNotification,
 } from '@agentclientprotocol/sdk';
@@ -36,9 +37,40 @@ import {
   extractSessionModelState,
 } from '../utils/acpModelInfo.js';
 import { isAuthenticationRequiredError } from '../utils/authErrors.js';
+import { getErrorMessage } from '../utils/errorMessage.js';
 import { handleAuthenticateUpdate } from '../utils/authNotificationHandler.js';
 
 export type { ChatMessage, PlanEntry, ToolCallUpdateData };
+
+/**
+ * Extract session list items from ACP response.
+ * Handles both 'sessions' (new) and 'items' (legacy) response shapes.
+ * @param response - The ACP session/list response
+ * @returns Array of session items, or empty array if invalid
+ */
+export function extractSessionListItems(
+  response: unknown,
+): Array<Record<string, unknown>> {
+  if (!response || typeof response !== 'object') {
+    return [];
+  }
+
+  const payload = response as {
+    sessions?: unknown;
+    items?: unknown;
+  };
+
+  // Prefer 'sessions' field, fall back to 'items' for backwards compatibility
+  if (Array.isArray(payload.sessions)) {
+    return payload.sessions as Array<Record<string, unknown>>;
+  }
+
+  if (Array.isArray(payload.items)) {
+    return payload.items as Array<Record<string, unknown>>;
+  }
+
+  return [];
+}
 
 /**
  * Qwen Agent Manager
@@ -320,7 +352,7 @@ export class QwenAgentManager {
    *
    * @param message - Message content
    */
-  async sendMessage(message: string): Promise<void> {
+  async sendMessage(message: string | ContentBlock[]): Promise<void> {
     await this.connection.sendPrompt(message);
   }
 
@@ -350,10 +382,13 @@ export class QwenAgentManager {
     try {
       await this.connection.setModel(modelId);
       const confirmedModelId = modelId;
-      const modelInfo: ModelInfo = {
+      const modelInfo = this.baselineAvailableModels.find(
+        (model) => model.modelId === confirmedModelId,
+      ) ?? {
         modelId: confirmedModelId,
         name: confirmedModelId,
       };
+      this.baselineModelInfo = modelInfo;
       this.callbacks.onModelChanged?.(modelInfo);
       return modelInfo;
     } catch (err) {
@@ -413,14 +448,7 @@ export class QwenAgentManager {
       console.log('[QwenAgentManager] ACP session list response:', response);
 
       const res: unknown = response;
-      let items: Array<Record<string, unknown>> = [];
-
-      if (res && typeof res === 'object' && 'sessions' in res) {
-        const sessionsValue = (res as { sessions?: unknown }).sessions;
-        items = Array.isArray(sessionsValue)
-          ? (sessionsValue as Array<Record<string, unknown>>)
-          : [];
-      }
+      const items = extractSessionListItems(res);
 
       console.log(
         '[QwenAgentManager] Sessions retrieved via ACP:',
@@ -514,14 +542,7 @@ export class QwenAgentManager {
         ...(cursor !== undefined ? { cursor } : {}),
       });
       const res: unknown = response;
-      let items: Array<Record<string, unknown>> = [];
-
-      if (res && typeof res === 'object' && 'sessions' in res) {
-        const sessionsValue = (res as { sessions?: unknown }).sessions;
-        items = Array.isArray(sessionsValue)
-          ? (sessionsValue as Array<Record<string, unknown>>)
-          : [];
-      }
+      const items = extractSessionListItems(res);
 
       const mapped = items.map((item) => ({
         id: item.sessionId || item.id,
@@ -997,8 +1018,7 @@ export class QwenAgentManager {
 
       return response;
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       console.error(
         '[QwenAgentManager] Session load via ACP failed for session:',
         sessionId,

@@ -1,145 +1,74 @@
-# Building Qwen Code Termux Edition
+# Building qwen-code-termux
 
-This document describes how to build Qwen Code Termux Edition from source.
+Build Qwen Code Termux Edition from source on Linux/macOS (or Termux).
 
 ## Prerequisites
 
 - Node.js 20+
-- npm or pnpm
+- npm 9+ (or pnpm)
 - Git
+- **For Termux**: `pkg install nodejs-lts` + `pkg install termux-api` (optional)
 
 ## Quick Build
 
 ```bash
-# 1. Clone repository
+# 1. Clone
 git clone https://github.com/DioNanos/qwen-code-termux.git
 cd qwen-code-termux
 
 # 2. Install dependencies
 npm install
 
-# 3. Build
+# 3. Build all packages
 npm run build
 
-# 4. Package
-npm pack
+# 4. Bundle for distribution
+npm run bundle
 
-# Output: mmmbuto-qwen-code-termux-0.10.3-termux.tgz
+# 5. Install globally
+npm install -g
 ```
 
-## Development Build
+## Development Mode
 
 ```bash
-# Watch mode (auto-rebuild on changes)
-npm run dev
+npm run dev     # Hot reload during development
+npm start       # Interactive CLI
+npm run debug   # Debug mode (--inspect-brk)
 ```
 
-## Production Build
+## CI Checks
 
 ```bash
-# Full build (all packages + sandbox)
-npm run build:all
-
-# Or individual components
-npm run build              # Main build
-npm run build:sandbox      # Sandbox image
-npm run build:vscode       # VS Code companion
+npm run preflight   # format + lint + build + typecheck + test
 ```
 
-## Testing
+## Termux-Specific Build Notes
+
+On Termux, `npm install` automatically:
+
+- Skips husky git hooks (`prepare-termux.cjs`)
+- Skips sandbox bundle
+- Installs `@mmmbuto/pty-termux-utils` for PTY support
+
+On non-Termux platforms, everything builds normally.
+
+## Docker Sandbox (non-Termux only)
 
 ```bash
-# Run all tests
-npm test
+# Pull pre-built sandbox image
+docker pull ghcr.io/mmmbuto/qwen-code-termux:0.13.1-termux
 
-# CI mode
-npm run test:ci
-
-# Integration tests (no sandbox)
-npm run test:integration:sandbox:none
+# Run with sandbox
+qwen --sandbox
 ```
-
-## Creating npm Package
-
-```bash
-# 1. Ensure clean build
-npm run clean
-npm install
-npm run build
-
-# 2. Create package
-npm pack
-
-# 3. Verify package
-tar -tzf mmmbuto-qwen-code-termux-*.tgz | head -20
-
-# 4. Install locally (test)
-npm install -g ./mmmbuto-qwen-code-termux-*.tgz
-qwen --version
-```
-
-## Termux-Specific Notes
-
-### prepare-termux.cjs
-
-During `npm install`, the `prepare` script:
-
-- Detects Termux environment
-- Skips husky + bundle (already built)
-- Exits immediately
-
-### Pre-built Assets
-
-The npm package includes:
-
-- `dist/` directory (pre-built)
-- `scripts/` directory
-- Pre-configured for Termux
-
-No build is required on the target device.
 
 ## Troubleshooting
 
-### Build fails with TypeScript errors
+| Problem                   | Solution                               |
+| ------------------------- | -------------------------------------- |
+| Build fails with node-gyp | Use Termux + `pkg install nodejs-lts`  |
+| `qwen: command not found` | Run `npm install -g` or use `npx qwen` |
+| PTY not working on Termux | Run `pkg install termux-api`           |
 
-```bash
-# Clean and rebuild
-npm run clean
-npm install
-npm run build
-```
-
-### Missing dependencies
-
-```bash
-# Reinstall all dependencies
-rm -rf node_modules package-lock.json
-npm install
-```
-
-### Package size too large
-
-```bash
-# Check package contents
-npm pack --dry-run
-
-# Verify dist/ is included, node_modules/ is excluded
-```
-
-## Release Checklist
-
-Before publishing:
-
-- [ ] All tests pass: `npm test`
-- [ ] Build succeeds: `npm run build`
-- [ ] Version updated in `package.json`
-- [ ] CHANGELOG.md updated
-- [ ] Test report created: `test-reports/<version>/`
-- [ ] Package created: `npm pack`
-- [ ] Package tested locally
-
-## See Also
-
-- [Test Reports](../test-reports/README.md)
-- [Patches](../patches/README.md)
-- [Configuration](users/configuration.md)
+See also: [../test-reports/](../test-reports/) for on-device test results.
