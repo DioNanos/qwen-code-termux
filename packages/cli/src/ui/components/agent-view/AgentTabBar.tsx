@@ -20,7 +20,7 @@
 
 import { Box, Text } from 'ink';
 import { useState, useEffect, useCallback } from 'react';
-import { AgentStatus, AgentEventType } from '@qwen-code/qwen-code-core';
+import { AgentStatus, AgentEventType } from '@mmmbuto/qwen-code-termux-core';
 import {
   useAgentViewState,
   useAgentViewActions,

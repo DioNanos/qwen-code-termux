@@ -1,4 +1,4 @@
-import { Storage } from '@qwen-code/qwen-code-core';
+import { Storage } from '@mmmbuto/qwen-code-termux-core';
 import type { LoadedSettings } from '../config/settings.js';
 
 export function runWithAcpRuntimeOutputDir<T>(

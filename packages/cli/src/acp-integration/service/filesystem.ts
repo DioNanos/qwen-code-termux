@@ -15,7 +15,7 @@ import { RequestError } from '@agentclientprotocol/sdk';
 import type {
   FileSystemService,
   ReadTextFileResponse,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 const RESOURCE_NOT_FOUND_CODE = -32002;
 

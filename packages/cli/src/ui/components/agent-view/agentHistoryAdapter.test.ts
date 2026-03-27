@@ -9,7 +9,7 @@ import { agentMessagesToHistoryItems } from './agentHistoryAdapter.js';
 import type {
   AgentMessage,
   ToolCallConfirmationDetails,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { ToolCallStatus } from '../../types.js';
 
 // ─── Helpers ────────────────────────────────────────────────

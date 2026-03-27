@@ -11,7 +11,7 @@ import { createMockCommandContext } from '../../test-utils/mockCommandContext.js
 import {
   SessionEndReason,
   SessionStartSource,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 // Mock the telemetry service
 vi.mock('@mmmbuto/qwen-code-termux-core', async () => {

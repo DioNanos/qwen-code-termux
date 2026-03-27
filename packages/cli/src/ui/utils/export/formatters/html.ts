@@ -5,7 +5,7 @@
  */
 
 import type { ExportSessionData } from '../types.js';
-import { EXPORT_HTML_TEMPLATE as HTML_TEMPLATE } from '@mmmbuto/web-templates';
+import { EXPORT_HTML_TEMPLATE as HTML_TEMPLATE } from '@mmmbuto/qwen-code-termux-web-templates';
 
 /**
  * Escapes JSON for safe embedding in HTML.

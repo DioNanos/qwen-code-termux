@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isSupportedImageMimeType } from '@qwen-code/qwen-code-core/src/utils/request-tokenizer/supportedImageFormats.js';
+import { isSupportedImageMimeType } from '@mmmbuto/qwen-code-termux-core/src/utils/request-tokenizer/supportedImageFormats.js';
 
 // ---------- Types ----------
 

@@ -1,5 +1,5 @@
 {
-  "name": "@qwen-code/qwen-code-test-utils",
+  "name": "@mmmbuto/qwen-code-termux-test-utils",
   "version": "0.13.1",
   "private": true,
   "main": "src/index.ts",

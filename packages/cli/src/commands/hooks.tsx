@@ -5,7 +5,7 @@
  */
 
 import type { CommandModule } from 'yargs';
-import { createDebugLogger } from '@qwen-code/qwen-code-core';
+import { createDebugLogger } from '@mmmbuto/qwen-code-termux-core';
 
 const debugLogger = createDebugLogger('HOOKS_UI');
 

@@ -50,7 +50,7 @@ export default defineConfig({
     },
     server: {
       deps: {
-        inline: [/@qwen-code\/qwen-code-core/],
+        inline: [/\/@mmmbuto\/qwen-code-termux-core\//],
       },
     },
   },

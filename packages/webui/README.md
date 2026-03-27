@@ -1,4 +1,4 @@
-# @qwen-code/webui
+# @mmmbuto/qwen-code-termux-webui
 
 A shared React component library for Qwen Code applications, providing cross-platform UI components with consistent styling and behavior.
 
@@ -15,7 +15,7 @@ A shared React component library for Qwen Code applications, providing cross-pla
 ## Installation
 
 ```bash
-npm install @qwen-code/webui
+npm install @mmmbuto/qwen-code-termux-webui
 ```
 
 ## CDN Usage
@@ -61,12 +61,12 @@ You can also use this library directly in the browser via CDN:
     </script>
 
     <!-- Load the webui library -->
-    <script src="https://unpkg.com/@qwen-code/webui@0.1.0-beta.2/dist/index.umd.js"></script>
+    <script src="https://unpkg.com/@mmmbuto/qwen-code-termux-webui@0.1.0-beta.2/dist/index.umd.js"></script>
 
     <!-- Load the CSS -->
     <link
       rel="stylesheet"
-      href="https://unpkg.com/@qwen-code/webui@0.1.0-beta.2/dist/styles.css"
+      href="https://unpkg.com/@mmmbuto/qwen-code-termux-webui@0.1.0-beta.2/dist/styles.css"
     />
   </head>
   <body>
@@ -123,12 +123,12 @@ You can also use this library directly in the browser via CDN:
     </script>
 
     <!-- Load the webui library -->
-    <script src="https://unpkg.com/@qwen-code/webui@0.1.0-beta.2/dist/index.umd.js"></script>
+    <script src="https://unpkg.com/@mmmbuto/qwen-code-termux-webui@0.1.0-beta.2/dist/index.umd.js"></script>
 
     <!-- Load the CSS -->
     <link
       rel="stylesheet"
-      href="https://unpkg.com/@qwen-code/webui@0.1.0-beta.2/dist/styles.css"
+      href="https://unpkg.com/@mmmbuto/qwen-code-termux-webui@0.1.0-beta.2/dist/styles.css"
     />
   </head>
   <body>
@@ -156,8 +156,8 @@ For a complete working example, see [examples/cdn-usage-demo.html](./examples/cd
 ## Quick Start
 
 ```tsx
-import { Button, Input, Tooltip } from '@qwen-code/webui';
-import { PlatformProvider } from '@qwen-code/webui/context';
+import { Button, Input, Tooltip } from '@mmmbuto/qwen-code-termux-webui';
+import { PlatformProvider } from '@mmmbuto/qwen-code-termux-webui/context';
 
 function App() {
   return (
@@ -177,7 +177,7 @@ function App() {
 #### Button
 
 ```tsx
-import { Button } from '@qwen-code/webui';
+import { Button } from '@mmmbuto/qwen-code-termux-webui';
 
 <Button variant="primary" size="md" loading={false}>
   Submit
@@ -196,7 +196,7 @@ import { Button } from '@qwen-code/webui';
 #### Input
 
 ```tsx
-import { Input } from '@qwen-code/webui';
+import { Input } from '@mmmbuto/qwen-code-termux-webui';
 
 <Input
   label="Email"
@@ -219,7 +219,7 @@ import { Input } from '@qwen-code/webui';
 #### Tooltip
 
 ```tsx
-import { Tooltip } from '@qwen-code/webui';
+import { Tooltip } from '@mmmbuto/qwen-code-termux-webui';
 
 <Tooltip content="Helpful tip">
   <span>Hover me</span>
@@ -229,7 +229,7 @@ import { Tooltip } from '@qwen-code/webui';
 ### Icons
 
 ```tsx
-import { FileIcon, FolderIcon, CheckIcon } from '@qwen-code/webui/icons';
+import { FileIcon, FolderIcon, CheckIcon } from '@mmmbuto/qwen-code-termux-webui/icons';
 
 <FileIcon size={16} className="text-gray-500" />;
 ```
@@ -263,7 +263,7 @@ Available icon categories:
 The Platform Context provides an abstraction layer for platform-specific capabilities:
 
 ```tsx
-import { PlatformProvider, usePlatform } from '@qwen-code/webui/context';
+import { PlatformProvider, usePlatform } from '@mmmbuto/qwen-code-termux-webui/context';
 
 const platformContext = {
   postMessage: (message) => vscode.postMessage(message),
@@ -298,7 +298,7 @@ Use the shared Tailwind preset for consistent styling:
 ```js
 // tailwind.config.js
 module.exports = {
-  presets: [require('@qwen-code/webui/tailwind.preset.cjs')],
+  presets: [require('@mmmbuto/qwen-code-termux-webui/tailwind.preset.cjs')],
   // your customizations
 };
 ```

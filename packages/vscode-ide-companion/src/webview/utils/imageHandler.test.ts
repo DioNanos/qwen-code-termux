@@ -26,9 +26,9 @@ vi.mock('fs/promises', () => ({
   unlink: mockUnlink,
 }));
 
-vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
+    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
   return {
     ...actual,
     Storage: { getGlobalTempDir: () => '/mock/tmp' },

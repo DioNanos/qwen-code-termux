@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
-import { getProjectHash } from '@qwen-code/qwen-code-core/src/utils/paths.js';
+import { getProjectHash } from '@mmmbuto/qwen-code-termux-core/src/utils/paths.js';
 
 export interface QwenMessage {
   id: string;

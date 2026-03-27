@@ -65,12 +65,12 @@ vi.mock(
     },
   }),
 );
-vi.mock('@qwen-code/qwen-code-core/src/utils/filesearch/fileSearch.js', () => ({
+vi.mock('@mmmbuto/qwen-code-termux-core/src/utils/filesearch/fileSearch.js', () => ({
   FileSearchFactory: {
     create: () => fileSearchMock,
   },
 }));
-vi.mock('@qwen-code/qwen-code-core/src/utils/filesearch/crawlCache.js', () => ({
+vi.mock('@mmmbuto/qwen-code-termux-core/src/utils/filesearch/crawlCache.js', () => ({
   clear: vi.fn(),
 }));
 

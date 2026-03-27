@@ -11,11 +11,11 @@ import {
   AttentionNotificationReason,
 } from '../../utils/attentionNotification.js';
 import type { LoadedSettings } from '../../config/settings.js';
-import type { Config } from '@qwen-code/qwen-code-core';
+import type { Config } from '@mmmbuto/qwen-code-termux-core';
 import {
   fireNotificationHook,
   NotificationType,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 export const LONG_TASK_NOTIFICATION_THRESHOLD_SECONDS = 20;
 

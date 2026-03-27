@@ -21,7 +21,7 @@ import type {
   AgentMessage,
   ToolCallConfirmationDetails,
   ToolResultDisplay,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { HistoryItem, IndividualToolCallDisplay } from '../../types.js';
 import { ToolCallStatus } from '../../types.js';
 

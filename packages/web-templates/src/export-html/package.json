@@ -1,5 +1,5 @@
 {
-  "name": "@qwen-code/cli-export-html",
+  "name": "@mmmbuto/qwen-code-termux-cli-export-html",
   "private": true,
   "type": "module",
   "scripts": {

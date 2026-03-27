@@ -22,7 +22,7 @@ import {
   shouldSendMessage,
   useMessageSubmit,
 } from './hooks/useMessageSubmit.js';
-import type { PermissionOption, PermissionToolCall } from '@qwen-code/webui';
+import type { PermissionOption, PermissionToolCall } from '@mmmbuto/qwen-code-termux-webui';
 import type { TextMessage } from './hooks/message/useMessageHandling.js';
 import type { ToolCallData } from './components/messages/toolcalls/ToolCall.js';
 import { ToolCall } from './components/messages/toolcalls/ToolCall.js';
@@ -45,7 +45,7 @@ import {
   EmptyState,
   ChatHeader,
   SessionSelector,
-} from '@qwen-code/webui';
+} from '@mmmbuto/qwen-code-termux-webui';
 import { InputForm } from './components/layout/InputForm.js';
 import { ApprovalMode, NEXT_APPROVAL_MODE } from '../types/acpTypes.js';
 import type { ApprovalModeValue } from '../types/approvalModeValueTypes.js';
@@ -55,7 +55,7 @@ import type { Question } from '../types/acpTypes.js';
 import {
   DEFAULT_TOKEN_LIMIT,
   tokenLimit,
-} from '@qwen-code/qwen-code-core/src/core/tokenLimits.js';
+} from '@mmmbuto/qwen-code-termux-core/src/core/tokenLimits.js';
 import { useImagePaste, type WebViewImageMessage } from './hooks/useImage.js';
 
 export const App: React.FC = () => {

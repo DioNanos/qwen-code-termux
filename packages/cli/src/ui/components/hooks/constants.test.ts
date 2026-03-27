@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HookEventName, HooksConfigSource } from '@qwen-code/qwen-code-core';
+import { HookEventName, HooksConfigSource } from '@mmmbuto/qwen-code-termux-core';
 
 // Mock i18n module
 vi.mock('../../../i18n/index.js', () => ({

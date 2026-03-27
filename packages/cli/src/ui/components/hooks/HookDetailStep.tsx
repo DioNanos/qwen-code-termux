@@ -8,7 +8,7 @@ import { Box, Text } from 'ink';
 import { theme } from '../../semantic-colors.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import type { HookEventDisplayInfo } from './types.js';
-import { HooksConfigSource } from '@qwen-code/qwen-code-core';
+import { HooksConfigSource } from '@mmmbuto/qwen-code-termux-core';
 import { getTranslatedSourceDisplayMap } from './constants.js';
 import { t } from '../../../i18n/index.js';
 

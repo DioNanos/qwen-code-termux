@@ -23,8 +23,8 @@ import type {
   PermissionManager,
   RuleWithSource,
   RuleType,
-} from '@qwen-code/qwen-code-core';
-import { isPathWithinRoot } from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
+import { isPathWithinRoot } from '@mmmbuto/qwen-code-termux-core';
 
 // ---------------------------------------------------------------------------
 // Types

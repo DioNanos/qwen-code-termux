@@ -12,7 +12,7 @@
 
 import type React from 'react';
 import { Box, Text } from 'ink';
-import { ApprovalMode } from '@qwen-code/qwen-code-core';
+import { ApprovalMode } from '@mmmbuto/qwen-code-termux-core';
 import { AutoAcceptIndicator } from '../AutoAcceptIndicator.js';
 import { ContextUsageDisplay } from '../ContextUsageDisplay.js';
 import { theme } from '../../semantic-colors.js';

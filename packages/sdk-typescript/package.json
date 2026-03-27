@@ -1,5 +1,5 @@
 {
-  "name": "@qwen-code/sdk",
+  "name": "@mmmbuto/qwen-code-termux-sdk",
   "version": "0.1.4",
   "description": "TypeScript SDK for programmatic access to qwen-code CLI",
   "main": "./dist/index.cjs",

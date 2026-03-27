@@ -13,7 +13,7 @@ import { CommandKind } from './types.js';
 import { MessageType } from '../types.js';
 import type { HistoryItemBtw } from '../types.js';
 import { t } from '../../i18n/index.js';
-import type { GeminiClient } from '@qwen-code/qwen-code-core';
+import type { GeminiClient } from '@mmmbuto/qwen-code-termux-core';
 
 function makeBtwPromptId(sessionId: string): string {
   return `${sessionId}########btw-${Date.now()}`;

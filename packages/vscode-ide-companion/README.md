@@ -1,9 +1,9 @@
 # Qwen Code Companion
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/qwenlm.qwen-code-vscode-ide-companion)](https://marketplace.visualstudio.com/items?itemName=qwenlm.qwen-code-vscode-ide-companion)
-[![VS Code Installs](https://img.shields.io/visual-studio-marketplace/i/qwenlm.qwen-code-vscode-ide-companion)](https://marketplace.visualstudio.com/items?itemName=qwenlm.qwen-code-vscode-ide-companion)
-[![Open VSX Downloads](https://img.shields.io/open-vsx/dt/qwenlm/qwen-code-vscode-ide-companion)](https://open-vsx.org/extension/qwenlm/qwen-code-vscode-ide-companion)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/qwenlm.qwen-code-vscode-ide-companion)](https://marketplace.visualstudio.com/items?itemName=qwenlm.qwen-code-vscode-ide-companion)
+[![Version](https://img.shields.io/visual-studio-marketplace/v/qwenlm.@mmmbuto/qwen-code-termux-vscode)](https://marketplace.visualstudio.com/items?itemName=qwenlm.@mmmbuto/qwen-code-termux-vscode)
+[![VS Code Installs](https://img.shields.io/visual-studio-marketplace/i/qwenlm.@mmmbuto/qwen-code-termux-vscode)](https://marketplace.visualstudio.com/items?itemName=qwenlm.@mmmbuto/qwen-code-termux-vscode)
+[![Open VSX Downloads](https://img.shields.io/open-vsx/dt/qwenlm/@mmmbuto/qwen-code-termux-vscode)](https://open-vsx.org/extension/qwenlm/@mmmbuto/qwen-code-termux-vscode)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/qwenlm.@mmmbuto/qwen-code-termux-vscode)](https://marketplace.visualstudio.com/items?itemName=qwenlm.@mmmbuto/qwen-code-termux-vscode)
 
 Seamlessly integrate [Qwen Code](https://github.com/QwenLM/qwen-code) into Visual Studio Code with native IDE features and an intuitive chat interface. This extension bundles everything you need — no additional installation required.
 
@@ -29,7 +29,7 @@ Seamlessly integrate [Qwen Code](https://github.com/QwenLM/qwen-code) into Visua
 
 ## Quick Start
 
-1. **Install** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=qwenlm.qwen-code-vscode-ide-companion) or [Open VSX Registry](https://open-vsx.org/extension/qwenlm/qwen-code-vscode-ide-companion)
+1. **Install** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=qwenlm.@mmmbuto/qwen-code-termux-vscode) or [Open VSX Registry](https://open-vsx.org/extension/qwenlm/@mmmbuto/qwen-code-termux-vscode)
 
 2. **Open the Chat panel** using one of these methods:
    - Click the **Qwen icon** in the top-right corner of the editor

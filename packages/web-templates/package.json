@@ -1,5 +1,5 @@
 {
-  "name": "@qwen-code/web-templates",
+  "name": "@mmmbuto/qwen-code-termux-web-templates",
   "version": "0.13.1",
   "description": "Web templates bundled as embeddable JS/CSS strings",
   "repository": {

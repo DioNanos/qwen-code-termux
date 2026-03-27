@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url);
 /** @type {import('tailwindcss').Config} */
 export default {
   // Use webui preset for shared theme configuration
-  presets: [require('@qwen-code/webui/tailwind.preset')],
+  presets: [require('@mmmbuto/qwen-code-termux-webui/tailwind.preset')],
   content: [
     './src/webview/**/**/*.{js,jsx,ts,tsx}',
     // Include webui components to prevent Tailwind JIT from tree-shaking their classes

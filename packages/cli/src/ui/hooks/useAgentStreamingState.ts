@@ -20,7 +20,7 @@ import {
   isTerminalStatus,
   type AgentInteractive,
   type AgentEventEmitter,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import { StreamingState } from '../types.js';
 import { useTimer } from './useTimer.js';
 

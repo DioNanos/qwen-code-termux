@@ -1,5 +1,5 @@
 {
-  "name": "@qwen-code/cli-insight",
+  "name": "@mmmbuto/qwen-code-termux-cli-insight",
   "private": true,
   "type": "module",
   "scripts": {

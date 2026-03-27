@@ -4,6 +4,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Re-export from @mmmbuto/pty-termux-utils for unified PTY handling
-export type { PtyImplementation, IPty } from '@mmmbuto/pty-termux-utils';
-export { getPty, spawnPty } from '@mmmbuto/pty-termux-utils';
+export type PtyImplementation = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  module: any;
+  name: 'lydell-node-pty' | 'node-pty';
+} | null;
+
+export interface PtyProcess {
+  readonly pid: number;
+  onData(callback: (data: string) => void): void;
+  onExit(callback: (e: { exitCode: number; signal?: number }) => void): void;
+  kill(signal?: string): void;
+}
+
+export const getPty = async (): Promise<PtyImplementation> => {
+  // Try @lydell/node-pty first (standard)
+  try {
+    const lydell = '@lydell/node-pty';
+    const module = await import(lydell);
+    return { module, name: 'lydell-node-pty' };
+  } catch (_e) {
+    // Not available — PTY not supported on this platform
+    return null;
+  }
+};

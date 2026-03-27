@@ -70,9 +70,9 @@ vi.mock('../../semantic-colors.js', () => ({
 }));
 
 // Mock createDebugLogger
-vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
+vi.mock('@mmmbuto/qwen-code-termux-core', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('@qwen-code/qwen-code-core')>();
+    await importOriginal<typeof import('@mmmbuto/qwen-code-termux-core')>();
   return {
     ...actual,
     createDebugLogger: vi.fn(() => ({

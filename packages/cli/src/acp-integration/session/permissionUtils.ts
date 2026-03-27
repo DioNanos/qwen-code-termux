@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ToolCallConfirmationDetails } from '@qwen-code/qwen-code-core';
-import { ToolConfirmationOutcome } from '@qwen-code/qwen-code-core';
+import type { ToolCallConfirmationDetails } from '@mmmbuto/qwen-code-termux-core';
+import { ToolConfirmationOutcome } from '@mmmbuto/qwen-code-termux-core';
 import type {
   PermissionOption,
   ToolCallContent,

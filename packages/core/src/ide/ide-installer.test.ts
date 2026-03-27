@@ -121,7 +121,7 @@ describe('ide-installer', () => {
           expectedCommand,
           [
             '--install-extension',
-            'qwenlm.qwen-code-vscode-ide-companion',
+            'qwenlm.@mmmbuto/qwen-code-termux-vscode',
             '--force',
           ],
           { stdio: 'pipe', shell: isActuallyWindows },

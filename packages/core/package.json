@@ -1,5 +1,5 @@
 {
-  "name": "@qwen-code/qwen-code-core",
+  "name": "@mmmbuto/qwen-code-termux-core",
   "version": "0.13.1",
   "description": "Qwen Code Core",
   "repository": {
@@ -79,10 +79,11 @@
     "@lydell/node-pty-darwin-x64": "1.1.0",
     "@lydell/node-pty-linux-x64": "1.1.0",
     "@lydell/node-pty-win32-arm64": "1.1.0",
-    "@lydell/node-pty-win32-x64": "1.1.0"
+    "@lydell/node-pty-win32-x64": "1.1.0",
+    "@mmmbuto/node-pty-android-arm64": "file:../../node_modules/@mmmbuto/node-pty-android-arm64"
   },
   "devDependencies": {
-    "@qwen-code/qwen-code-test-utils": "file:../test-utils",
+    "@mmmbuto/qwen-code-termux-test-utils": "file:../test-utils",
     "@types/diff": "^7.0.2",
     "@types/dotenv": "^6.1.1",
     "@types/fast-levenshtein": "^0.0.4",

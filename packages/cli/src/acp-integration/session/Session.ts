@@ -17,7 +17,7 @@ import type {
   ToolResult,
   ChatRecord,
   AgentEventEmitter,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import {
   AuthType,
   ApprovalMode,
@@ -43,7 +43,7 @@ import {
   injectPermissionRulesIfMissing,
   NotificationType,
   persistPermissionOutcome,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 
 import { RequestError } from '@agentclientprotocol/sdk';
 import type {
@@ -507,7 +507,7 @@ export class Session implements SessionContext {
       return;
     }
 
-    const { IdeClient } = await import('@qwen-code/qwen-code-core');
+    const { IdeClient } = await import('@mmmbuto/qwen-code-termux-core');
     const ideClient = await IdeClient.getInstance();
     const cliOutcome =
       outcome === ToolConfirmationOutcome.Cancel ? 'rejected' : 'accepted';

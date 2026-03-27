@@ -25,7 +25,7 @@ import {
   type ArenaSessionCompleteEvent,
   type Config,
   type InProcessBackend,
-} from '@qwen-code/qwen-code-core';
+} from '@mmmbuto/qwen-code-termux-core';
 import type { AgentViewActions } from '../contexts/AgentViewContext.js';
 import { theme } from '../semantic-colors.js';
 

@@ -5,7 +5,7 @@
  */
 
 import * as vscode from 'vscode';
-import { Storage } from '@qwen-code/qwen-code-core';
+import { Storage } from '@mmmbuto/qwen-code-termux-core';
 
 export function getLocalResourceRoots(
   extensionUri: vscode.Uri,
