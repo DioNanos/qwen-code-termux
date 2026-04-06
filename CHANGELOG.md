@@ -3,6 +3,45 @@
 All notable changes to **qwen-code-termux** are documented here.
 Fork base: [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code).
 
+## [0.14.0-termux] - 2026-04-06
+
+### Added
+
+- **Channels support** — upstream channels architecture (Telegram, Weixin, Dingtalk) integrated
+- **Cron scheduling tools** — `cron_create`, `cron_list`, `cron_delete` for scheduled tasks
+- **Qwen3.6-Plus** model support
+
+### Changed
+
+- **Merged upstream QwenLM/qwen-code v0.14.0**
+- **PTY upgrade** — `@lydell/node-pty` → `1.2.0-beta.10` (FD leak fix)
+- **getPty.ts** — enhanced fallback chain: lydell → `@mmmbuto/node-pty-android-arm64` → node-pty → null
+- **Shell tool** — command substitution restriction removed upstream (more permissive on Termux)
+- **esbuild.config.js** — added punycode userland alias + web-templates alias from upstream
+- **scripts/build.js** — channels packages added to build order
+- Version suffix: `-termux` across all workspace packages
+- Sandbox image: `ghcr.io/mmmbuto/qwen-code-termux:0.14.0-termux`
+
+### Fixed
+
+- **Conflict resolution** — merged all 13 conflict files keeping Termux customizations
+- **tool-names.ts** — added cron tools + preserved TTS_NOTIFICATION
+- **package.json files** — all workspace packages rebranded with `@mmmbuto/qwen-code-termux-*` naming
+
+### Termux Patches Maintained (9/9)
+
+1. `prepare-termux.cjs` — skip husky + bundle on Termux
+2. `termux-runtime.ts` — Android base64 polyfill
+3. `getPty.ts` — enhanced fallback chain with `@mmmbuto/node-pty-android-arm64`
+4. `package.json` — `@mmmbuto/qwen-code-termux` name/version/sandboxImageUri
+5. `optionalDependencies` — Android ARM64 + Linux ARM64 PTY deps (1.2.0-beta.10)
+6. `termux-detect.ts` — `isTermux()` environment detection
+7. `tts-notification.ts` — TTS tool via `termux-tts-speak`
+8. `ttsNotificationTool` — registered in Config
+9. `postinstall.cjs` — Termux install confirmation message
+
+---
+
 ## [0.13.1-termux] - 2026-03-27
 
 ### Added

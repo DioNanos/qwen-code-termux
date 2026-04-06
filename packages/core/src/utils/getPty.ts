@@ -4,10 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// TERMUX PATCH: Android/Termux PTY fallback chain
+// 1. @lydell/node-pty (standard — works on Linux/macOS/Windows)
+// 2. @mmmbuto/node-pty-android-arm64 (Termux/Android ARM64 — our fork)
+// 3. node-pty (original microsoft fork — fallback)
+// 4. null (PTY not supported)
+
 export type PtyImplementation = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   module: any;
-  name: 'lydell-node-pty' | 'node-pty';
+  name: 'lydell-node-pty' | 'mmmbuto-android-arm64' | 'node-pty';
 } | null;
 
 export interface PtyProcess {
@@ -24,7 +30,20 @@ export const getPty = async (): Promise<PtyImplementation> => {
     const module = await import(lydell);
     return { module, name: 'lydell-node-pty' };
   } catch (_e) {
-    // Not available — PTY not supported on this platform
-    return null;
+    // TERMUX PATCH: Try our Android ARM64 fork
+    try {
+      const mmmbuto = '@mmmbuto/node-pty-android-arm64';
+      const module = await import(mmmbuto);
+      return { module, name: 'mmmbuto-android-arm64' };
+    } catch (_e2) {
+      // Final fallback: standard node-pty
+      try {
+        const nodePty = 'node-pty';
+        const module = await import(nodePty);
+        return { module, name: 'node-pty' };
+      } catch (_e3) {
+        return null;
+      }
+    }
   }
 };
