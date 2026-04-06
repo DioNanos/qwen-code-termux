@@ -16,8 +16,7 @@
 
 </div>
 
-> 🎉 **News (2026-03-27)**: Termux Edition v0.13.1 is here! TTS notifications,
-> full upstream v0.13.1 sync, and a streamlined install experience on Android.
+> 🎉 **News (2026-04-06)**: Termux Edition v0.14.0 is here! Full upstream v0.14.0 sync with Channels support, Cron scheduling, and Qwen3.6-Plus. TTS notifications, full upstream sync, and a streamlined install experience on Android.
 
 Qwen Code is an open-source AI agent for the terminal, optimized for [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder).
 This **Termux Edition** fork keeps upstream behaviour while fixing what breaks on Android/Termux.
@@ -105,17 +104,25 @@ Set up `~/.qwen/settings.json`:
   "modelProviders": {
     "openai": [
       {
-        "id": "qwen3.5-plus",
-        "name": "qwen3.5-plus",
-        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        "id": "qwen3.6-plus",
+        "name": "qwen3.6-plus",
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "description": "Qwen3-Coder via Dashscope",
+        "envKey": "DASHSCOPE_API_KEY"
       }
     ]
   },
   "env": {
     "DASHSCOPE_API_KEY": "sk-your-key"
   },
-  "security": { "auth": { "selectedType": "openai" } },
-  "model": { "name": "qwen3.5-plus" }
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "qwen3.6-plus"
+  }
 }
 ```
 

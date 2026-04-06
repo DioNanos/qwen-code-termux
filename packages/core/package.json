@@ -1,10 +1,10 @@
 {
   "name": "@mmmbuto/qwen-code-termux-core",
-  "version": "0.13.1",
+  "version": "0.14.0-termux",
   "description": "Qwen Code Core",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/QwenLM/qwen-code.git"
+    "url": "git+https://github.com/DioNanos/qwen-code-termux.git"
   },
   "type": "module",
   "main": "dist/index.js",
@@ -74,12 +74,12 @@
     "ws": "^8.18.0"
   },
   "optionalDependencies": {
-    "@lydell/node-pty": "1.1.0",
-    "@lydell/node-pty-darwin-arm64": "1.1.0",
-    "@lydell/node-pty-darwin-x64": "1.1.0",
-    "@lydell/node-pty-linux-x64": "1.1.0",
-    "@lydell/node-pty-win32-arm64": "1.1.0",
-    "@lydell/node-pty-win32-x64": "1.1.0",
+    "@lydell/node-pty": "1.2.0-beta.10",
+    "@lydell/node-pty-darwin-arm64": "1.2.0-beta.10",
+    "@lydell/node-pty-darwin-x64": "1.2.0-beta.10",
+    "@lydell/node-pty-linux-x64": "1.2.0-beta.10",
+    "@lydell/node-pty-win32-arm64": "1.2.0-beta.10",
+    "@lydell/node-pty-win32-x64": "1.2.0-beta.10",
     "@mmmbuto/node-pty-android-arm64": "file:../../node_modules/@mmmbuto/node-pty-android-arm64"
   },
   "devDependencies": {

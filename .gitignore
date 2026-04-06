@@ -88,3 +88,6 @@ storybook-static
 # Termux local
 .termux-backup/
 test-reports/0*/
+
+# Dev symlink: qc-helper bundled skill docs (created by scripts/dev.js)
+packages/core/src/skills/bundled/qc-helper/docs

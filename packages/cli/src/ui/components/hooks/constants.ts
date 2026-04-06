@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { HooksConfigSource, HookEventName } from '@mmmbuto/qwen-code-termux-core';
+import {
+  HooksConfigSource,
+  HookEventName,
+} from '@mmmbuto/qwen-code-termux-core';
 import type { HookExitCode, HookEventDisplayInfo } from './types.js';
 import { t } from '../../../i18n/index.js';
 
@@ -185,21 +188,13 @@ export function getTranslatedSourceDisplayMap(): Record<
 
 /**
  * List of hook events to display in the UI
+ * Automatically synced with HookEventName enum from core.
+ * Note: Order follows the enum definition order. If UI presentation order
+ * needs to be different (e.g., grouped by lifecycle phase), consider using
+ * an explicit sorted array instead. Current enum order is acceptable for display.
  */
-export const DISPLAY_HOOK_EVENTS: HookEventName[] = [
-  HookEventName.Stop,
-  HookEventName.PreToolUse,
-  HookEventName.PostToolUse,
-  HookEventName.PostToolUseFailure,
-  HookEventName.Notification,
-  HookEventName.UserPromptSubmit,
-  HookEventName.SessionStart,
-  HookEventName.SessionEnd,
-  HookEventName.SubagentStart,
-  HookEventName.SubagentStop,
-  HookEventName.PreCompact,
-  HookEventName.PermissionRequest,
-];
+export const DISPLAY_HOOK_EVENTS: HookEventName[] =
+  Object.values(HookEventName);
 
 /**
  * Create empty hook event display info
