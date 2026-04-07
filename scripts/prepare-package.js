@@ -175,6 +175,7 @@ const distPackageJson = {
     '@lydell/node-pty-linux-x64': '1.2.0-beta.10',
     '@lydell/node-pty-win32-arm64': '1.2.0-beta.10',
     '@lydell/node-pty-win32-x64': '1.2.0-beta.10',
+    '@mmmbuto/node-pty-android-arm64': '1.1.0',
     '@teddyzhu/clipboard': '0.0.5',
     '@teddyzhu/clipboard-darwin-arm64': '0.0.5',
     '@teddyzhu/clipboard-darwin-x64': '0.0.5',

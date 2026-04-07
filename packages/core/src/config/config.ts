@@ -67,6 +67,7 @@ import { LspTool } from '../tools/lsp.js';
 import { CronCreateTool } from '../tools/cron-create.js';
 import { CronListTool } from '../tools/cron-list.js';
 import { CronDeleteTool } from '../tools/cron-delete.js';
+import { TtsNotificationTool } from '../tools/tts-notification.js';
 import type { LspClient } from '../lsp/types.js';
 
 // Other modules
@@ -2212,6 +2213,7 @@ export class Config {
     await registerCoreTool(MemoryTool);
     await registerCoreTool(TodoWriteTool, this);
     await registerCoreTool(AskUserQuestionTool, this);
+    await registerCoreTool(TtsNotificationTool, this.messageBus);
     !this.sdkMode && (await registerCoreTool(ExitPlanModeTool, this));
     await registerCoreTool(WebFetchTool, this);
     // Conditionally register web search tool if web search provider is configured
