@@ -429,6 +429,15 @@ const SETTINGS_SCHEMA = {
         description: 'The color theme for the UI.',
         showInDialog: true,
       },
+      statusLine: {
+        type: 'object',
+        label: 'Status Line',
+        category: 'UI',
+        requiresRestart: false,
+        default: undefined as { type: 'command'; command: string } | undefined,
+        description: 'Custom status line display configuration.',
+        showInDialog: false,
+      },
       customThemes: {
         type: 'object',
         label: 'Custom Themes',
@@ -518,7 +527,7 @@ const SETTINGS_SCHEMA = {
         label: 'Enable Follow-up Suggestions',
         category: 'UI',
         requiresRestart: false,
-        default: true,
+        default: false,
         description:
           'Show context-aware follow-up suggestions after task completion. Press Tab or Right Arrow to accept, Enter to accept and submit.',
         showInDialog: true,
@@ -582,15 +591,15 @@ const SETTINGS_SCHEMA = {
         description: 'The last time the feedback dialog was shown.',
         showInDialog: false,
       },
-      verboseMode: {
+      compactMode: {
         type: 'boolean',
-        label: 'Verbose Mode',
+        label: 'Compact Mode',
         category: 'UI',
         requiresRestart: false,
-        default: true,
+        default: false,
         description:
-          'Show full tool output and thinking in verbose mode (toggle with Ctrl+O).',
-        showInDialog: false,
+          'Hide tool output and thinking for a cleaner view (toggle with Ctrl+O).',
+        showInDialog: true,
       },
     },
   },
@@ -663,7 +672,7 @@ const SETTINGS_SCHEMA = {
     requiresRestart: false,
     default: '',
     description:
-      'Model for background tasks (suggestion generation, speculation). Leave empty to use the main model. A smaller/faster model (e.g., qwen3.5-flash) reduces latency and cost.',
+      'Model used for generating prompt suggestions and speculative execution. Leave empty to use the main model. A smaller/faster model (e.g., qwen3-coder-flash) reduces latency and cost.',
     showInDialog: true,
   },
 
@@ -923,6 +932,16 @@ const SETTINGS_SCHEMA = {
             showInDialog: true,
           },
         },
+      },
+      gapThresholdMinutes: {
+        type: 'number',
+        label: 'Thinking Block Idle Threshold (minutes)',
+        category: 'Context',
+        requiresRestart: false,
+        default: 5,
+        description:
+          'Minutes of inactivity after which retained thinking blocks are cleared to free context tokens. Aligns with provider prompt-cache TTL.',
+        showInDialog: false,
       },
     },
   },
