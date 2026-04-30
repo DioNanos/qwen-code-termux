@@ -50,7 +50,6 @@ import { setGeminiMdFilename } from '../memory/const.js';
 import { canUseRipgrep } from '../utils/ripgrepUtils.js';
 import { ToolRegistry, type ToolFactory } from '../tools/tool-registry.js';
 import { ToolNames } from '../tools/tool-names.js';
-import { TtsNotificationTool } from '../tools/tts-notification.js';
 import type { LspClient } from '../lsp/types.js';
 
 // Other modules
@@ -2732,7 +2731,7 @@ export class Config {
     });
     await registerLazy(ToolNames.TTS_NOTIFICATION, async () => {
       const { TtsNotificationTool } = await import('../tools/tts-notification.js');
-      return new TtsNotificationTool(this.messageBus);
+      return new TtsNotificationTool(this.messageBus!);
     });
     if (!this.sdkMode) {
       await registerLazy(ToolNames.EXIT_PLAN_MODE, async () => {
