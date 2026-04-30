@@ -62,6 +62,20 @@ for (const file of filesToCopy) {
   }
 }
 
+// Copy root postinstall for npm global installs on Termux
+const postinstallSourcePath = path.join(rootDir, 'scripts', 'postinstall.cjs');
+const postinstallDestDir = path.join(distDir, 'scripts');
+const postinstallDestPath = path.join(postinstallDestDir, 'postinstall.cjs');
+if (fs.existsSync(postinstallSourcePath)) {
+  fs.mkdirSync(postinstallDestDir, { recursive: true });
+  fs.copyFileSync(postinstallSourcePath, postinstallDestPath);
+  console.log('Copied scripts/postinstall.cjs');
+} else {
+  console.warn(
+    `Warning: postinstall script not found at ${postinstallSourcePath}`,
+  );
+}
+
 // Copy locales folder
 console.log('Copying locales folder...');
 const localesSourceDir = path.join(
@@ -157,6 +171,9 @@ const distPackageJson = {
   bin: {
     qwen: 'cli.js',
   },
+  scripts: {
+    postinstall: 'node scripts/postinstall.cjs',
+  },
   files: [
     'cli.js',
     'vendor',
@@ -165,6 +182,7 @@ const distPackageJson = {
     'LICENSE',
     'locales',
     'bundled',
+    'scripts/postinstall.cjs',
   ],
   config: rootPackageJson.config,
   dependencies: {},
@@ -175,6 +193,7 @@ const distPackageJson = {
     '@lydell/node-pty-linux-x64': '1.2.0-beta.10',
     '@lydell/node-pty-win32-arm64': '1.2.0-beta.10',
     '@lydell/node-pty-win32-x64': '1.2.0-beta.10',
+    '@mmmbuto/node-pty-android-arm64': '1.1.0',
     '@teddyzhu/clipboard': '0.0.5',
     '@teddyzhu/clipboard-darwin-arm64': '0.0.5',
     '@teddyzhu/clipboard-darwin-x64': '0.0.5',

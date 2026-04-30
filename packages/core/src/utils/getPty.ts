@@ -7,7 +7,7 @@
 export type PtyImplementation = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   module: any;
-  name: 'lydell-node-pty' | 'node-pty';
+  name: 'lydell-node-pty' | 'mmmbuto-android-arm64' | 'node-pty';
 } | null;
 
 export interface PtyProcess {
@@ -24,11 +24,17 @@ export const getPty = async (): Promise<PtyImplementation> => {
     return { module, name: 'lydell-node-pty' };
   } catch (_e) {
     try {
-      const nodePty = 'node-pty';
-      const module = await import(nodePty);
-      return { module, name: 'node-pty' };
+      const androidArm64 = '@mmmbuto/node-pty-android-arm64';
+      const module = await import(androidArm64);
+      return { module, name: 'mmmbuto-android-arm64' };
     } catch (_e2) {
-      return null;
+      try {
+        const nodePty = 'node-pty';
+        const module = await import(nodePty);
+        return { module, name: 'node-pty' };
+      } catch (_e3) {
+        return null;
+      }
     }
   }
 };
