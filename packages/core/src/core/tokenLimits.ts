@@ -32,6 +32,7 @@ const LIMITS = {
   '200k': 200_000, // vendor-declared decimal, used by OpenAI, Anthropic, etc.
   '256k': 262_144,
   '272k': 272_000, // vendor-declared decimal, GPT-5.x input (400K total - 128K output)
+  '384k': 384_000, // vendor-declared decimal, DeepSeek V4 max output
   '400k': 400_000, // vendor-declared decimal, used by OpenAI GPT-5.x
   '512k': 524_288,
   '1m': 1_000_000,
@@ -125,6 +126,7 @@ const PATTERNS: Array<[RegExp, TokenCount]> = [
   // -------------------
   // DeepSeek
   // -------------------
+  [/^deepseek-v4/, LIMITS['1m']], // DeepSeek V4 (flash, pro): 1M
   [/^deepseek/, LIMITS['128k']],
 
   // -------------------
@@ -176,6 +178,7 @@ const OUTPUT_PATTERNS: Array<[RegExp, TokenCount]> = [
   [/^qwen/, LIMITS['32k']], // Qwen fallback (VL, turbo, plus, etc.): 8K
 
   // DeepSeek
+  [/^deepseek-v4/, LIMITS['384k']], // DeepSeek V4 (flash, pro): 384K
   [/^deepseek-reasoner/, LIMITS['64k']],
   [/^deepseek-r1/, LIMITS['64k']],
   [/^deepseek-chat/, LIMITS['8k']],
@@ -191,6 +194,22 @@ const OUTPUT_PATTERNS: Array<[RegExp, TokenCount]> = [
   [/^kimi-k2\.5/, LIMITS['32k']],
 ];
 
+function findTokenLimit(
+  model: Model,
+  type: TokenLimitType = 'input',
+): TokenCount | undefined {
+  const norm = normalize(model);
+  const patterns = type === 'output' ? OUTPUT_PATTERNS : PATTERNS;
+
+  for (const [regex, limit] of patterns) {
+    if (regex.test(norm)) {
+      return limit;
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * Check if a model has an explicitly defined output token limit.
  * This distinguishes between models with known limits in OUTPUT_PATTERNS
@@ -202,6 +221,13 @@ const OUTPUT_PATTERNS: Array<[RegExp, TokenCount]> = [
 export function hasExplicitOutputLimit(model: Model): boolean {
   const norm = normalize(model);
   return OUTPUT_PATTERNS.some(([regex]) => regex.test(norm));
+}
+
+export function knownTokenLimit(
+  model: Model,
+  type: TokenLimitType = 'input',
+): TokenCount | undefined {
+  return findTokenLimit(model, type);
 }
 
 /**
@@ -223,17 +249,8 @@ export function tokenLimit(
   model: Model,
   type: TokenLimitType = 'input',
 ): TokenCount {
-  const norm = normalize(model);
-
-  // Choose the appropriate patterns based on token type
-  const patterns = type === 'output' ? OUTPUT_PATTERNS : PATTERNS;
-
-  for (const [regex, limit] of patterns) {
-    if (regex.test(norm)) {
-      return limit;
-    }
-  }
-
-  // Return appropriate default based on token type
-  return type === 'output' ? DEFAULT_OUTPUT_TOKEN_LIMIT : DEFAULT_TOKEN_LIMIT;
+  return (
+    knownTokenLimit(model, type) ??
+    (type === 'output' ? DEFAULT_OUTPUT_TOKEN_LIMIT : DEFAULT_TOKEN_LIMIT)
+  );
 }

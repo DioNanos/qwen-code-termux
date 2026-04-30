@@ -22,7 +22,6 @@ export const ToolNames = {
   SKILL: 'skill',
   EXIT_PLAN_MODE: 'exit_plan_mode',
   WEB_FETCH: 'web_fetch',
-  WEB_SEARCH: 'web_search',
   LS: 'list_directory',
   LSP: 'lsp',
   ASK_USER_QUESTION: 'ask_user_question',
@@ -30,6 +29,8 @@ export const ToolNames = {
   CRON_LIST: 'cron_list',
   CRON_DELETE: 'cron_delete',
   TTS_NOTIFICATION: 'tts_notification',
+  TASK_STOP: 'task_stop',
+  SEND_MESSAGE: 'send_message',
 } as const;
 
 /**
@@ -50,7 +51,6 @@ export const ToolDisplayNames = {
   SKILL: 'Skill',
   EXIT_PLAN_MODE: 'ExitPlanMode',
   WEB_FETCH: 'WebFetch',
-  WEB_SEARCH: 'WebSearch',
   LS: 'ListFiles',
   LSP: 'Lsp',
   ASK_USER_QUESTION: 'AskUserQuestion',
@@ -58,6 +58,8 @@ export const ToolDisplayNames = {
   CRON_LIST: 'CronList',
   CRON_DELETE: 'CronDelete',
   TTS_NOTIFICATION: 'TTS Notification',
+  TASK_STOP: 'TaskStop',
+  SEND_MESSAGE: 'SendMessage',
 } as const;
 
 // Migration from old tool names to new tool names

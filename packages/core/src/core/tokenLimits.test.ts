@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalize,
   tokenLimit,
+  knownTokenLimit,
   DEFAULT_TOKEN_LIMIT,
   DEFAULT_OUTPUT_TOKEN_LIMIT,
 } from './tokenLimits.js';
@@ -171,6 +172,11 @@ describe('tokenLimit', () => {
   });
 
   describe('DeepSeek', () => {
+    it('should return 1M for DeepSeek V4 models', () => {
+      expect(tokenLimit('deepseek-v4-flash')).toBe(1000000);
+      expect(tokenLimit('deepseek-v4-pro')).toBe(1000000);
+    });
+
     it('should return 128K for DeepSeek models', () => {
       expect(tokenLimit('deepseek-r1')).toBe(131072);
       expect(tokenLimit('deepseek-v3')).toBe(131072);
@@ -234,6 +240,21 @@ describe('tokenLimit', () => {
   });
 });
 
+describe('knownTokenLimit', () => {
+  it('returns a limit for known input models', () => {
+    expect(knownTokenLimit('qwen3-max')).toBe(262144);
+    expect(knownTokenLimit('gpt-5')).toBe(272000);
+  });
+
+  it('returns a limit for known output models', () => {
+    expect(knownTokenLimit('qwen3-max', 'output')).toBe(32768);
+  });
+
+  it('returns undefined for unknown models instead of the default fallback', () => {
+    expect(knownTokenLimit('unknown-model-v1.0')).toBeUndefined();
+  });
+});
+
 describe('tokenLimit with output type', () => {
   describe('latest models output limits', () => {
     it('should return correct output limits for GPT-5.x', () => {
@@ -280,6 +301,8 @@ describe('tokenLimit with output type', () => {
 
   describe('other output limits', () => {
     it('should return correct output limits for DeepSeek', () => {
+      expect(tokenLimit('deepseek-v4-flash', 'output')).toBe(384000);
+      expect(tokenLimit('deepseek-v4-pro', 'output')).toBe(384000);
       expect(tokenLimit('deepseek-reasoner', 'output')).toBe(65536);
       expect(tokenLimit('deepseek-r1', 'output')).toBe(65536);
       expect(tokenLimit('deepseek-r1-0528', 'output')).toBe(65536);
