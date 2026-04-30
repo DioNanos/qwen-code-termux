@@ -1,6 +1,6 @@
 {
-  "name": "@qwen-code/qwen-code",
-  "version": "0.14.3",
+  "name": "@mmmbuto/qwen-code-termux",
+  "version": "0.14.3-termux",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -15,10 +15,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/QwenLM/qwen-code.git"
+    "url": "git+https://github.com/DioNanos/qwen-code-termux.git"
   },
   "config": {
-    "sandboxImageUri": "ghcr.io/qwenlm/qwen-code:0.14.3"
+    "sandboxImageUri": "ghcr.io/mmmbuto/qwen-code-termux:0.14.3-termux"
   },
   "scripts": {
     "start": "cross-env node scripts/start.js",
@@ -58,7 +58,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "check-i18n": "npm run check-i18n --workspace=packages/cli",
     "preflight": "npm run clean && npm ci && npm run format && npm run lint:ci && npm run build && npm run typecheck && npm run test:ci",
-    "prepare": "husky && npm run build && npm run bundle",
+    "prepare": "node scripts/prepare-termux.cjs || (husky && npm run build && npm run bundle)",
     "prepare:package": "node scripts/prepare-package.js",
     "release:version": "node scripts/version.js",
     "telemetry": "node scripts/telemetry.js",
@@ -74,6 +74,7 @@
     },
     "baseline-browser-mapping": "^2.9.19"
   },
+  "description": "Qwen Code - AI-powered coding assistant (Termux Edition for Android)",
   "bin": {
     "qwen": "dist/cli.js"
   },
