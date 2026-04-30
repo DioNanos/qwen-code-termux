@@ -15,5 +15,5 @@ This directory tracks release validation for the Termux fork.
 
 ## Current release target
 
-- Fork release: `0.14.1-termux`
-- Upstream base: `v0.14.1`
+- Fork release: `0.15.5-termux`
+- Upstream base: `v0.15.5`

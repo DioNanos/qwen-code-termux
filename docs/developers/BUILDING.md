@@ -1,6 +1,6 @@
 # Building qwen-code-termux
 
-This fork is rebuilt from upstream tags. `v0.14.1-termux` is based on upstream `v0.14.1` plus a minimal Termux patch set.
+This fork is rebuilt from upstream tags. `v0.15.5-termux` is based on upstream `v0.15.5` plus a minimal Termux patch set.
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ npm run bundle
 The npm package is prepared from the root release metadata:
 
 - package name: `@mmmbuto/qwen-code-termux`
-- version: `0.14.1-termux`
+- version: `0.15.5-termux`
 - npm README source: root `README.md`
 
 Package preparation:
@@ -46,4 +46,4 @@ Use these files together:
 
 - [test-reports/README.md](../../test-reports/README.md)
 - [test-reports/suites/latest/termux.md](../../test-reports/suites/latest/termux.md)
-- [test-reports/latest/0.14.1-termux/QWEN_TEST_REPORT_v0.14.1-termux.md](../../test-reports/latest/0.14.1-termux/QWEN_TEST_REPORT_v0.14.1-termux.md)
+- [test-reports/latest/0.14.1-termux/QWEN_TEST_REPORT_v0.15.5-termux.md](../../test-reports/latest/0.14.1-termux/QWEN_TEST_REPORT_v0.15.5-termux.md)
