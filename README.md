@@ -9,7 +9,7 @@
 
 </div>
 
-> News (2026-04-10): `v0.14.3-termux` rebuilt from upstream `v0.14.3`. New: compactMode (ex verboseMode), status-line customization, `/model --fast`, plan mode improvements, review skill improvements, adaptive token escalation, qwen3.6-plus model.
+> News (2026-04-10): `v0.15.5-termux` rebuilt from upstream `v0.15.5`. New: compactMode (ex verboseMode), status-line customization, `/model --fast`, plan mode improvements, review skill improvements, adaptive token escalation, qwen3.6-plus model.
 
 Qwen Code Termux is a clean fork of [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code), rebuilt release-by-release from upstream and patched only where Android/Termux needs different behavior.
 
