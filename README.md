@@ -147,6 +147,16 @@ See [docs/developers/BUILDING.md](docs/developers/BUILDING.md) for the fork-spec
 
 This fork is based on [Qwen Code](https://github.com/QwenLM/qwen-code) and exists to keep a release-quality Termux track with minimal divergence from upstream.
 
+## Fork maintainer contact
+
+This is a Termux/Android-focused fork maintained by [DioNanos](https://github.com/DioNanos).
+
+- Fork issues (build, packaging, mobile-specific bugs): **dev@mmmbuto.com**
+- Fork security disclosures: **security@mmmbuto.com**
+- Project hub: <https://mmmbuto.com>
+
+For upstream-relevant issues that are not Termux/Android specific, please open them on [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code). For broader fork-specific questions, use [GitHub Discussions](../../discussions) on this repo.
+
 ## License
 
 Apache-2.0
