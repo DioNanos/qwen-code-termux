@@ -34,30 +34,19 @@ export {
   type ModelConfigSourcesInput,
   type ModelConfigValidationResult,
   ModelRegistry,
+  modelRegistryKey,
   type ModelGenerationConfig,
   ModelsConfig,
   type ModelsConfigOptions,
   type ModelProvidersConfig,
   type ModelSwitchMetadata,
+  MODEL_GENERATION_CONFIG_FIELDS,
   type OnModelChangeCallback,
   QWEN_OAUTH_MODELS,
   resolveModelConfig,
   type ResolvedModelConfig,
   validateModelConfig,
 } from './models/index.js';
-
-// Coding Plan constants
-export {
-  CodingPlanRegion,
-  type CodingPlanTemplate,
-  CODING_PLAN_ENV_KEY,
-  computeCodingPlanVersion,
-  generateCodingPlanTemplate,
-  getCodingPlanConfig,
-  getCodingPlanBaseUrls,
-  isCodingPlanConfig,
-  getRegionFromBaseUrl,
-} from './constants/codingPlan.js';
 
 // Output formatting
 export * from './output/json-formatter.js';
@@ -70,6 +59,7 @@ export * from './output/types.js';
 export * from './core/client.js';
 export * from './core/contentGenerator.js';
 export * from './core/coreToolScheduler.js';
+export * from './core/permissionFlow.js';
 export * from './core/permission-helpers.js';
 export * from './core/geminiChat.js';
 export * from './core/geminiRequest.js';
@@ -112,6 +102,10 @@ export type {
   ExitPlanModeTool,
   ExitPlanModeParams,
 } from './tools/exitPlanMode.js';
+export type {
+  SyntheticOutputTool,
+  StructuredOutputParams,
+} from './tools/syntheticOutput.js';
 export type { GlobTool, GlobToolParams, GlobPath } from './tools/glob.js';
 export type { GrepTool, GrepToolParams } from './tools/grep.js';
 export type { LSTool, LSToolParams, FileEntry } from './tools/ls.js';
@@ -133,6 +127,7 @@ export type { WriteFileTool, WriteFileToolParams } from './tools/write-file.js';
 export type { CronCreateTool, CronCreateParams } from './tools/cron-create.js';
 export type { CronListTool, CronListParams } from './tools/cron-list.js';
 export type { CronDeleteTool, CronDeleteParams } from './tools/cron-delete.js';
+export type { ToolSearchTool, ToolSearchParams } from './tools/tool-search.js';
 
 // ============================================================================
 // Services
@@ -141,14 +136,21 @@ export type { CronDeleteTool, CronDeleteParams } from './tools/cron-delete.js';
 export * from './services/chatRecordingService.js';
 export * from './services/cronScheduler.js';
 export * from './services/fileDiscoveryService.js';
+export * from './services/fileReadCache.js';
 export * from './services/fileSystemService.js';
 export * from './services/gitService.js';
 export * from './services/gitWorktreeService.js';
 export * from './services/sessionRecap.js';
 export * from './services/sessionService.js';
 export * from './services/sessionTitle.js';
-export { stripTerminalControlSequences } from './utils/terminalSafe.js';
+export {
+  stripTerminalControlSequences,
+  TERMINAL_OSC_REGEX,
+  TERMINAL_CSI_REGEX,
+  TERMINAL_SHIFT_DCS_REGEX,
+} from './utils/terminalSafe.js';
 export * from './services/shellExecutionService.js';
+export * from './services/monitorRegistry.js';
 export * from './services/backgroundShellRegistry.js';
 export * from './services/toolUseSummary.js';
 export * from './utils/bareMode.js';
@@ -280,6 +282,7 @@ export * from './utils/filesearch/fileSearch.js';
 export * from './utils/formatters.js';
 export * from './utils/generateContentResponseUtilities.js';
 export * from './utils/getFolderStructure.js';
+export * from './utils/gitDiff.js';
 export * from './utils/gitIgnoreParser.js';
 export * from './utils/gitUtils.js';
 export * from './utils/ignorePatterns.js';
@@ -306,6 +309,7 @@ export {
   detectRuntime,
   getOrCreateSharedDispatcher,
 } from './utils/runtimeFetchOptions.js';
+export * from './utils/runtimeStatus.js';
 export * from './utils/schemaValidator.js';
 export * from './utils/shell-utils.js';
 export * from './utils/subagentGenerator.js';

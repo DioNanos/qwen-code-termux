@@ -19,6 +19,7 @@ import type { FileOperation } from './metrics.js';
 export { ToolCallDecision };
 import type { OutputFormat } from '../output/types.js';
 import { ToolNames } from '../tools/tool-names.js';
+import { STRUCTURED_OUTPUT_REDACTED_ARGS } from '../tools/syntheticOutput.js';
 import type { SkillTool } from '../tools/skill.js';
 import type { AgentTool } from '../tools/agent/agent.js';
 
@@ -189,7 +190,21 @@ export class ToolCallEvent implements BaseTelemetryEvent {
     this['event.name'] = 'tool_call';
     this['event.timestamp'] = new Date().toISOString();
     this.function_name = call.request.name;
-    this.function_args = call.request.args;
+    // structured_output args ARE the user's final structured payload (the
+    // command's actual answer, already emitted in stdout `result` /
+    // `structured_result`). Recording them again as ordinary tool-call
+    // function_args duplicates that data into telemetry surfaces (OTLP
+    // exports, QwenLogger, ui-telemetry stream, the chat-recording UI
+    // event mirror) where it can leak off-device. Replace with a shared
+    // placeholder constant so consumers still see the call happened —
+    // duration, success, decision metrics are preserved — but the
+    // payload itself doesn't ride along. The same constant is used by
+    // `redactStructuredOutputArgsForRecording` in `core/geminiChat.ts`
+    // for the on-disk JSONL surface so neither side can silently drift.
+    this.function_args =
+      call.request.name === ToolNames.STRUCTURED_OUTPUT
+        ? { ...STRUCTURED_OUTPUT_REDACTED_ARGS }
+        : call.request.args;
     this.duration_ms = call.durationMs ?? 0;
     this.status = call.status;
     this.success = call.status === 'success'; // Keep for backward compatibility
@@ -333,7 +348,6 @@ export class ApiResponseEvent implements BaseTelemetryEvent {
   output_token_count: number;
   cached_content_token_count: number;
   thoughts_token_count: number;
-  tool_token_count: number;
   total_token_count: number;
   response_text?: string;
   prompt_id: string;
@@ -364,7 +378,6 @@ export class ApiResponseEvent implements BaseTelemetryEvent {
     this.output_token_count = usage_data?.candidatesTokenCount ?? 0;
     this.cached_content_token_count = usage_data?.cachedContentTokenCount ?? 0;
     this.thoughts_token_count = usage_data?.thoughtsTokenCount ?? 0;
-    this.tool_token_count = usage_data?.toolUsePromptTokenCount ?? 0;
     this.total_token_count = usage_data?.totalTokenCount ?? 0;
     this.response_text = response_text;
     this.prompt_id = prompt_id;
@@ -1206,7 +1219,7 @@ export class MemoryDreamEvent implements BaseTelemetryEvent {
   'event.timestamp': string;
   /** 'auto' = scheduler-triggered; 'manual' = user ran /dream */
   trigger: 'auto' | 'manual';
-  status: 'updated' | 'noop' | 'failed';
+  status: 'updated' | 'noop' | 'failed' | 'cancelled';
   deduped_entries: number;
   touched_topics_count: number;
   touched_topics: string;
@@ -1214,7 +1227,7 @@ export class MemoryDreamEvent implements BaseTelemetryEvent {
 
   constructor(params: {
     trigger: 'auto' | 'manual';
-    status: 'updated' | 'noop' | 'failed';
+    status: 'updated' | 'noop' | 'failed' | 'cancelled';
     deduped_entries: number;
     touched_topics: string[];
     duration_ms: number;
