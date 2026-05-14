@@ -1,0 +1,5 @@
+# CODEOWNERS for qwen-code-termux
+# Porting / distribution maintainer for Android ARM64 (Termux).
+# Generic Qwen Code changes belong upstream: https://github.com/QwenLM/qwen-code
+
+* @DioNanos
