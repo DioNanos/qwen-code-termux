@@ -1,0 +1,11 @@
+* @DioNanos
+
+/package.json @DioNanos
+/package-lock.json @DioNanos
+/SECURITY.md @DioNanos
+/LICENSE @DioNanos
+/.github/ @DioNanos
+/README.md @DioNanos
+/packages/core/src/tools/ @DioNanos
+/packages/core/src/utils/getPty.ts @DioNanos
+/scripts/ @DioNanos

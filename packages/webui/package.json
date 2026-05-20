@@ -1,6 +1,6 @@
 {
   "name": "@qwen-code/webui",
-  "version": "0.15.5",
+  "version": "0.15.11",
   "description": "Shared UI components for Qwen Code packages",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -44,7 +44,7 @@
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "dependencies": {
-    "markdown-it": "^14.1.0"
+    "markdown-it": "^14.1.1"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
@@ -76,5 +76,6 @@
     "shared"
   ],
   "author": "Qwen Team",
-  "license": "MIT"
+  "license": "MIT",
+  "private": true
 }

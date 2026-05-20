@@ -1,73 +1,29 @@
-<!--
-Help reviewers verify this PR quickly.
-
-Maintainers prioritize PRs that include clear proof of work.
-If a PR does not include enough validation detail to reproduce and verify the change efficiently, review may be delayed.
--->
-
 ## Summary
 
-- What changed:
-- Why it changed:
-- Reviewer focus:
+<!-- Concisely describe what this PR changes and why. Focus on impact and
+urgency. -->
 
-## Validation
+## Details
 
-<!--
-Be concrete. Do not write only "tested locally".
-Include the exact commands, prompts, outputs, logs, screenshots, or videos that prove the change was actually run and observed.
+<!-- Add any extra context and design decisions. Keep it brief but complete. -->
 
-For user-visible changes, bug fixes, CLI / TUI behavior changes, or interaction changes, include key screenshots or a short video.
-When possible, show before/after behavior.
+## Related Issues
 
-If helpful, use the `e2e-testing` skill to gather stronger end-to-end validation evidence.
--->
+<!-- Use keywords to auto-close issues (Closes #123, Fixes #456). If this PR is
+only related to an issue or is a partial fix, simply reference the issue number
+without a keyword (Related to #123). -->
 
-- Commands run:
-  ```bash
-  # paste commands here
-  ```
-- Prompts / inputs used:
-- Expected result:
-- Observed result:
-- Quickest reviewer verification path:
-- Evidence (output, logs, screenshots, video, JSON, before/after, etc.):
+## How to Validate
 
-## Scope / Risk
+<!-- List exact steps for reviewers to validate the change. Include commands,
+expected results, and edge cases. -->
 
-- Main risk or tradeoff:
-- Not covered / not validated:
-- Breaking changes / migration notes:
+## Pre-Merge Checklist
 
-## Testing Matrix
+<!-- Check all that apply before requesting review or merging. -->
 
-<!--
-Use:
-- ✅ tested
-- ⚠️ not tested
-- N/A
-If anything is ⚠️, explain why briefly below.
--->
-
-|          | 🍏  | 🪟  | 🐧  |
-| -------- | --- | --- | --- |
-| npm run  | ⚠️  | ⚠️  | ⚠️  |
-| npx      | ⚠️  | ⚠️  | ⚠️  |
-| Docker   | ⚠️  | ⚠️  | ⚠️  |
-| Podman   | ⚠️  | N/A | N/A |
-| Seatbelt | ⚠️  | N/A | N/A |
-
-Testing matrix notes:
-
--
-
-## Linked Issues / Bugs
-
-<!--
-If this PR fully resolves an issue, use one of:
-- Closes #<issue_number>
-- Fixes #<issue_number>
-- Resolves #<issue_number>
-
-Otherwise reference related issues without a closing keyword.
--->
+- [ ] Updated relevant documentation and README (if needed)
+- [ ] Added/updated tests (if needed)
+- [ ] Noted breaking changes (if any)
+- [ ] Ran `bash scripts/check-termux-patches.sh`
+- [ ] Validated on Termux/Android if this touches runtime behavior

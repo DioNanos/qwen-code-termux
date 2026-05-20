@@ -1,0 +1,11 @@
+Qwen Code
+Copyright Alibaba Cloud (Qwen Team)
+Copyright 2026 Davide A. Guglielmi
+
+Qwen Code Termux is a porting/distribution fork of Qwen Code for Android
+ARM64 (Termux). It carries only the Android/Termux compatibility delta
+needed to package and run upstream Qwen Code on Termux. These compatibility
+patches are maintained by Davide A. Guglielmi and distributed under the
+Apache License, Version 2.0 together with the upstream Qwen Code codebase.
+
+Upstream project: https://github.com/QwenLM/qwen-code

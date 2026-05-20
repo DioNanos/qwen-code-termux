@@ -1,40 +1,29 @@
-<div align="center">
+# Qwen Code Termux
 
 [![npm version](https://img.shields.io/npm/v/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
-[![Downloads](https://img.shields.io/npm/dm/@mmmbuto/qwen-code-termux.svg)](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
-**An open-source AI agent that lives in your terminal — Termux Edition (Android).**
+Termux-first build of [Qwen Code](https://github.com/QwenLM/qwen-code) for
+Android ARM64.
 
-</div>
+This fork tracks upstream release-by-release and keeps the fork delta limited to
+Android/Termux compatibility, packaging, and validation assets.
 
-> News (2026-04-10): `v0.15.5-termux` rebuilt from upstream `v0.15.5`. New: compactMode (ex verboseMode), status-line customization, `/model --fast`, plan mode improvements, review skill improvements, adaptive token escalation, qwen3.6-plus model.
+Current fork release: `0.15.11-termux`.
 
-Qwen Code Termux is a clean fork of [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code), rebuilt release-by-release from upstream and patched only where Android/Termux needs different behavior.
+## Release Channel
 
-## Why a Termux fork?
+`main` follows upstream stable releases. Upstream preview and nightly builds are
+tracked only for analysis unless a Termux-specific validation pass decides to
+publish a separate prerelease.
 
-Upstream targets desktop Unix and Windows first. On Android/Termux, the main breakpoints are:
+Current upstream baseline: `QwenLM/qwen-code` `v0.15.11`.
 
-- PTY availability on ARM64
-- install-time scripts that are fine on desktop but noisy on Termux
-- attention/notification workflows that are useful on mobile
-
-This fork keeps upstream behavior as close as possible while adding:
-
-- Android ARM64 PTY fallback via `@mmmbuto/node-pty-android-arm64`
-- optional `tts_notification` tool backed by `termux-tts-speak`
-- Termux environment detection for runtime-specific behavior
-- release docs and test suites intended to be run directly inside Termux
-
-## Installation
-
-### Termux / Android
+## Install
 
 ```bash
 pkg install nodejs-lts
-pkg install termux-api   # optional, only for TTS
+pkg install termux-api   # optional, only for TTS notifications
 
 npm install -g @mmmbuto/qwen-code-termux@latest
 qwen --version
@@ -42,26 +31,30 @@ qwen --version
 
 Requirements:
 
-- [Termux from F-Droid](https://f-droid.org/packages/com.termux/)
+- Termux from F-Droid
 - Node.js 20+
-- `termux-api` only if you want TTS notifications
+- `termux-api` only if you want `termux-tts-speak` integration
 
-### Non-Termux platforms
-
-Use upstream:
+For non-Termux platforms, use upstream:
 
 ```bash
-npm install -g @qwen-code/qwen-code@latest
+npm install -g @qwen-code/qwen-code
 ```
 
-## Quick Start
+## Usage
 
 ```bash
 cd your-project
 qwen
 ```
 
-Useful first commands:
+Headless:
+
+```bash
+qwen -p "Explain this project" -o json
+```
+
+Useful slash commands:
 
 - `/help`
 - `/auth`
@@ -69,62 +62,45 @@ Useful first commands:
 
 ## Authentication
 
-For headless or Termux-heavy workflows, API-key auth is the practical default.
+Qwen Code Termux keeps upstream Qwen Code authentication behavior.
 
-Example `~/.qwen/settings.json`:
+Interactive auth:
 
-```json
-{
-  "modelProviders": {
-    "openai": [
-      {
-        "id": "qwen3.6-plus",
-        "name": "qwen3.6-plus",
-        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "description": "Qwen via DashScope OpenAI-compatible API",
-        "envKey": "DASHSCOPE_API_KEY"
-      }
-    ]
-  },
-  "env": {
-    "DASHSCOPE_API_KEY": "sk-your-key"
-  },
-  "security": {
-    "auth": {
-      "selectedType": "openai"
-    }
-  },
-  "model": {
-    "name": "qwen3.6-plus"
-  }
-}
+```text
+/auth
 ```
 
-OAuth still works where a browser is available, but API-key auth is the safer recommendation on Termux and over SSH.
+API-key auth can be configured through `~/.qwen/settings.json` or environment
+variables supported by upstream providers.
 
-## Termux-specific features
-
-### TTS notifications
-
-If `termux-api` is installed, the fork exposes a `tts_notification` tool that can speak short alerts:
+For Alibaba Cloud ModelStudio / DashScope:
 
 ```bash
-termux-tts-speak "Qwen Code Termux ready"
+export DASHSCOPE_API_KEY="YOUR_API_KEY"
+qwen
 ```
 
-### PTY fallback
+Qwen OAuth free tier was discontinued upstream on April 15, 2026. Use Alibaba
+Cloud Coding Plan, OpenRouter, Fireworks AI, or another configured API provider.
 
-The fork keeps upstream PTY loading first, then falls back to `@mmmbuto/node-pty-android-arm64` for Android ARM64.
+## Termux Delta
 
-### Release testing from Termux
+This fork adds or preserves:
 
-Run the documented Termux release checks from:
+- Android ARM64 PTY fallback through `@mmmbuto/node-pty-android-arm64`
+- optional `tts_notification` support backed by `termux-tts-speak`
+- Termux environment detection for runtime-specific behavior
+- Android/Termux runtime patch bootstrap
+- npm publish package metadata under `@mmmbuto/qwen-code-termux`
+- release validation docs under `test-reports/`
 
-- [docs/developers/BUILDING.md](docs/developers/BUILDING.md)
-- [test-reports/README.md](test-reports/README.md)
-- [test-reports/suites/latest/termux.md](test-reports/suites/latest/termux.md)
+After upstream merges or release prep, verify the fork delta with:
 
-## Building from source
+```bash
+bash scripts/check-termux-patches.sh
+```
+
+## Build
 
 ```bash
 git clone https://github.com/DioNanos/qwen-code-termux.git
@@ -132,31 +108,64 @@ cd qwen-code-termux
 npm install
 npm run build
 npm run bundle
+npm run prepare:package
+node dist/cli.js --version
 ```
 
-See [docs/developers/BUILDING.md](docs/developers/BUILDING.md) for the fork-specific notes.
+The publishable npm artifact is prepared under `dist/`.
 
-## Troubleshooting
+## Release Validation
 
-- If you are not on Termux, install upstream instead of this fork.
-- If shell execution is broken on Android, verify the PTY dependency is present.
-- If TTS does nothing, install `termux-api` and check `termux-tts-speak`.
-- For release validation, use the Termux suite in [test-reports/suites/latest/termux.md](test-reports/suites/latest/termux.md).
+The public validation history lives in:
 
-## Acknowledgments
+- [test-reports/README.md](test-reports/README.md)
+- [test-reports/suites/latest/termux.md](test-reports/suites/latest/termux.md)
 
-This fork is based on [Qwen Code](https://github.com/QwenLM/qwen-code) and exists to keep a release-quality Termux track with minimal divergence from upstream.
+Minimum smoke:
 
-## Fork maintainer contact
+```bash
+qwen --version
+qwen --help
+qwen -p "Reply with OK"
+```
 
-This is a Termux/Android-focused fork maintained by [DioNanos](https://github.com/DioNanos).
+## Maintenance Scope
 
-- Fork issues (build, packaging, mobile-specific bugs): **dev@mmmbuto.com**
-- Fork security disclosures: **security@mmmbuto.com**
-- Project hub: <https://mmmbuto.com>
+In scope for this fork:
 
-For upstream-relevant issues that are not Termux/Android specific, please open them on [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code). For broader fork-specific questions, use [GitHub Discussions](../../discussions) on this repo.
+- Android/Termux runtime compatibility
+- npm package `@mmmbuto/qwen-code-termux`
+- Termux validation reports and release assets
+- minimal fork-owned GitHub CI/release automation
+
+Out of scope:
+
+- generic Qwen Code feature requests
+- upstream product behavior unrelated to Termux
+- upstream Alibaba/Qwen infrastructure, bots, or release workflows
+- SDK, VS Code extension, channel, or Docker image publishing from this fork
+
+Generic issues should be filed upstream at
+[QwenLM/qwen-code](https://github.com/QwenLM/qwen-code). Termux-specific issues
+should be filed here.
+
+## Security
+
+See [SECURITY.md](SECURITY.md).
+
+Termux-fork-specific security reports: `security@mmmbuto.com`.
+
+Upstream-relevant security reports should follow the upstream Alibaba/Qwen
+security process described in `SECURITY.md`.
+
+## Maintainer
+
+Maintained by [DioNanos](https://github.com/DioNanos) as the Termux/Android
+porting and distribution fork.
+
+See [MAINTAINER.md](MAINTAINER.md) and [NOTICE](NOTICE).
 
 ## License
 
-Apache-2.0
+Apache-2.0. This fork is distributed under the same license as upstream Qwen
+Code. The Android/Termux compatibility patches are distributed under Apache-2.0.
