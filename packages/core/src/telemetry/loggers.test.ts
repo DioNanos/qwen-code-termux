@@ -91,6 +91,7 @@ import { makeFakeConfig } from '../test-utils/config.js';
 
 describe('loggers', () => {
   const mockLogger = {
+    enabled: vi.fn(() => true),
     emit: vi.fn(),
   };
   const mockUiEvent = {

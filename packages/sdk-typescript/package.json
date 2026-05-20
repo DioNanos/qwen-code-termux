@@ -46,7 +46,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
@@ -71,5 +71,6 @@
   "bugs": {
     "url": "https://github.com/QwenLM/qwen-code/issues"
   },
-  "homepage": "https://qwenlm.github.io/qwen-code-docs/"
+  "homepage": "https://qwenlm.github.io/qwen-code-docs/",
+  "private": true
 }

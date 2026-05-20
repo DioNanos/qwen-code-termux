@@ -19,9 +19,11 @@
   },
   "dependencies": {
     "@qwen-code/channel-base": "file:../base",
+    "axios": "^1.16.1",
     "dingtalk-stream-sdk-nodejs": "^2.0.4"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
-  }
+  },
+  "private": true
 }
