@@ -73,7 +73,7 @@ jobs:
           tag="v${version}"
           notes="Qwen Code Termux ${version}
 
-Fork release based on upstream Qwen Code 0.15.11.
+Fork release based on upstream Qwen Code 0.16.1.
 
 Install:
 
