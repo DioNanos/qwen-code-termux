@@ -1,6 +1,6 @@
 # Latest Test Suite (Termux / Android ARM64)
 
-Target release: `0.15.5-termux`
+Target release: `0.16.1-termux`
 
 Purpose: validate the published Termux package directly on Android/Termux.
 
@@ -15,7 +15,7 @@ command -v qwen
 Expected:
 
 - package is installed globally
-- version reports `0.15.5-termux` or an intentionally matching release string
+- version reports `0.16.1-termux` or an intentionally matching release string
 - `qwen` resolves from npm global bin
 
 ## Basic CLI
@@ -89,4 +89,4 @@ Expected:
 
 Write results into:
 
-- [latest/0.14.3-termux/QWEN_TEST_REPORT_v0.14.3-termux.md](../../latest/0.14.3-termux/QWEN_TEST_REPORT_v0.14.3-termux.md)
+- [latest/0.16.1-termux/QWEN_TEST_REPORT_v0.16.1-termux.md](../../latest/0.16.1-termux/QWEN_TEST_REPORT_v0.16.1-termux.md)

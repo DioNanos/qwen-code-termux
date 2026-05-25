@@ -9,7 +9,7 @@ Android ARM64.
 This fork tracks upstream release-by-release and keeps the fork delta limited to
 Android/Termux compatibility, packaging, and validation assets.
 
-Current fork release: `0.15.11-termux`.
+Current fork release: `0.16.1-termux`.
 
 ## Release Channel
 
@@ -17,7 +17,7 @@ Current fork release: `0.15.11-termux`.
 tracked only for analysis unless a Termux-specific validation pass decides to
 publish a separate prerelease.
 
-Current upstream baseline: `QwenLM/qwen-code` `v0.15.11`.
+Current upstream baseline: `QwenLM/qwen-code` `v0.16.1`.
 
 ## Install
 
