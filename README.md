@@ -7,10 +7,6 @@
 [![latest release](https://img.shields.io/github/v/release/DioNanos/qwen-code-termux?style=flat-square)](https://github.com/DioNanos/qwen-code-termux/releases/latest)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](./LICENSE)
 
-<p align="center">
-  <img src="./.github/termux-robot.png" alt="Termux robot" width="80%" />
-</p>
-
 ## Install
 
 ### Termux (Android ARM64)
