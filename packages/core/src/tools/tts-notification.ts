@@ -1,6 +1,7 @@
 /**
  * @license
- * Copyright 2025 Google LLC
+ * Copyright 2026 Qwen
+ * Copyright 2026 Davide A. Guglielmi (Termux porting patches)
  * SPDX-License-Identifier: Apache-2.0
  */
 

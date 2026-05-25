@@ -1,3 +1,10 @@
+/**
+ * @license
+ * Copyright 2026 Qwen
+ * Copyright 2026 Davide A. Guglielmi (Termux porting patches)
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 const os = require('node:os');
 
 const isTermux =
