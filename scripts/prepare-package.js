@@ -124,7 +124,11 @@ function copyExtensionExamples(rootDir, distDir) {
 
 // Copy root postinstall for npm global installs on Termux
 function copyPostinstall(rootDir, distDir) {
-  const postinstallSourcePath = path.join(rootDir, 'scripts', 'postinstall.cjs');
+  const postinstallSourcePath = path.join(
+    rootDir,
+    'scripts',
+    'postinstall.cjs',
+  );
   const postinstallDestDir = path.join(distDir, 'scripts');
   const postinstallDestPath = path.join(postinstallDestDir, 'postinstall.cjs');
   if (fs.existsSync(postinstallSourcePath)) {

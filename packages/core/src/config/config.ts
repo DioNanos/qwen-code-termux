@@ -4673,7 +4673,9 @@ export class Config {
       return new AskUserQuestionTool(this);
     });
     await registerLazy(ToolNames.TTS_NOTIFICATION, async () => {
-      const { TtsNotificationTool } = await import('../tools/tts-notification.js');
+      const { TtsNotificationTool } = await import(
+        '../tools/tts-notification.js'
+      );
       return new TtsNotificationTool(this.messageBus!);
     });
     if (!this.sdkMode) {
