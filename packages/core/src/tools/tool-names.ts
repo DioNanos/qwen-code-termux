@@ -29,6 +29,7 @@ export const ToolNames = {
   AGENT: 'agent',
   SKILL: 'skill',
   EXIT_PLAN_MODE: 'exit_plan_mode',
+  ENTER_PLAN_MODE: 'enter_plan_mode',
   WEB_FETCH: 'web_fetch',
   LS: 'list_directory',
   LSP: 'lsp',
@@ -38,6 +39,11 @@ export const ToolNames = {
   CRON_DELETE: 'cron_delete',
   TTS_NOTIFICATION: 'tts_notification',
   TASK_STOP: 'task_stop',
+  TASK_CREATE: 'task_create',
+  TASK_UPDATE: 'task_update',
+  TASK_LIST: 'task_list',
+  TEAM_CREATE: 'team_create',
+  TEAM_DELETE: 'team_delete',
   SEND_MESSAGE: 'send_message',
   STRUCTURED_OUTPUT: 'structured_output',
   MONITOR: 'monitor',
@@ -45,6 +51,20 @@ export const ToolNames = {
   TOOL_SEARCH: 'tool_search',
   ENTER_WORKTREE: 'enter_worktree',
   EXIT_WORKTREE: 'exit_worktree',
+  // Computer Use tools — built-in but backed by an upstream MCP server.
+  // All deferred; revealed only when the user-initiated request triggers
+  // a computer-use action. See packages/core/src/tools/computer-use/.
+  COMPUTER_USE_LIST_APPS: 'computer_use__list_apps',
+  COMPUTER_USE_GET_APP_STATE: 'computer_use__get_app_state',
+  COMPUTER_USE_CLICK: 'computer_use__click',
+  COMPUTER_USE_PERFORM_SECONDARY_ACTION:
+    'computer_use__perform_secondary_action',
+  COMPUTER_USE_SCROLL: 'computer_use__scroll',
+  COMPUTER_USE_DRAG: 'computer_use__drag',
+  COMPUTER_USE_TYPE_TEXT: 'computer_use__type_text',
+  COMPUTER_USE_PRESS_KEY: 'computer_use__press_key',
+  COMPUTER_USE_SET_VALUE: 'computer_use__set_value',
+  WORKFLOW: 'workflow',
 } as const;
 
 /**
@@ -64,6 +84,7 @@ export const ToolDisplayNames = {
   AGENT: 'Agent',
   SKILL: 'Skill',
   EXIT_PLAN_MODE: 'ExitPlanMode',
+  ENTER_PLAN_MODE: 'EnterPlanMode',
   WEB_FETCH: 'WebFetch',
   LS: 'ListFiles',
   LSP: 'Lsp',
@@ -73,6 +94,11 @@ export const ToolDisplayNames = {
   CRON_DELETE: 'CronDelete',
   TTS_NOTIFICATION: 'TTS Notification',
   TASK_STOP: 'TaskStop',
+  TASK_CREATE: 'TaskCreate',
+  TASK_UPDATE: 'TaskUpdate',
+  TASK_LIST: 'TaskList',
+  TEAM_CREATE: 'TeamCreate',
+  TEAM_DELETE: 'TeamDelete',
   SEND_MESSAGE: 'SendMessage',
   STRUCTURED_OUTPUT: 'StructuredOutput',
   MONITOR: 'Monitor',
@@ -80,6 +106,17 @@ export const ToolDisplayNames = {
   TOOL_SEARCH: 'ToolSearch',
   ENTER_WORKTREE: 'EnterWorktree',
   EXIT_WORKTREE: 'ExitWorktree',
+  COMPUTER_USE_LIST_APPS: 'computer_use__list_apps',
+  COMPUTER_USE_GET_APP_STATE: 'computer_use__get_app_state',
+  COMPUTER_USE_CLICK: 'computer_use__click',
+  COMPUTER_USE_PERFORM_SECONDARY_ACTION:
+    'computer_use__perform_secondary_action',
+  COMPUTER_USE_SCROLL: 'computer_use__scroll',
+  COMPUTER_USE_DRAG: 'computer_use__drag',
+  COMPUTER_USE_TYPE_TEXT: 'computer_use__type_text',
+  COMPUTER_USE_PRESS_KEY: 'computer_use__press_key',
+  COMPUTER_USE_SET_VALUE: 'computer_use__set_value',
+  WORKFLOW: 'Workflow',
 } as const;
 
 // Migration from old tool names to new tool names

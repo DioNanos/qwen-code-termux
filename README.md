@@ -72,7 +72,7 @@ bash scripts/check-termux-patches.sh
 ## Releases and Updates
 
 - Latest GitHub release: [releases/latest](https://github.com/DioNanos/qwen-code-termux/releases/latest)
-- Upstream baseline: [`QwenLM/qwen-code` v0.16.1](https://github.com/QwenLM/qwen-code/releases/tag/v0.16.1), packaged as `0.16.1-termux` for npm `latest`
+- Upstream baseline: [`QwenLM/qwen-code` v0.18.0](https://github.com/QwenLM/qwen-code/releases/tag/v0.18.0), packaged as `0.18.0-termux` (npm `next`; promoted to `latest` after validation)
 - npm package: [`@mmmbuto/qwen-code-termux`](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
 Maintainer publish flow:
