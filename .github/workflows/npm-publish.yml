@@ -68,18 +68,19 @@ jobs:
         if: ${{ inputs.create_release }}
         env:
           GH_TOKEN: ${{ github.token }}
+          DIST_TAG: ${{ inputs.tag }}
         run: |
           version="$(node -p "require('./package.json').version")"
           tag="v${version}"
-          notes="Qwen Code Termux ${version}
-
-Fork release based on upstream Qwen Code 0.18.0.
-
-Install:
-
-\`\`\`bash
-npm install -g @mmmbuto/qwen-code-termux@${{ inputs.tag }}
-\`\`\`
-"
+          notes=$(printf '%s\n' \
+            "Qwen Code Termux ${version}" \
+            "" \
+            "Fork release based on upstream Qwen Code 0.18.0." \
+            "" \
+            "Install:" \
+            "" \
+            '```bash' \
+            "npm install -g @mmmbuto/qwen-code-termux@${DIST_TAG}" \
+            '```')
           gh release create "${tag}" --title "${tag}" --notes "${notes}" || \
             gh release edit "${tag}" --title "${tag}" --notes "${notes}"
