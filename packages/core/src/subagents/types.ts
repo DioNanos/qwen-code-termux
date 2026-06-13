@@ -110,6 +110,42 @@ export interface SubagentConfig {
   background?: boolean;
 
   /**
+   * Optional Claude-Code-compatible permission mode (`acceptEdits`, `auto`,
+   * `bypassPermissions`, `default`, `dontAsk`, `plan`). Carried through from
+   * frontmatter for parity with `.claude/agents/*.md` files. At parse time it
+   * is normalised to {@link approvalMode} via
+   * `claudePermissionModeToApprovalMode()`; if both `permissionMode` and
+   * `approvalMode` are present in frontmatter, `approvalMode` wins.
+   */
+  permissionMode?: string;
+
+  /**
+   * Optional maximum number of turns before the agent halts. Positive integer.
+   * Top-level promotion of the legacy `runConfig.max_turns` field; when both
+   * are set, top-level `maxTurns` wins.
+   */
+  maxTurns?: number;
+
+  /**
+   * Optional per-agent MCP server overrides. CC 2.1.168 declarative-agent
+   * field `mcpServers` (`gS8`); carried verbatim so `.claude/agents/*.md`
+   * round-trips. Validated shallowly at parse time (record-of-records shape,
+   * see `parseAgentMcpServers`); the per-spec union (`stdio` / `sse` / `http`
+   * / ...) is enforced by the runtime MCP loader when the subagent spawns.
+   */
+  mcpServers?: Record<string, unknown>;
+
+  /**
+   * Optional per-agent hook overrides. CC 2.1.168 declarative-agent field
+   * `hooks` (`TKO`); carried verbatim so `.claude/agents/*.md` round-trips.
+   * Validated shallowly at parse time (record-of-arrays shape, see
+   * `parseAgentHooks`); the per-matcher discriminated union is enforced by
+   * `SessionHooksManager` when the subagent spawns. Keys are
+   * `HookEventName` literals (`PreToolUse`, `PostToolUse`, ...).
+   */
+  hooks?: Record<string, unknown>;
+
+  /**
    * Indicates whether this is a built-in agent.
    * Built-in agents cannot be modified or deleted.
    */
