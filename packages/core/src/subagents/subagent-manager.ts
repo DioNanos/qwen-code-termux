@@ -25,7 +25,11 @@ import type {
   RunConfig,
   ToolConfig,
 } from '../agents/runtime/agent-types.js';
-import { SubagentError, SubagentErrorCode } from './types.js';
+import {
+  BUBBLE_APPROVAL_MODE,
+  SubagentError,
+  SubagentErrorCode,
+} from './types.js';
 import { SubagentValidator } from './validation.js';
 import { AgentHeadless } from '../agents/runtime/agent-headless.js';
 import type {
@@ -63,6 +67,30 @@ import {
 } from '../tools/agent/agent.js';
 
 const AGENT_CONFIG_DIR = 'agents';
+
+/**
+ * Whether `mode` is valid on a subagent definition's `approvalMode`: any
+ * session-level {@link APPROVAL_MODES} value, plus the subagent-only
+ * {@link BUBBLE_APPROVAL_MODE}. `'bubble'` is intentionally NOT a member of the
+ * global `ApprovalMode` enum (it would pollute the session model/approval
+ * pickers); it is valid only here.
+ *
+ * Reads `APPROVAL_MODES` lazily (inside the call) rather than via a top-level
+ * spread: this module sits in an import cycle with `config.ts`, and an eager
+ * `[...APPROVAL_MODES]` at module-eval time can observe `APPROVAL_MODES`
+ * before `config.ts` has finished initializing it.
+ */
+function isSubagentApprovalMode(mode: string): boolean {
+  return (
+    (APPROVAL_MODES as readonly string[]).includes(mode) ||
+    mode === BUBBLE_APPROVAL_MODE
+  );
+}
+
+/** Human-readable list of valid subagent approval modes, for error messages. */
+function subagentApprovalModesLabel(): string {
+  return [...APPROVAL_MODES, BUBBLE_APPROVAL_MODE].join(', ');
+}
 
 /**
  * Manages subagent configurations stored as Markdown files with YAML frontmatter.
@@ -401,9 +429,24 @@ export class SubagentManager {
     }
 
     // Normal mode: load from project, user, and builtin levels
-    const levelsToCheck: SubagentLevel[] = options.level
-      ? [options.level]
+    // Safe mode: only builtin subagents are available
+    const defaultLevels: SubagentLevel[] = this.config.isSafeMode()
+      ? ['builtin']
       : ['project', 'user', 'builtin', 'extension'];
+    if (
+      this.config.isSafeMode() &&
+      options.level &&
+      options.level !== 'builtin'
+    ) {
+      debugLogger.debug(
+        `Safe mode: overriding requested level '${options.level}' to 'builtin'`,
+      );
+    }
+    const levelsToCheck: SubagentLevel[] = options.level
+      ? this.config.isSafeMode() && options.level !== 'builtin'
+        ? ['builtin']
+        : [options.level]
+      : defaultLevels;
 
     // Check if we should use cache or force refresh
     const shouldUseCache = !options.force && this.subagentsCache !== null;
@@ -501,7 +544,10 @@ export class SubagentManager {
   async refreshCache(): Promise<void> {
     const subagentsCache = new Map();
 
-    const levels: SubagentLevel[] = ['project', 'user', 'builtin', 'extension'];
+    // Safe mode: only load builtin subagents
+    const levels: SubagentLevel[] = this.config.isSafeMode()
+      ? ['builtin']
+      : ['project', 'user', 'builtin', 'extension'];
 
     for (const level of levels) {
       const levelSubagents = await this.listSubagentsAtLevel(level);
@@ -610,10 +656,7 @@ export class SubagentManager {
       frontmatter['color'] = config.color;
     }
 
-    if (
-      config.approvalMode &&
-      APPROVAL_MODES.includes(config.approvalMode as never)
-    ) {
+    if (config.approvalMode && isSubagentApprovalMode(config.approvalMode)) {
       frontmatter['approvalMode'] = config.approvalMode;
     }
 
@@ -635,7 +678,7 @@ export class SubagentManager {
     }
 
     // Nested CC fields. Safe to round-trip with the eemeli/yaml parser; the
-    // previous skip-list carve-out is gone (see docs/yaml-parser-replacement.md).
+    // previous skip-list carve-out is gone (see docs/design/yaml-parser-replacement.md).
     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
       frontmatter['mcpServers'] = config.mcpServers;
     }
@@ -1374,19 +1417,16 @@ function parseSubagentContent(
       typeof approvalModeRaw !== 'string'
     ) {
       throw new Error(
-        `Invalid "approvalMode" value: expected a string, got ${typeof approvalModeRaw}. Valid values: ${APPROVAL_MODES.join(', ')}`,
+        `Invalid "approvalMode" value: expected a string, got ${typeof approvalModeRaw}. Valid values: ${subagentApprovalModesLabel()}`,
       );
     }
     const approvalMode =
       typeof approvalModeRaw === 'string' && approvalModeRaw !== ''
         ? approvalModeRaw
         : undefined;
-    if (
-      approvalMode !== undefined &&
-      !APPROVAL_MODES.includes(approvalMode as never)
-    ) {
+    if (approvalMode !== undefined && !isSubagentApprovalMode(approvalMode)) {
       throw new Error(
-        `Invalid "approvalMode" value "${approvalMode}". Valid values: ${APPROVAL_MODES.join(', ')}`,
+        `Invalid "approvalMode" value "${approvalMode}". Valid values: ${subagentApprovalModesLabel()}`,
       );
     }
     const model =

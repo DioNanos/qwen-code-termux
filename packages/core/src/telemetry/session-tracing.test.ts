@@ -19,8 +19,22 @@ const mockState = vi.hoisted(() => ({
   activeOtelSpan: undefined as unknown,
 }));
 
+const mockMetrics = vi.hoisted(() => ({
+  recordApiRequestBreakdown: vi.fn(),
+}));
+
 vi.mock('./sdk.js', () => ({
   isTelemetrySdkInitialized: () => mockState.sdkInitialized,
+}));
+
+vi.mock('./metrics.js', () => ({
+  recordApiRequestBreakdown: mockMetrics.recordApiRequestBreakdown,
+  ApiRequestPhase: {
+    REQUEST_PREPARATION: 'request_preparation',
+    NETWORK_LATENCY: 'network_latency',
+    RESPONSE_PROCESSING: 'response_processing',
+    TOKEN_PROCESSING: 'token_processing',
+  },
 }));
 
 interface MockSpanRecord {
@@ -867,6 +881,120 @@ describe('session-tracing', () => {
     });
   });
 
+  describe('LLM request spans — Phase 4c (recordApiRequestBreakdown wiring)', () => {
+    beforeEach(() => {
+      mockMetrics.recordApiRequestBreakdown.mockClear();
+    });
+
+    it('records all 3 phases when config + ttftMs + requestSetupMs are present', () => {
+      const span = startLLMRequestSpan('test-model', 'p');
+      const config = createMockConfig();
+      endLLMRequestSpan(span, {
+        success: true,
+        durationMs: 1000,
+        ttftMs: 200,
+        requestSetupMs: 50,
+        config,
+      });
+
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledTimes(3);
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledWith(
+        config,
+        50,
+        { model: 'test-model', phase: 'request_preparation' },
+      );
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledWith(
+        config,
+        200,
+        { model: 'test-model', phase: 'network_latency' },
+      );
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledWith(
+        config,
+        800,
+        { model: 'test-model', phase: 'response_processing' },
+      );
+    });
+
+    it('skips metric recording when config is absent', () => {
+      const span = startLLMRequestSpan('test-model', 'p');
+      endLLMRequestSpan(span, {
+        success: true,
+        durationMs: 1000,
+        ttftMs: 200,
+        requestSetupMs: 50,
+      });
+
+      expect(mockMetrics.recordApiRequestBreakdown).not.toHaveBeenCalled();
+    });
+
+    it('skips metric recording when request failed (success=false)', () => {
+      const span = startLLMRequestSpan('test-model', 'p');
+      const config = createMockConfig();
+      endLLMRequestSpan(span, {
+        success: false,
+        durationMs: 1000,
+        ttftMs: 200,
+        requestSetupMs: 50,
+        config,
+      });
+
+      expect(mockMetrics.recordApiRequestBreakdown).not.toHaveBeenCalled();
+    });
+
+    it('records only REQUEST_PREPARATION when ttftMs is absent', () => {
+      const span = startLLMRequestSpan('test-model', 'p');
+      const config = createMockConfig();
+      endLLMRequestSpan(span, {
+        success: true,
+        durationMs: 1000,
+        requestSetupMs: 50,
+        config,
+      });
+
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledTimes(1);
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledWith(
+        config,
+        50,
+        { model: 'test-model', phase: 'request_preparation' },
+      );
+    });
+
+    it('skips RESPONSE_PROCESSING when samplingMs is 0 (ttftMs == duration)', () => {
+      const span = startLLMRequestSpan('test-model', 'p');
+      const config = createMockConfig();
+      endLLMRequestSpan(span, {
+        success: true,
+        durationMs: 500,
+        ttftMs: 500,
+        config,
+      });
+
+      const calls = mockMetrics.recordApiRequestBreakdown.mock.calls;
+      const phases = calls.map(
+        (c: unknown[]) => (c[2] as { phase: string }).phase,
+      );
+      expect(phases).toContain('network_latency');
+      expect(phases).not.toContain('response_processing');
+    });
+
+    it('idempotency — second endLLMRequestSpan call does not record again', () => {
+      const span = startLLMRequestSpan('test-model', 'p');
+      const config = createMockConfig();
+      const metadata = {
+        success: true,
+        durationMs: 1000,
+        ttftMs: 200,
+        requestSetupMs: 50,
+        config,
+      };
+      endLLMRequestSpan(span, metadata);
+      endLLMRequestSpan(span, metadata);
+
+      // Only first call records (3 phases), second is short-circuited.
+      expect(mockMetrics.recordApiRequestBreakdown).toHaveBeenCalledTimes(3);
+    });
+  });
+
   describe('tool spans', () => {
     it('creates and ends a tool span', () => {
       const span = startToolSpan('ReadFile', { 'tool.call_id': 'call-1' });
@@ -993,6 +1121,51 @@ describe('session-tracing', () => {
 
       const exec = mockSpans.find((s) => s.name === 'qwen-code.tool.execution');
       expect(exec?.attributes['session.id']).toBe('session-A');
+    });
+
+    it('stamps a blocked-on-user span with the owning session id via the tool parent', () => {
+      setSessionContext(undefined, 'session-B-global');
+      startInteractionSpan(createMockConfig({ sessionId: 'session-A' }), {
+        promptId: 'p-a',
+        model: 'm',
+        messageType: 'acp_prompt',
+      });
+
+      const toolSpan = startToolSpan('Bash', { 'tool.call_id': 'c1' });
+      const blockedSpan = startToolBlockedOnUserSpan(toolSpan, {
+        call_id: 'c1',
+      });
+      endToolBlockedOnUserSpan(blockedSpan, { decision: 'proceed_once' });
+      endToolSpan(toolSpan, { success: true });
+
+      const blocked = mockSpans.find(
+        (s) => s.name === 'qwen-code.tool.blocked_on_user',
+      );
+      expect(blocked?.attributes['session.id']).toBe('session-A');
+    });
+
+    it('stamps a hook span with the owning session id via the logical parent', () => {
+      setSessionContext(undefined, 'session-B-global');
+      startInteractionSpan(createMockConfig({ sessionId: 'session-A' }), {
+        promptId: 'p-a',
+        model: 'm',
+        messageType: 'acp_prompt',
+      });
+
+      const toolSpan = startToolSpan('Bash', { 'tool.call_id': 'c1' });
+      let hookSpan!: ReturnType<typeof startHookSpan>;
+      runInToolSpanContext(toolSpan, () => {
+        hookSpan = startHookSpan({
+          hookEvent: 'PreToolUse',
+          toolName: 'Bash',
+          toolUseId: 'use-1',
+        });
+      });
+      endHookSpan(hookSpan, { success: true, shouldProceed: true });
+      endToolSpan(toolSpan, { success: true });
+
+      const hook = mockSpans.find((s) => s.name === 'qwen-code.hook');
+      expect(hook?.attributes['session.id']).toBe('session-A');
     });
 
     it('isolates concurrent sessions: each tool span carries its own session id', async () => {

@@ -25,12 +25,12 @@ Out of scope here:
 
 ## Reporting
 
-| Channel | Where |
-|---|---|
-| Termux/Android bug reports, PRs | [DioNanos/qwen-code-termux](https://github.com/DioNanos/qwen-code-termux) |
-| Generic Qwen Code bugs (not Termux-specific) | [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code) |
-| Security disclosures (Termux fork) | [`SECURITY.md`](./SECURITY.md) — `security@mmmbuto.com` |
-| General contact | `dev@mmmbuto.com` |
+| Channel                                      | Where                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| Termux/Android bug reports, PRs              | [DioNanos/qwen-code-termux](https://github.com/DioNanos/qwen-code-termux) |
+| Generic Qwen Code bugs (not Termux-specific) | [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code)                   |
+| Security disclosures (Termux fork)           | [`SECURITY.md`](./SECURITY.md) — `security@mmmbuto.com`                   |
+| General contact                              | `dev@mmmbuto.com`                                                         |
 
 When reporting a Termux bug, please include: device, Android version, Termux
 build (Classic or F-Droid), Node.js version, and `qwen --version`.
@@ -50,4 +50,4 @@ See [`LICENSE`](./LICENSE).
 
 ---
 
-*Per aspera ad astra.*
+_Per aspera ad astra._

@@ -1,28 +1,59 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react';
-import {
-  useSettings,
-  type DaemonSettingDescriptor,
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  DaemonSettingDescriptor,
+  DaemonSettingUpdateResult,
+  DaemonWorkspaceSettingsStatus,
 } from '@qwen-code/webui/daemon-react-sdk';
-import { useDelayedGlobalKeyDown } from '../../hooks/useDelayedGlobalKeyDown';
-import { useI18n } from '../../i18n';
+import {
+  WEB_SHELL_LANGUAGES,
+  languageLabel,
+  languageSettingToWebShellLanguage,
+  useI18n,
+  type WebShellLanguage,
+} from '../../i18n';
+import {
+  WEB_SHELL_THEMES,
+  WebShellThemeId,
+  THEME_SETTING_KEY,
+  LANGUAGE_SETTING_KEY,
+  themeSettingToWebShellTheme,
+  webShellThemeToSettingValue,
+  type WebShellTheme,
+} from '../../themeContext';
 import styles from './SettingsMessage.module.css';
 
-export const SETTINGS_ACTIVE_EVENT = 'web-shell:settings-panel-active';
+type ChatWidthMode = '1000' | 'wide';
 
 interface SettingsMessageProps {
-  onClose: () => void;
+  settingsState: SettingsMessageSettingsState;
+  onLanguageChange: (language: WebShellLanguage) => void;
   onSubDialog: (settingKey: string) => void;
+  onThemeChange: (theme: WebShellTheme) => void;
+  chatWidthMode: ChatWidthMode;
+  onChatWidthModeChange: (mode: ChatWidthMode) => void;
+  embedded?: boolean;
 }
 
-const SUB_DIALOG_KEYS = new Set(['ui.theme', 'fastModel']);
+export interface SettingsMessageSettingsState {
+  status: DaemonWorkspaceSettingsStatus | undefined;
+  settings: DaemonSettingDescriptor[];
+  loading: boolean;
+  error: Error | undefined;
+  reload: () => Promise<DaemonWorkspaceSettingsStatus | undefined>;
+  setValue: (
+    scope: 'workspace',
+    key: string,
+    value: unknown,
+  ) => Promise<DaemonSettingUpdateResult>;
+}
+
+const SUB_DIALOG_KEYS = new Set(['fastModel', 'visionModel']);
+const HIDDEN_SETTING_KEYS = new Set([
+  'ui.hideTips',
+  'ui.enableUserFeedback',
+  'ui.compactMode',
+  'ui.compactInline',
+]);
 
 type Scope = 'user' | 'workspace';
 
@@ -31,6 +62,55 @@ type Translator = (
   vars?: Record<string, string | number>,
 ) => string;
 
+function translateSettingText(
+  t: Translator,
+  key: string,
+  fallback: string,
+): string {
+  const translated = t(key);
+  return translated === key ? fallback : translated;
+}
+
+function formatSettingCategory(category: string, t: Translator): string {
+  return translateSettingText(t, `settings.category.${category}`, category);
+}
+
+export function formatSettingLabel(
+  setting: DaemonSettingDescriptor,
+  t: Translator,
+): string {
+  return translateSettingText(
+    t,
+    `settings.label.${setting.key}`,
+    setting.label,
+  );
+}
+
+function formatSettingDescription(
+  setting: DaemonSettingDescriptor,
+  t: Translator,
+): string | undefined {
+  if (!setting.description) return undefined;
+  return translateSettingText(
+    t,
+    `settings.description.${setting.key}`,
+    setting.description,
+  );
+}
+
+function formatSettingOption(
+  setting: DaemonSettingDescriptor,
+  value: unknown,
+  label: string,
+  t: Translator,
+): string {
+  return translateSettingText(
+    t,
+    `settings.option.${setting.key}.${String(value)}`,
+    label,
+  );
+}
+
 function formatValue(
   setting: DaemonSettingDescriptor,
   scope: Scope,
@@ -38,13 +118,23 @@ function formatValue(
 ): string {
   const effective = resolveValue(setting, scope);
   if (effective === undefined || effective === null) return '';
+  if (setting.key === THEME_SETTING_KEY) {
+    const theme = themeSettingToWebShellTheme(effective, WebShellThemeId.Dark);
+    return t(`theme.${theme}`);
+  }
+  if (setting.key === LANGUAGE_SETTING_KEY) {
+    const language = languageSettingToWebShellLanguage(effective);
+    return language ? languageLabel(language) : String(effective);
+  }
   if (setting.type === 'boolean')
     return effective === true
       ? t('settings.value.on')
       : t('settings.value.off');
   if (setting.type === 'enum' && setting.options) {
     const opt = setting.options.find((o) => o.value === effective);
-    return opt?.label ?? String(effective);
+    return opt
+      ? formatSettingOption(setting, opt.value, opt.label, t)
+      : String(effective);
   }
   const s = String(effective);
   return s.length > 24 ? s.slice(0, 21) + '...' : s;
@@ -81,30 +171,25 @@ function resolveValue(setting: DaemonSettingDescriptor, scope: Scope): unknown {
   return scopeVal !== undefined ? scopeVal : setting.values.effective;
 }
 
-function nextBooleanValue(
-  setting: DaemonSettingDescriptor,
-  scope: Scope,
-): boolean {
-  return resolveValue(setting, scope) !== true;
-}
-
-function nextEnumValue(
-  setting: DaemonSettingDescriptor,
-  scope: Scope,
-): unknown {
-  if (!setting.options?.length) return resolveValue(setting, scope);
-  const current = resolveValue(setting, scope);
-  const currentIdx = setting.options.findIndex((o) => o.value === current);
-  const nextIdx = (currentIdx + 1) % setting.options.length;
-  return setting.options[nextIdx]!.value;
-}
-
 interface CategoryGroup {
   category: string;
   items: DaemonSettingDescriptor[];
 }
 
-function groupByCategory(settings: DaemonSettingDescriptor[]): CategoryGroup[] {
+type SettingsPageItem =
+  | { type: 'setting'; setting: DaemonSettingDescriptor }
+  | { type: 'local'; localKey: 'chatWidth' };
+
+interface SettingsPageCategory {
+  id: string;
+  label: string;
+  items: SettingsPageItem[];
+}
+
+function groupByCategory(
+  settings: DaemonSettingDescriptor[],
+  t: Translator,
+): CategoryGroup[] {
   const map = new Map<string, DaemonSettingDescriptor[]>();
   for (const s of settings) {
     let group = map.get(s.category);
@@ -115,27 +200,15 @@ function groupByCategory(settings: DaemonSettingDescriptor[]): CategoryGroup[] {
     group.push(s);
   }
   return Array.from(map.entries()).map(([category, items]) => ({
-    category,
+    category: formatSettingCategory(category, t),
     items,
   }));
 }
 
-export interface FlatRow {
-  type: 'header' | 'setting';
-  category?: string;
-  setting?: DaemonSettingDescriptor;
-}
-
-function flattenGroups(groups: CategoryGroup[]): FlatRow[] {
-  const rows: FlatRow[] = [];
-  for (const g of groups) {
-    rows.push({ type: 'header', category: g.category });
-    for (const s of g.items) {
-      rows.push({ type: 'setting', setting: s });
-    }
-  }
-  return rows;
-}
+export type FlatRow =
+  | { type: 'header'; category: string }
+  | { type: 'setting'; setting: DaemonSettingDescriptor }
+  | { type: 'local'; localKey: 'chatWidth' };
 
 /* Wraps around at both ends (matching the native CLI) while skipping
    category-header rows. Exported for tests. */
@@ -149,118 +222,90 @@ export function nextSettingIdx(
   let i = current;
   for (let step = 0; step < n; step++) {
     i = (i + dir + n) % n;
-    if (rows[i]!.type === 'setting') return i;
+    if (rows[i]!.type === 'setting' || rows[i]!.type === 'local') return i;
   }
   return current;
 }
 
 export function SettingsMessage({
-  onClose,
+  settingsState,
+  onLanguageChange,
   onSubDialog,
+  onThemeChange,
+  chatWidthMode,
+  onChatWidthModeChange,
+  embedded = false,
 }: SettingsMessageProps) {
   const { t } = useI18n();
-  const { status, settings, loading, error, reload, setValue } = useSettings({
-    autoLoad: true,
-  });
+  const { status, settings, loading, error, reload, setValue } = settingsState;
   const [scope, setScope] = useState<Scope>('workspace');
-  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [activeCategory, setActiveCategory] = useState('');
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [editMode, setEditMode] = useState<{
     key: string;
     draft: string;
   } | null>(null);
-  const panelIdRef = useRef(`settings-${Math.random().toString(36).slice(2)}`);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const selectedIdxRef = useRef(selectedIdx);
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  const rows = useMemo(
-    () => flattenGroups(groupByCategory(settings)),
-    [settings],
-  );
   const [restartPending, setRestartPending] = useState(false);
 
-  const selectedRow = rows[selectedIdx];
-  const selectedDescription =
-    selectedRow?.type === 'setting'
-      ? selectedRow.setting?.description
-      : undefined;
+  const showInitialLoading = loading && !status;
+  const themeSetting = settings.find((s) => s.key === THEME_SETTING_KEY);
+  const themeValue = themeSettingToWebShellTheme(
+    themeSetting?.values.effective,
+  );
+  const languageSetting = settings.find((s) => s.key === LANGUAGE_SETTING_KEY);
+  const languageValue = languageSettingToWebShellLanguage(
+    languageSetting?.values.effective,
+  );
 
-  // Marquee state for an overflowing description: distance to travel and a
-  // duration that keeps the glide speed constant regardless of text length.
-  const detailRef = useRef<HTMLDivElement>(null);
-  const [marquee, setMarquee] = useState<{
-    distance: number;
-    duration: number;
-  } | null>(null);
-
-  useLayoutEffect(() => {
-    const outer = detailRef.current;
-    if (!outer) return undefined;
-    const measure = () => {
-      const distance = outer.scrollWidth - outer.clientWidth;
-      const reduceMotion = window.matchMedia(
-        '(prefers-reduced-motion: reduce)',
-      ).matches;
-      if (distance > 1 && !reduceMotion) {
-        // ~80px/s glide; the keyframes hold at each end for 15% of the
-        // timeline, so only 70% of it is travel time.
-        setMarquee({ distance, duration: Math.max(3, distance / 80 / 0.7) });
-      } else {
-        setMarquee(null);
-      }
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(outer);
-    return () => observer.disconnect();
-  }, [selectedDescription]);
-
-  const emitActive = useCallback((active: boolean) => {
-    window.dispatchEvent(
-      new CustomEvent(SETTINGS_ACTIVE_EVENT, {
-        detail: { id: panelIdRef.current, active },
-      }),
+  const categories = useMemo(() => {
+    const visibleSettings = settings.filter(
+      (setting) => !HIDDEN_SETTING_KEYS.has(setting.key),
     );
-  }, []);
+    const groups: SettingsPageCategory[] = groupByCategory(
+      visibleSettings,
+      t,
+    ).map((group) => ({
+      id: group.category,
+      label: group.category,
+      items: group.items.map((setting) => ({
+        type: 'setting' as const,
+        setting,
+      })),
+    }));
+    const localItem = {
+      type: 'local' as const,
+      localKey: 'chatWidth' as const,
+    };
+    const themeGroup = groups.find((group) =>
+      group.items.some(
+        (item) =>
+          item.type === 'setting' && item.setting.key === THEME_SETTING_KEY,
+      ),
+    );
+    if (themeGroup) {
+      const themeIndex = themeGroup.items.findIndex(
+        (item) =>
+          item.type === 'setting' && item.setting.key === THEME_SETTING_KEY,
+      );
+      themeGroup.items.splice(themeIndex + 1, 0, localItem);
+    } else {
+      groups.push({
+        id: t('settings.category.UI'),
+        label: t('settings.category.UI'),
+        items: [localItem],
+      });
+    }
+    return groups;
+  }, [settings, t]);
 
   useEffect(() => {
-    emitActive(true);
-    return () => emitActive(false);
-  }, [emitActive]);
-
-  // Close when the user presses outside the panel. The panel is rendered
-  // inline (no modal backdrop), so we listen on the document. The press that
-  // opened the panel has already finished propagating by the time this effect
-  // runs, so it cannot self-close. We cover touch as well so a tap outside
-  // dismisses on touch devices, not only via Escape / a row click.
-  useEffect(() => {
-    const onPointerOutside = (event: Event) => {
-      // Only the primary (left) mouse button dismisses. Middle-click on
-      // Linux/X11 pastes, and right-click opens a context menu — neither should
-      // close the panel out from under the user. (Touch events have no button.)
-      if (event instanceof MouseEvent && event.button !== 0) return;
-      // If another handler already consumed the press, leave the panel alone.
-      if (event.defaultPrevented) return;
-      const panel = panelRef.current;
-      const target = event.target;
-      if (panel && target instanceof Node && !panel.contains(target)) {
-        onCloseRef.current();
-      }
-    };
-    window.addEventListener('mousedown', onPointerOutside);
-    window.addEventListener('touchstart', onPointerOutside);
-    return () => {
-      window.removeEventListener('mousedown', onPointerOutside);
-      window.removeEventListener('touchstart', onPointerOutside);
-    };
-  }, []);
+    if (categories.length === 0) return;
+    if (!categories.some((category) => category.id === activeCategory)) {
+      setActiveCategory(categories[0]!.id);
+    }
+  }, [activeCategory, categories]);
 
   useEffect(() => {
     if (error) setMessage(error.message);
@@ -278,26 +323,6 @@ export function SettingsMessage({
   }, [error, settings, status, t, restartPending]);
 
   useEffect(() => {
-    if (rows.length === 0) return;
-    if (selectedIdx >= rows.length) {
-      setSelectedIdx(nextSettingIdx(rows, rows.length, -1));
-    } else if (rows[selectedIdx]?.type !== 'setting') {
-      setSelectedIdx(nextSettingIdx(rows, selectedIdx - 1, 1));
-    }
-  }, [selectedIdx, rows]);
-
-  useEffect(() => {
-    selectedIdxRef.current = selectedIdx;
-  }, [selectedIdx]);
-
-  useEffect(() => {
-    const el = listRef.current?.children[selectedIdx] as
-      | HTMLElement
-      | undefined;
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [selectedIdx]);
-
-  useEffect(() => {
     if (editMode) {
       setTimeout(() => inputRef.current?.focus(), 0);
     }
@@ -308,8 +333,13 @@ export function SettingsMessage({
       if (!restartPending) setMessage(null);
       setBusyKey(key);
       setValue('workspace', key, value)
-        .then((result) => {
-          if (result?.requiresRestart) {
+        .then(async (result) => {
+          try {
+            await reload();
+          } catch {
+            // reload failure is non-fatal — the value was already saved
+          }
+          if (result?.requiresRestart && key !== LANGUAGE_SETTING_KEY) {
             setRestartPending(true);
             setMessage(t('settings.requiresRestart'));
           }
@@ -319,45 +349,14 @@ export function SettingsMessage({
         })
         .finally(() => setBusyKey(null));
     },
-    [restartPending, setValue, t],
-  );
-
-  const handleAction = useCallback(
-    (setting: DaemonSettingDescriptor) => {
-      if (editMode && editMode.key === setting.key) return;
-      setEditMode(null);
-      if (scope !== 'workspace') {
-        setMessage(t('settings.readOnly'));
-        return;
-      }
-      if (SUB_DIALOG_KEYS.has(setting.key)) {
-        onSubDialog(setting.key);
-        return;
-      }
-      if (setting.type === 'boolean') {
-        handleSetValue(setting.key, nextBooleanValue(setting, scope));
-        return;
-      }
-      if (setting.type === 'enum') {
-        handleSetValue(setting.key, nextEnumValue(setting, scope));
-        return;
-      }
-      if (setting.type === 'string' || setting.type === 'number') {
-        setEditMode({
-          key: setting.key,
-          draft: String(resolveValue(setting, scope) ?? ''),
-        });
-      }
-    },
-    [editMode, handleSetValue, onSubDialog, scope, t],
+    [reload, restartPending, setValue, t],
   );
 
   const handleEditSubmit = useCallback(() => {
     if (!editMode) return;
-    const row = rows.find(
-      (r) => r.type === 'setting' && r.setting?.key === editMode.key,
+    const setting = settings.find(
+      (candidate) => candidate.key === editMode.key,
     );
-    const setting = row?.setting;
     if (!setting) {
       setEditMode(null);
       return;
@@ -373,137 +372,299 @@ export function SettingsMessage({
     }
     setEditMode(null);
     handleSetValue(setting.key, parsed);
-  }, [editMode, rows, handleSetValue, t]);
+  }, [editMode, settings, handleSetValue, t]);
 
-  useDelayedGlobalKeyDown(
-    (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      const claim = () => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
+  const activeGroup =
+    categories.find((category) => category.id === activeCategory) ??
+    categories[0];
 
-      if (editMode) {
-        if (e.key === 'Escape') {
-          claim();
-          setEditMode(null);
-          return;
-        }
-        if (e.key === 'Enter') {
-          claim();
-          handleEditSubmit();
-          return;
-        }
-        return;
-      }
-
-      if (e.key === 'Escape') {
-        claim();
-        onClose();
-        return;
-      }
-      if (e.key === 'ArrowDown' || e.key === 'j') {
-        claim();
-        setSelectedIdx((i) => nextSettingIdx(rows, i, 1));
-        return;
-      }
-      if (e.key === 'ArrowUp' || e.key === 'k') {
-        claim();
-        setSelectedIdx((i) => nextSettingIdx(rows, i, -1));
-        return;
-      }
-      if (e.key === 'Tab') {
-        claim();
-        setScope((s) => (s === 'workspace' ? 'user' : 'workspace'));
-        return;
-      }
-      if (e.key === 'r' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        claim();
-        reload();
-        return;
-      }
-      if ((e.key === 'Enter' || e.key === ' ') && !busyKey) {
-        claim();
-        const row = rows[selectedIdxRef.current];
-        if (row?.type === 'setting' && row.setting) {
-          handleAction(row.setting);
-        }
-      }
-    },
-    [busyKey, editMode, handleAction, handleEditSubmit, onClose, reload, rows],
+  const renderSelect = (
+    value: string,
+    onChange: (value: string) => void,
+    options: Array<{ value: string; label: string }>,
+    disabled = false,
+  ) => (
+    <select
+      className={styles.select}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 
-  const scopeLabel =
-    scope === 'workspace'
-      ? t('settings.scope.workspace')
-      : t('settings.scope.user');
+  const renderSettingControl = (setting: DaemonSettingDescriptor) => {
+    const value = resolveValue(setting, scope);
+    const isBusy = busyKey === setting.key;
+    const isEditing = editMode?.key === setting.key;
+    const readOnly = scope !== 'workspace';
+
+    if (readOnly) {
+      return (
+        <button
+          type="button"
+          className={styles.actionButton}
+          disabled
+          title={t('settings.readOnly')}
+        >
+          {formatValue(setting, scope, t) || t('settings.readOnly')}
+        </button>
+      );
+    }
+
+    if (setting.key === THEME_SETTING_KEY) {
+      return renderSelect(
+        themeValue ?? WebShellThemeId.Dark,
+        (next) => {
+          const theme = next as WebShellTheme;
+          onThemeChange(theme);
+          handleSetValue(THEME_SETTING_KEY, webShellThemeToSettingValue(theme));
+        },
+        WEB_SHELL_THEMES.map((theme) => ({
+          value: theme,
+          label: t(`theme.${theme}`),
+        })),
+        isBusy,
+      );
+    }
+
+    if (setting.key === LANGUAGE_SETTING_KEY) {
+      return renderSelect(
+        languageValue ?? 'zh-CN',
+        (next) => onLanguageChange(next as WebShellLanguage),
+        WEB_SHELL_LANGUAGES.map((language) => ({
+          value: language,
+          label: languageLabel(language),
+        })),
+        isBusy,
+      );
+    }
+
+    if (SUB_DIALOG_KEYS.has(setting.key)) {
+      return (
+        <button
+          type="button"
+          className={styles.actionButton}
+          onClick={() => onSubDialog(setting.key)}
+        >
+          {formatValue(setting, scope, t) || t('settings.action.edit')}
+        </button>
+      );
+    }
+
+    if (setting.type === 'boolean') {
+      const checked = value === true;
+      return (
+        <button
+          type="button"
+          className={`${styles.switch} ${checked ? styles.switchOn : ''}`}
+          disabled={isBusy}
+          onClick={() => handleSetValue(setting.key, !checked)}
+          aria-pressed={checked}
+        >
+          <span className={styles.switchKnob} />
+        </button>
+      );
+    }
+
+    if (setting.type === 'enum' && setting.options?.length) {
+      const currentIndex = setting.options.findIndex(
+        (option) => option.value === value,
+      );
+      return renderSelect(
+        currentIndex >= 0 ? String(currentIndex) : '',
+        (next) => {
+          const option = setting.options?.[Number(next)];
+          if (option) handleSetValue(setting.key, option.value);
+        },
+        setting.options.map((option, index) => ({
+          value: String(index),
+          label: formatSettingOption(setting, option.value, option.label, t),
+        })),
+        isBusy,
+      );
+    }
+
+    if (isEditing) {
+      return (
+        <div className={styles.editor}>
+          <input
+            ref={inputRef}
+            className={styles.editInput}
+            type={setting.type === 'number' ? 'number' : 'text'}
+            value={editMode.draft}
+            onChange={(event) =>
+              setEditMode({ key: editMode.key, draft: event.target.value })
+            }
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleEditSubmit();
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setEditMode(null);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className={styles.actionButton}
+            onClick={handleEditSubmit}
+          >
+            {t('settings.action.save')}
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        className={styles.actionButton}
+        disabled={isBusy}
+        onClick={() =>
+          setEditMode({
+            key: setting.key,
+            draft: String(value ?? ''),
+          })
+        }
+      >
+        {formatValue(setting, scope, t) || t('settings.action.edit')}
+      </button>
+    );
+  };
 
   return (
-    <div ref={panelRef} className={styles.panel} data-keyboard-scope>
-      <div className={styles.header}>
-        <span className={styles.title}>{t('settings.title')}</span>
-        <span className={styles.secondary}>{scopeLabel}</span>
-      </div>
+    <div
+      className={`${styles.panel} ${embedded ? styles.embeddedPanel : ''}`}
+      data-keyboard-scope
+    >
+      {!embedded && (
+        <div className={styles.header}>
+          <span className={styles.title}>{t('settings.title')}</span>
+          <span className={styles.secondary}>
+            {t('settings.scope.workspace')}
+          </span>
+        </div>
+      )}
 
-      {(message || loading) && (
+      {(message || showInitialLoading) && (
         <div className={styles.hint}>{message || t('settings.loading')}</div>
       )}
 
-      <div
-        className={styles.list}
-        ref={listRef}
-        role="listbox"
-        aria-label={t('settings.title')}
-      >
-        {!loading && rows.length === 0 && (
-          <div className={styles.empty}>{t('settings.empty')}</div>
-        )}
-        {rows.map((row, i) => {
-          if (row.type === 'header') {
-            return (
-              <div
-                key={`cat-${row.category}`}
-                role="presentation"
-                className={styles.category}
-              >
-                {row.category}
-              </div>
-            );
-          }
+      <div className={styles.scopeTabs} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scope === 'workspace'}
+          className={`${styles.scopeTab} ${
+            scope === 'workspace' ? styles.scopeTabActive : ''
+          }`}
+          onClick={() => setScope('workspace')}
+        >
+          {t('settings.scope.workspace')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scope === 'user'}
+          className={`${styles.scopeTab} ${
+            scope === 'user' ? styles.scopeTabActive : ''
+          }`}
+          onClick={() => {
+            setEditMode(null);
+            setScope('user');
+          }}
+        >
+          {t('settings.scope.user')}
+        </button>
+      </div>
 
-          const setting = row.setting!;
-          const isSelected = i === selectedIdx;
-          const isEditing = editMode?.key === setting.key;
-          const isSubDialog = SUB_DIALOG_KEYS.has(setting.key);
-          const hasScopeValue = scopeHasValue(setting, scope);
-          const hintKey = scopeHintKey(setting, scope);
-
-          return (
-            <div
-              key={setting.key}
-              role="option"
-              aria-selected={isSelected}
-              className={`${styles.item} ${isSelected ? styles.selected : ''}`}
-              onClick={() => {
-                if (busyKey) return;
-                setSelectedIdx(i);
-                handleAction(setting);
-              }}
-              // Hover feedback is pure CSS (.item:hover) and deliberately does
-              // NOT move the selection: arrow keys own the pointer + accent
-              // label, the mouse only adds a background highlight. This keeps
-              // mouse and keyboard from fighting when the list scrolls under a
-              // resting cursor.
+      <div className={styles.settingsPage}>
+        <nav className={styles.sidebar} aria-label={t('settings.title')}>
+          {categories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              className={`${styles.categoryButton} ${
+                category.id === activeCategory
+                  ? styles.categoryButtonActive
+                  : ''
+              }`}
+              onClick={() => setActiveCategory(category.id)}
             >
-              <div className={styles.row}>
-                <span className={styles.pointer}>{isSelected ? '›' : ' '}</span>
-                <span className={styles.label}>
-                  {setting.label}
-                  {/* Cross-scope hint inline after the label, same as the
-                      native CLI — never a separate row. */}
+              <span>{category.label}</span>
+              <span className={styles.categoryCount}>
+                {category.items.length}
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <section className={styles.content}>
+          {!loading && !activeGroup && (
+            <div className={styles.empty}>{t('settings.empty')}</div>
+          )}
+          {activeGroup?.items.map((item) => {
+            if (item.type === 'local') {
+              return (
+                <div className={styles.card} key={item.localKey}>
+                  <div className={styles.cardBody}>
+                    <div className={styles.cardTitle}>
+                      {t('settings.label.ui.chatWidth')}
+                    </div>
+                    <div className={styles.cardDescription}>
+                      {t('settings.description.ui.chatWidth')}
+                    </div>
+                  </div>
+                  <div className={styles.cardControl}>
+                    {renderSelect(
+                      chatWidthMode,
+                      (next) => onChatWidthModeChange(next as ChatWidthMode),
+                      [
+                        {
+                          value: '1000',
+                          label: t('settings.option.ui.chatWidth.1000'),
+                        },
+                        {
+                          value: 'wide',
+                          label: t('settings.option.ui.chatWidth.wide'),
+                        },
+                      ],
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            const setting = item.setting;
+            const description = formatSettingDescription(setting, t);
+            const hintKey = scopeHintKey(setting, scope);
+            const hasScopeValue = scopeHasValue(setting, scope);
+            return (
+              <div className={styles.card} key={setting.key}>
+                <div className={styles.cardBody}>
+                  <div className={styles.cardTitle}>
+                    {formatSettingLabel(setting, t)}
+                    {hasScopeValue && (
+                      <span className={styles.scopeBadge}>
+                        {scope === 'workspace'
+                          ? t('settings.scope.workspace')
+                          : t('settings.scope.user')}
+                      </span>
+                    )}
+                  </div>
+                  {description && (
+                    <div className={styles.cardDescription}>{description}</div>
+                  )}
                   {hintKey && (
-                    <span className={styles.scopeHint}>
-                      {' '}
+                    <div className={styles.scopeHint}>
                       {t(hintKey, {
                         scope: t(
                           scope === 'workspace'
@@ -511,79 +672,27 @@ export function SettingsMessage({
                             : 'settings.scope.workspace',
                         ),
                       })}
-                    </span>
+                    </div>
                   )}
-                </span>
-                <span className={styles.value}>
-                  {busyKey === setting.key
-                    ? '...'
-                    : `${formatValue(setting, scope, t)}${hasScopeValue ? '*' : ''}${setting.requiresRestart ? ' ⟳' : ''}${isSubDialog ? ' ▸' : ''}`}
-                </span>
-              </div>
-              {isEditing && editMode && (
-                <div className={styles.editWrap}>
-                  <input
-                    ref={inputRef}
-                    className={styles.editInput}
-                    type={setting.type === 'number' ? 'number' : 'text'}
-                    value={editMode.draft}
-                    onChange={(e) =>
-                      setEditMode({ key: editMode.key, draft: e.target.value })
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleEditSubmit();
-                      }
-                      if (e.key === 'Escape') {
-                        e.preventDefault();
-                        setEditMode(null);
-                      }
-                    }}
-                  />
                 </div>
-              )}
-            </div>
-          );
-        })}
+                <div className={styles.cardControl}>
+                  {busyKey === setting.key ? (
+                    <span className={styles.busy}>...</span>
+                  ) : (
+                    renderSettingControl(setting)
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </section>
       </div>
 
-      {/* Always rendered (nbsp placeholder) and clamped to one line, so the
-          panel height stays fixed while the cursor moves across settings
-          with/without descriptions — mirrors the native CLI's single
-          truncated description line. Descriptions that overflow glide
-          horizontally (music-player marquee) so the full text is readable
-          without adding lines. */}
-      <div
-        ref={detailRef}
-        className={
-          marquee ? styles.detail : `${styles.detail} ${styles.detailEllipsis}`
-        }
-        title={selectedDescription || undefined}
-      >
-        <span
-          key={selectedIdx}
-          className={
-            marquee
-              ? `${styles.detailText} ${styles.detailTextScrolling}`
-              : styles.detailText
-          }
-          style={
-            marquee
-              ? ({
-                  '--marquee-distance': `${marquee.distance}px`,
-                  '--marquee-duration': `${marquee.duration}s`,
-                } as CSSProperties)
-              : undefined
-          }
-        >
-          {selectedDescription || '\u00A0'}
-        </span>
-      </div>
-
-      <div className={styles.footer}>
-        {editMode ? t('settings.footer.edit') : t('settings.footer')}
-      </div>
+      {!embedded && (
+        <div className={styles.footer}>
+          {editMode ? t('settings.footer.edit') : t('settings.footer')}
+        </div>
+      )}
     </div>
   );
 }

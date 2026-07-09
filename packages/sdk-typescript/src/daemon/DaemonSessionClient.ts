@@ -5,23 +5,34 @@
  */
 
 import type { DaemonClient } from './DaemonClient.js';
+import { DaemonHttpError } from './DaemonHttpError.js';
 import {
   isNonBlockingAccepted,
   matchTurnEvent,
+  normalizePendingPromptLimit,
   type CreateSessionRequest,
+  type NonBlockingPromptAccepted,
   type PromptRequest,
   type RestoreSessionRequest,
   type SubscribeOptions,
 } from './DaemonClient.js';
 import type {
+  DaemonForkSessionResult,
   DaemonEvent,
   DaemonRewindResult,
   DaemonRewindSnapshotInfo,
   DaemonSessionBtwResult,
+  DaemonMidTurnMessageResult,
+  DaemonPendingPromptsResult,
+  DaemonRemovePendingPromptResult,
   DaemonSessionContextStatus,
   DaemonSessionContextUsageStatus,
+  DaemonSessionLspStatus,
   DaemonSessionRecapResult,
   DaemonShellCommandResult,
+  DaemonSessionArtifactInput,
+  DaemonSessionArtifactMutationResult,
+  DaemonSessionArtifactsEnvelope,
   DaemonSessionState,
   DaemonSession,
   DaemonSessionStatsStatus,
@@ -44,6 +55,8 @@ export interface DaemonReplaySnapshot {
 export interface DaemonSessionClientOptions {
   client: DaemonClient;
   session: DaemonSession;
+  /** True when load/resume attached to a session with an in-flight prompt. */
+  hasActivePrompt?: boolean;
   /** ACP state returned by load/resume; empty for create/attach clients. */
   state?: DaemonSessionState;
   /**
@@ -55,6 +68,13 @@ export interface DaemonSessionClientOptions {
   lastEventId?: number;
   /** Compacted replay snapshot from daemon load response. */
   replaySnapshot?: DaemonReplaySnapshot;
+  /**
+   * Local per-session prompt cap. The counter is shared with the parent
+   * `DaemonClient`; other session clients using the same parent instance
+   * contend on the same count. Set to `null`, `0`, or `Infinity` to disable
+   * the local guard. Server-side admission still applies.
+   */
+  maxPendingPromptsPerSession?: number | null;
 }
 
 export interface DaemonSessionSubscribeOptions extends SubscribeOptions {
@@ -82,8 +102,12 @@ export class DaemonSessionClient {
   readonly session: DaemonSession;
   readonly state: DaemonSessionState;
   readonly replaySnapshot: DaemonReplaySnapshot;
+  readonly hasActivePrompt: boolean;
   private lastSeenEventId: number | undefined;
   private subscriptionActive = false;
+  /** In-flight `reattach()` so concurrent prompts re-register only once. */
+  private reattaching?: Promise<void>;
+  private readonly promptLimit: number;
   private readonly _pendingPrompts = new Map<
     string,
     {
@@ -96,11 +120,16 @@ export class DaemonSessionClient {
     this.client = opts.client;
     this.session = { ...opts.session };
     this.state = { ...(opts.state ?? {}) };
+    this.hasActivePrompt = opts.hasActivePrompt ?? false;
     this.replaySnapshot = opts.replaySnapshot ?? {
       compactedReplay: [],
       liveJournal: [],
     };
     this.lastSeenEventId = validateLastEventId(opts.lastEventId);
+    this.promptLimit =
+      opts.maxPendingPromptsPerSession === undefined
+        ? opts.client.maxPendingPromptsPerSession
+        : normalizePendingPromptLimit(opts.maxPendingPromptsPerSession);
   }
 
   /**
@@ -140,7 +169,12 @@ export class DaemonSessionClient {
     // of the bounded ring"; if older events have already been evicted,
     // clients receive the retained suffix and continue live from there.
     const lastEventId = !session.attached || req.modelServiceId ? 0 : undefined;
-    return new DaemonSessionClient({ client, session, lastEventId });
+    return new DaemonSessionClient({
+      client,
+      session,
+      hasActivePrompt: session.hasActivePrompt,
+      lastEventId,
+    });
   }
 
   /**
@@ -156,6 +190,7 @@ export class DaemonSessionClient {
   ): Promise<DaemonSessionClient> {
     const {
       state,
+      hasActivePrompt,
       compactedReplay,
       liveJournal,
       lastEventId: serverLastEventId,
@@ -164,6 +199,7 @@ export class DaemonSessionClient {
     return new DaemonSessionClient({
       client,
       session,
+      hasActivePrompt,
       state,
       lastEventId: serverLastEventId ?? 0,
       replaySnapshot: {
@@ -187,12 +223,14 @@ export class DaemonSessionClient {
   ): Promise<DaemonSessionClient> {
     const {
       state,
+      hasActivePrompt,
       lastEventId: serverLastEventId,
       ...session
     } = await client.resumeSession(sessionId, req, clientId);
     return new DaemonSessionClient({
       client,
       session,
+      hasActivePrompt,
       state,
       lastEventId: serverLastEventId ?? 0,
     });
@@ -226,45 +264,135 @@ export class DaemonSessionClient {
     req: PromptRequest,
     signal?: AbortSignal,
   ): Promise<PromptResult> {
+    signal?.throwIfAborted();
     if (!this.subscriptionActive) {
-      return await this.client.prompt(
-        this.sessionId,
-        req,
-        signal,
-        this.clientId,
+      return await this.withClientIdSelfHeal(() =>
+        this.client.prompt(this.sessionId, req, signal, this.clientId),
       );
     }
 
-    const accepted = await this.client.promptNonBlocking(
+    const releaseAdmission = this.client.reservePromptSlot(
       this.sessionId,
-      req,
-      signal,
-      this.clientId,
+      this.promptLimit,
     );
-    if (!isNonBlockingAccepted(accepted)) {
-      return accepted;
+    let accepted: NonBlockingPromptAccepted | PromptResult;
+    try {
+      accepted = await this.withClientIdSelfHeal(() =>
+        this.client.promptNonBlocking(
+          this.sessionId,
+          req,
+          signal,
+          this.clientId,
+        ),
+      );
+      if (!isNonBlockingAccepted(accepted)) {
+        releaseAdmission();
+        return accepted;
+      }
+      if (!this.subscriptionActive) {
+        throw Error('SSE stream ended');
+      }
+    } catch (err) {
+      releaseAdmission();
+      throw err;
     }
 
     return new Promise<PromptResult>((resolve, reject) => {
       const onAbort = () => {
-        if (this._pendingPrompts.delete(accepted.promptId)) {
+        const pending = this._pendingPrompts.get(accepted.promptId);
+        if (pending && this._pendingPrompts.delete(accepted.promptId)) {
           this.client.cancel(this.sessionId, this.clientId).catch(() => {});
-          reject(signal!.reason ?? new DOMException('Aborted', 'AbortError'));
+          pending.reject(
+            signal!.reason ?? new DOMException('Aborted', 'AbortError'),
+          );
         }
       };
       const cleanup = () => signal?.removeEventListener('abort', onAbort);
       this._pendingPrompts.set(accepted.promptId, {
         resolve: (r) => {
           cleanup();
+          releaseAdmission();
           resolve(r);
         },
         reject: (e) => {
           cleanup();
+          releaseAdmission();
           reject(e);
         },
       });
-      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+      } else {
+        signal?.addEventListener('abort', onAbort, { once: true });
+      }
     });
+  }
+
+  /**
+   * Submit a prompt and return as soon as the daemon accepts it.
+   *
+   * This is admission-only: it does not reserve a client-side prompt slot,
+   * register the prompt in `_pendingPrompts`, or wait for the matching
+   * `turn_complete` / `turn_error` SSE event. Callers that need final turn
+   * results should use `prompt()` or manage SSE terminal events themselves.
+   */
+  async submitPrompt(
+    req: PromptRequest,
+    signal?: AbortSignal,
+  ): Promise<NonBlockingPromptAccepted> {
+    signal?.throwIfAborted();
+    const accepted = await this.withClientIdSelfHeal(() =>
+      this.client.promptNonBlocking(this.sessionId, req, signal, this.clientId),
+    );
+    if (!isNonBlockingAccepted(accepted)) {
+      throw new Error('Expected non-blocking prompt acceptance');
+    }
+    return accepted;
+  }
+
+  /**
+   * Run a prompt-admission call, recovering from a stale `clientId`.
+   *
+   * A daemon restart (or session reload) wipes the daemon's in-memory client
+   * registration, so a prompt sent with our now-unknown `clientId` is rejected
+   * at admission with `400 invalid_client_id` (see PR #5784). That rejection
+   * happens before the turn is registered, so the prompt never ran — retrying
+   * cannot double-execute. We re-register to obtain a fresh `clientId` and
+   * retry the admission exactly once. Any other error (and a second
+   * `invalid_client_id`) propagates.
+   */
+  private async withClientIdSelfHeal<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isInvalidClientId(err)) throw err;
+      await this.reattach();
+      return await fn();
+    }
+  }
+
+  /**
+   * Re-register this client against the (already-restored) session to obtain a
+   * fresh daemon-assigned `clientId`. Concurrent callers coalesce onto a single
+   * in-flight `resume` so we never orphan extra registrations.
+   */
+  private async reattach(): Promise<void> {
+    if (this.reattaching) return this.reattaching;
+    // Send no clientId so the bridge issues a fresh registration rather than
+    // validating the stale one. Pass workspaceCwd explicitly: the daemon's
+    // restore path resolves the workspace key before its existing-session fast
+    // path, and that resolution rejects a missing/relative path.
+    this.reattaching = this.client
+      .resumeSession(this.sessionId, { workspaceCwd: this.workspaceCwd })
+      .then((session) => {
+        // Refresh only the clientId; leave the SSE cursor and ACP state intact.
+        this.session.clientId = session.clientId;
+      });
+    try {
+      await this.reattaching;
+    } finally {
+      this.reattaching = undefined;
+    }
   }
 
   async cancel(): Promise<void> {
@@ -282,6 +410,33 @@ export class DaemonSessionClient {
     return await this.client.heartbeat(this.sessionId, this.clientId);
   }
 
+  async artifacts(): Promise<DaemonSessionArtifactsEnvelope> {
+    return await this.client.listSessionArtifacts(
+      this.sessionId,
+      this.clientId,
+    );
+  }
+
+  async addArtifact(
+    artifact: DaemonSessionArtifactInput,
+  ): Promise<DaemonSessionArtifactMutationResult> {
+    return await this.client.addSessionArtifact(
+      this.sessionId,
+      artifact,
+      this.clientId,
+    );
+  }
+
+  async removeArtifact(
+    artifactId: string,
+  ): Promise<DaemonSessionArtifactMutationResult> {
+    return await this.client.removeSessionArtifact(
+      this.sessionId,
+      artifactId,
+      this.clientId,
+    );
+  }
+
   async setModel(modelId: string): Promise<SetModelResult> {
     return await this.client.setSessionModel(
       this.sessionId,
@@ -296,10 +451,24 @@ export class DaemonSessionClient {
     return await this.client.getRewindSnapshots(this.sessionId);
   }
 
-  async rewind(promptId: string): Promise<DaemonRewindResult> {
+  async rewind(
+    promptId: string,
+    opts?: { rewindFiles?: boolean },
+  ): Promise<DaemonRewindResult> {
     return await this.client.rewindSession(this.sessionId, promptId, {
       clientId: this.clientId,
+      ...(opts?.rewindFiles !== undefined
+        ? { rewindFiles: opts.rewindFiles }
+        : {}),
     });
+  }
+
+  async fork(directive: string): Promise<DaemonForkSessionResult> {
+    return await this.client.forkSession(
+      this.sessionId,
+      { directive },
+      this.clientId,
+    );
   }
 
   /**
@@ -329,6 +498,42 @@ export class DaemonSessionClient {
     });
   }
 
+  /**
+   * Queue a user message typed while this session's turn is still running so
+   * the ACP child can drain it mid-turn. Forwards the client id bound at
+   * create/attach. Resolves `{ accepted: false }` when the session is idle —
+   * the caller should then send the message as a normal next-turn prompt.
+   */
+  async enqueueMidTurnMessage(
+    message: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<DaemonMidTurnMessageResult> {
+    return await this.client.enqueueMidTurnMessage(this.sessionId, message, {
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+      ...(this.clientId ? { clientId: this.clientId } : {}),
+    });
+  }
+
+  async getPendingPrompts(): Promise<DaemonPendingPromptsResult> {
+    return await this.client.getPendingPrompts(this.sessionId, {
+      ...(this.clientId ? { clientId: this.clientId } : {}),
+    });
+  }
+
+  async removePendingPrompt(
+    promptId: string,
+  ): Promise<DaemonRemovePendingPromptResult> {
+    return await this.client.removePendingPrompt(this.sessionId, promptId, {
+      ...(this.clientId ? { clientId: this.clientId } : {}),
+    });
+  }
+
+  /**
+   * Execute a direct daemon-side shell command for this session. Requires the
+   * daemon to opt in to direct session shell and bearer auth; this wrapper
+   * automatically forwards the client id bound when the session was created
+   * or attached.
+   */
   async shellCommand(
     command: string,
     signal?: AbortSignal,
@@ -362,6 +567,10 @@ export class DaemonSessionClient {
 
   async tasks(): Promise<DaemonSessionTasksStatus> {
     return await this.client.sessionTasks(this.sessionId, this.clientId);
+  }
+
+  async lspStatus(): Promise<DaemonSessionLspStatus> {
+    return await this.client.sessionLspStatus(this.sessionId, this.clientId);
   }
 
   async cancelTask(
@@ -411,6 +620,10 @@ export class DaemonSessionClient {
     return await this.client.closeSession(this.sessionId, this.clientId);
   }
 
+  async detach(): Promise<void> {
+    return await this.client.detachSession(this.sessionId, this.clientId);
+  }
+
   async updateMetadata(metadata: {
     displayName?: string;
   }): Promise<SessionMetadataResult> {
@@ -450,10 +663,7 @@ export class DaemonSessionClient {
     const acquire = () => {
       if (started) return;
       if (this.subscriptionActive) {
-        throw new Error(
-          'Another event subscription is already active on this session. ' +
-            'Reuse the existing AsyncGenerator or create a separate DaemonSessionClient.',
-        );
+        throw new Error('subscription active');
       }
       this.subscriptionActive = true;
       started = true;
@@ -553,7 +763,21 @@ function validateLastEventId(
 ): number | undefined {
   if (lastEventId === undefined) return undefined;
   if (!Number.isInteger(lastEventId) || lastEventId < 0) {
-    throw new TypeError('lastEventId must be a finite non-negative integer');
+    throw new TypeError('invalid lastEventId');
   }
   return lastEventId;
+}
+
+/**
+ * True for the daemon's `400 invalid_client_id` prompt-admission rejection
+ * (the stale-clientId signal a daemon restart / session reload produces).
+ */
+function isInvalidClientId(err: unknown): boolean {
+  return (
+    err instanceof DaemonHttpError &&
+    err.status === 400 &&
+    typeof err.body === 'object' &&
+    err.body !== null &&
+    (err.body as { code?: unknown }).code === 'invalid_client_id'
+  );
 }

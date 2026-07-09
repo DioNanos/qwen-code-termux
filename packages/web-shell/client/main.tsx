@@ -1,43 +1,50 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   DaemonWorkspaceProvider,
   DaemonSessionProvider,
 } from '@qwen-code/webui/daemon-react-sdk';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { RootErrorFallback } from './components/RootErrorFallback';
 import {
   getDaemonBaseUrl,
   getDaemonToken,
   removeDaemonTokenFromUrl,
+  waitForDaemonTokenMessage,
 } from './config/daemon';
 import { normalizeLanguage, type WebShellLanguage } from './i18n';
+import { WebShellThemeId, type WebShellTheme } from './themeContext';
 import 'katex/dist/katex.min.css';
 import './styles/standalone.css';
 
 const DAEMON_BASE_URL = getDaemonBaseUrl();
-const DAEMON_TOKEN = getDaemonToken();
-removeDaemonTokenFromUrl();
 
 const LANGUAGE_STORAGE_KEY = 'qwen-code-web-shell-language';
 const THEME_STORAGE_KEY = 'qwen-code-web-shell-theme';
-type StandaloneTheme = 'dark' | 'light';
 
-function getThemeFromUrl(): StandaloneTheme | undefined {
-  const theme = new URLSearchParams(window.location.search).get('theme');
-  return theme === 'dark' || theme === 'light' ? theme : undefined;
+function parseTheme(value: string | null): WebShellTheme | undefined {
+  if (value === WebShellThemeId.Dark || value === WebShellThemeId.Light) {
+    return value;
+  }
+  return undefined;
 }
 
-function readStoredTheme(): StandaloneTheme | undefined {
+function getThemeFromUrl(): WebShellTheme | undefined {
+  const theme = new URLSearchParams(window.location.search).get('theme');
+  return parseTheme(theme);
+}
+
+function readStoredTheme(): WebShellTheme | undefined {
   try {
-    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return raw === 'dark' || raw === 'light' ? raw : undefined;
+    return parseTheme(window.localStorage.getItem(THEME_STORAGE_KEY));
   } catch {
     return undefined;
   }
 }
 
-function storeTheme(theme: StandaloneTheme): void {
+function storeTheme(theme: WebShellTheme): void {
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   } catch {
@@ -45,8 +52,8 @@ function storeTheme(theme: StandaloneTheme): void {
   }
 }
 
-function getInitialTheme(): StandaloneTheme {
-  return getThemeFromUrl() ?? readStoredTheme() ?? 'dark';
+function getInitialTheme(): WebShellTheme {
+  return getThemeFromUrl() ?? readStoredTheme() ?? WebShellThemeId.Dark;
 }
 
 function readStoredLanguage(): WebShellLanguage | undefined {
@@ -83,14 +90,41 @@ function getSessionIdFromUrl(): string | undefined {
   }
 }
 
-function StandaloneApp() {
-  const [theme, setTheme] = useState<StandaloneTheme>(() => getInitialTheme());
+function replaceStandaloneSessionUrl(sessionId: string | undefined): void {
+  const url = new URL(window.location.href);
+  url.pathname = sessionId ? `/session/${encodeURIComponent(sessionId)}` : '/';
+  // Strip one-shot query params so bookmarked / shared URLs do not
+  // permanently override stored preferences on every page load.
+  url.searchParams.delete('theme');
+  url.searchParams.delete('language');
+  url.searchParams.delete('lang');
+  if (!import.meta.env.DEV) {
+    url.searchParams.delete('token');
+    url.searchParams.delete('daemon');
+  }
+  window.history.replaceState(null, '', url);
+}
+
+function StandaloneApp({ daemonToken }: { daemonToken?: string }) {
+  const [theme, setTheme] = useState<WebShellTheme>(() => getInitialTheme());
   const [language, setLanguage] = useState<WebShellLanguage>(() =>
     getInitialLanguage(),
   );
-  const initialSessionId = useMemo(() => getSessionIdFromUrl(), []);
+  const [sessionId] = useState<string | undefined>(() => getSessionIdFromUrl());
   const baseUrl = DAEMON_BASE_URL || window.location.origin;
-  const handleThemeChange = useCallback((nextTheme: StandaloneTheme) => {
+  // Keep the <html> theme class and <meta name="theme-color"> in sync with
+  // the React theme so mobile status bars / overscroll backgrounds stay
+  // consistent when the user toggles or when ?theme= lands via URL.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.add(`theme-${theme}`);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      meta.setAttribute('content', theme === 'light' ? '#ffffff' : '#0d0d0d');
+    }
+  }, [theme]);
+  const handleThemeChange = useCallback((nextTheme: WebShellTheme) => {
     setTheme(nextTheme);
     storeTheme(nextTheme);
   }, []);
@@ -98,27 +132,47 @@ function StandaloneApp() {
     setLanguage(nextLanguage);
     storeLanguage(nextLanguage);
   }, []);
+  const handleSessionIdChange = useCallback((nextSessionId?: string) => {
+    replaceStandaloneSessionUrl(nextSessionId);
+  }, []);
 
   return (
-    <DaemonWorkspaceProvider baseUrl={baseUrl} token={DAEMON_TOKEN}>
-      <DaemonSessionProvider
-        initialSessionId={initialSessionId}
-        suppressOwnUserEcho
-      >
-        <App
-          theme={theme}
-          onThemeChange={handleThemeChange}
-          language={language}
-          onLanguageChange={handleLanguageChange}
-          compactThinking
-        />
-      </DaemonSessionProvider>
-    </DaemonWorkspaceProvider>
+    <ErrorBoundary
+      label="web-shell-root"
+      fallback={(error, reset) => (
+        <RootErrorFallback error={error} onRetry={reset} language={language} />
+      )}
+    >
+      <DaemonWorkspaceProvider baseUrl={baseUrl} token={daemonToken}>
+        <DaemonSessionProvider
+          key={sessionId ?? 'new'}
+          sessionId={sessionId}
+          suppressOwnUserEcho
+        >
+          <App
+            theme={theme}
+            onThemeChange={handleThemeChange}
+            language={language}
+            onLanguageChange={handleLanguageChange}
+            onSessionIdChange={handleSessionIdChange}
+            sidebar
+            compactThinking
+          />
+        </DaemonSessionProvider>
+      </DaemonWorkspaceProvider>
+    </ErrorBoundary>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <StandaloneApp />
-  </React.StrictMode>,
-);
+async function main() {
+  const daemonToken = getDaemonToken() ?? (await waitForDaemonTokenMessage());
+  removeDaemonTokenFromUrl();
+
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <StandaloneApp daemonToken={daemonToken} />
+    </React.StrictMode>,
+  );
+}
+
+void main();

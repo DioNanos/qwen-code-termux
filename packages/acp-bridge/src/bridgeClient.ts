@@ -14,11 +14,27 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification,
+  SessionUpdate,
   WriteTextFileRequest,
   WriteTextFileResponse,
 } from '@agentclientprotocol/sdk';
 import { RequestError } from '@agentclientprotocol/sdk';
 import type { BridgeEvent, EventBus } from './eventBus.js';
+// Wire constants shared with the child-side caller (`Session.ts`) and, for the
+// SSE event type, the SDK validator + browser consumer — single sources of truth
+// so a rename can't silently break the protocol.
+import { MID_TURN_MESSAGE_INJECTED_EVENT } from './daemonEventTypes.js';
+import { MID_TURN_QUEUE_DRAIN_METHOD } from './bridgeTypes.js';
+import type { MidTurnQueueEntry } from './bridgeTypes.js';
+import { SERVE_CONTROL_EXT_METHODS } from './status.js';
+import type {
+  ClientMcpMessageSender,
+  CreateSubSessionHandler,
+} from './bridgeOptions.js';
+import {
+  MAX_SUB_SESSION_NAME_CHARS,
+  MAX_SUB_SESSION_PROMPT_CHARS,
+} from './bridgeOptions.js';
 import type { BridgeFileSystem } from './bridgeFileSystem.js';
 import { CANCEL_VOTE_SENTINEL } from './permissionMediator.js';
 // Narrowed from the concrete `MultiClientPermissionMediator` to the
@@ -32,6 +48,15 @@ import type {
 } from './permission.js';
 import { CancelSentinelCollisionError } from './bridgeErrors.js';
 import { writeStderrLine } from './internal/stderrLine.js';
+import type {
+  SessionArtifactChange,
+  SessionArtifactInput,
+  SessionArtifactStore,
+} from './sessionArtifacts.js';
+
+// Keep in sync with core `ToolNames.ARTIFACT`; acp-bridge avoids a runtime
+// import from core for this hot demux path.
+const PUBLISH_ARTIFACT_TOOL_NAME = 'artifact';
 
 /**
  * Duck-type check for `FsError` from `cli/src/serve/fs/errors.ts`.
@@ -59,6 +84,145 @@ function isFsErrorShape(err: unknown): err is FsErrorShape {
     err instanceof Error &&
     err.name === 'FsError' &&
     typeof (err as { kind?: unknown }).kind === 'string'
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function artifactPayloadFields(
+  artifact: Record<string, unknown>,
+): SessionArtifactInput {
+  return {
+    title: artifact['title'] as string,
+    kind: artifact['kind'] as SessionArtifactInput['kind'],
+    storage: artifact['storage'] as SessionArtifactInput['storage'],
+    description: artifact['description'] as string | undefined,
+    workspacePath: artifact['workspacePath'] as string | undefined,
+    managedId: artifact['managedId'] as string | undefined,
+    url: artifact['url'] as string | undefined,
+    mimeType: artifact['mimeType'] as string | undefined,
+    sizeBytes: artifact['sizeBytes'] as number | undefined,
+    metadata: artifact['metadata'] as SessionArtifactInput['metadata'],
+    retention: artifact['retention'] as SessionArtifactInput['retention'],
+  };
+}
+
+function extractCappedArtifactInputs(
+  rawArtifacts: unknown[],
+  limit: number,
+  sessionId: string,
+  source: 'tool' | 'hook',
+  toInput: (artifact: Record<string, unknown>) => SessionArtifactInput,
+): SessionArtifactInput[] {
+  const artifacts: SessionArtifactInput[] = [];
+  for (let index = 0; index < rawArtifacts.length; index++) {
+    const artifact = rawArtifacts[index];
+    if (!isRecord(artifact)) {
+      writeStderrLine(
+        `[artifacts] session=${sessionId} action=dropped reason=malformed source=${source} index=${index}`,
+      );
+      continue;
+    }
+    if (artifacts.length >= limit) {
+      writeStderrLine(
+        `[artifacts] session=${sessionId} action=dropped reason="artifact batch limit exceeded" source=${source} dropped=${rawArtifacts.length - index}`,
+      );
+      break;
+    }
+    artifacts.push(toInput(artifact));
+  }
+  return artifacts;
+}
+
+function artifactIngestionErrorReason(error: unknown): unknown {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack?.split('\n').slice(0, 4).join('\n'),
+  };
+}
+
+function extractSessionUpdateArtifacts(
+  params: SessionNotification,
+  updateMeta: Record<string, unknown> | undefined,
+  limit: number,
+  sessionId: string,
+): SessionArtifactInput[] {
+  const rawArtifacts = updateMeta?.['artifacts'];
+  if (!Array.isArray(rawArtifacts)) {
+    return [];
+  }
+  const update = params.update as {
+    sessionUpdate?: unknown;
+    status?: unknown;
+    toolCallId?: unknown;
+  };
+  if (
+    update.sessionUpdate !== 'tool_call_update' ||
+    (update.status !== 'completed' &&
+      update.status !== 'failed' &&
+      update.status !== 'cancelled')
+  ) {
+    return [];
+  }
+  const toolCallId =
+    typeof update.toolCallId === 'string' ? update.toolCallId : undefined;
+  const toolName =
+    typeof updateMeta?.['toolName'] === 'string'
+      ? updateMeta['toolName']
+      : undefined;
+  return extractCappedArtifactInputs(
+    rawArtifacts,
+    limit,
+    sessionId,
+    'tool',
+    (artifact) => ({
+      ...artifactPayloadFields(artifact),
+      source: 'tool' as const,
+      toolCallId,
+      toolName,
+    }),
+  );
+}
+
+function sanitizeSessionUpdateArtifacts(
+  params: SessionNotification,
+  updateMeta: Record<string, unknown> | undefined,
+): SessionNotification {
+  if (!Array.isArray(updateMeta?.['artifacts'])) {
+    return params;
+  }
+  const sanitizedMeta = { ...updateMeta };
+  delete sanitizedMeta['artifacts'];
+  const update = {
+    ...(params.update as Record<string, unknown>),
+    _meta: sanitizedMeta,
+  } as SessionNotification['update'];
+  return {
+    ...params,
+    update,
+  };
+}
+
+function isTrustedArtifactToolUpdate(
+  params: SessionNotification,
+  updateMeta: Record<string, unknown> | undefined,
+): boolean {
+  const update = params.update as {
+    sessionUpdate?: unknown;
+    status?: unknown;
+  };
+  // ToolCallEmitter stamps _meta.toolName from the actual tool invocation. The
+  // artifact payload itself is never allowed to self-declare publisher trust.
+  return (
+    update.sessionUpdate === 'tool_call_update' &&
+    update.status === 'completed' &&
+    updateMeta?.['toolName'] === PUBLISH_ARTIFACT_TOOL_NAME
   );
 }
 
@@ -199,7 +363,17 @@ function sliceLineRange(
 export interface BridgeClientSessionEntry {
   sessionId: string;
   events: EventBus;
+  artifacts: SessionArtifactStore;
   pendingPermissionIds: Set<string>;
+  /**
+   * Mid-turn user messages queued by the browser, drained here when the ACP
+   * child calls the `craft/drainMidTurnQueue` ext-method. Owned by the full
+   * `SessionEntry` in `bridge.ts`; surfaced on this narrowed view so
+   * `extMethod` can splice it. See `SessionEntry.midTurnMessageQueue`.
+   */
+  midTurnMessageQueue: MidTurnQueueEntry[];
+  /** True while a prompt is executing for this session. */
+  promptActive?: boolean;
   activePromptOriginatorClientId?: string;
   /**
    * True while the bridge drives a model roundtrip; the
@@ -210,6 +384,12 @@ export interface BridgeClientSessionEntry {
   modelRoundtripInFlight?: boolean;
   /** A2: mirrors `modelRoundtripInFlight` for approval-mode roundtrips. */
   approvalModeRoundtripInFlight?: boolean;
+}
+
+interface PreparedSessionUpdateFrames {
+  frames: Array<Omit<BridgeEvent, 'id' | 'v'>>;
+  artifacts: SessionArtifactInput[];
+  trustedPublisher: boolean;
 }
 
 /**
@@ -308,6 +488,37 @@ export class BridgeClient implements Client {
       modeId: string,
       originatorClientId: string | undefined,
     ) => void,
+    /**
+     * Reverse tool channel (issue #5626, Phase 2). Resolves the
+     * `sendSdkMcpMessage`-shaped sender for a client-hosted MCP server name so
+     * the `qwen/control/client_mcp/message` ext-method (child → parent) can
+     * deliver a JSON-RPC frame to the extension and return the response.
+     * Omitted by tests / Mode A consumers — the method then rejects with
+     * `methodNotFound` (no client-hosted server can exist without it).
+     */
+    private readonly clientMcpSender?: ClientMcpMessageSender,
+    private readonly ownsSession: (sessionId: string) => boolean = () => true,
+    /**
+     * Optional daemon token-usage hook. Called once per model round with the
+     * per-round input/output token increments read from
+     * `agent_message_chunk._meta.usage` at {@link sessionUpdate} (the single
+     * session/update fan-in). Wired only by the daemon host for the Daemon
+     * Status token-burn chart; omitted by tests / Mode A in-process consumers.
+     */
+    private readonly onTokenUsage?: (
+      inputTokens: number,
+      outputTokens: number,
+      durationMs?: number,
+    ) => void,
+    /**
+     * Daemon-host seam for the `create_sub_session` tool. Invoked from the
+     * `extMethod` dispatch (a child→daemon REQUEST, so it returns a Promise the
+     * child awaits) with the prompt, completion mode, and optional model/name;
+     * the host spawns a sub-session and, for `'first-turn'`, returns its result.
+     * Omitted by tests / Mode A / non-daemon — the method then reports
+     * `methodNotFound` and the tool surfaces itself as daemon-only.
+     */
+    private readonly onCreateSubSession?: CreateSubSessionHandler,
   ) {}
 
   async requestPermission(
@@ -394,17 +605,181 @@ export class BridgeClient implements Client {
   }
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
+    if (
+      !this.ownsSession(params.sessionId) &&
+      !this.inFlightRestoreIds.has(params.sessionId)
+    ) {
+      writeStderrLine(
+        `[demux] session=${params.sessionId} type=session_update action=dropped reason=session_not_owned`,
+      );
+      return;
+    }
     const entry = this.resolveEntry(params.sessionId);
     const events =
       entry?.events ?? this.resolvePendingRestoreEvents(params.sessionId);
     if (!events) return;
-    events.publish({
+    const prepared = this.prepareSessionUpdateFrames(params, entry);
+    for (const frame of prepared.frames) {
+      events.publish(frame);
+    }
+    // Daemon token-burn accounting for LIVE turns only (see method doc). Batch
+    // load-replay routes through seedSessionUpdates, not here, so replayed
+    // history never lands in the current metrics window. Wrapped so a throwing
+    // injected onTokenUsage callback can't skip the critical artifact processing
+    // below — metrics are optional, artifacts are not.
+    try {
+      this.recordLiveTokenUsage(params, entry);
+    } catch {
+      // Metrics callback failed; artifact processing must still run.
+    }
+    if (entry && prepared.artifacts.length > 0) {
+      await this.upsertAndPublishArtifacts(entry, prepared.artifacts, {
+        trustedPublisher: prepared.trustedPublisher,
+      });
+    }
+  }
+
+  prepareSessionUpdateFrames(
+    params: SessionNotification,
+    entry?: BridgeClientSessionEntry,
+  ): PreparedSessionUpdateFrames {
+    const originator = entry?.activePromptOriginatorClientId
+      ? { originatorClientId: entry.activePromptOriginatorClientId }
+      : {};
+    const frames: Array<Omit<BridgeEvent, 'id' | 'v'>> = [];
+    // A2UI-over-MCP: tool_call_update results from an A2UI UI server carry
+    // the A2UI command JSON flattened by core (EmbeddedResource -> text, the
+    // application/a2ui+json mime is dropped, so detection keys off the
+    // server/tool identity). Extract the commands, publish them as a separate
+    // `sessionUpdate:'a2ui'` frame for renderer clients, and sanitize the
+    // original tool frame so raw command JSON never reaches transcripts/SSE.
+    const a2ui = extractA2uiToolUpdate(params);
+    if (a2ui) {
+      // One frame per surface: tool results carrying commands for multiple
+      // surfaces are split so every consumer sees a single-surface frame.
+      for (const surface of a2ui.surfaces) {
+        frames.push({
+          type: 'session_update',
+          data: {
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: 'a2ui',
+              a2ui: {
+                surfaceId: surface.surfaceId,
+                callId: a2ui.callId,
+                commands: surface.commands,
+              },
+              _meta: { serverTimestamp: Date.now(), source: 'a2ui-bridge' },
+            },
+          },
+          ...originator,
+        });
+      }
+      params = a2ui.sanitizedParams;
+    }
+    // History replay re-emits each persisted record carrying its ORIGINAL
+    // wall-clock time as an epoch-ms `timestamp` nested in `update._meta` (set
+    // by the message/tool emitters). Lift it to the envelope-level
+    // `serverTimestamp` so `EventBus.publish` preserves it instead of stamping
+    // publish-time `Date.now()` — otherwise a resumed session renders every
+    // historical message at the resume moment instead of when it was sent.
+    // Live updates without such a timestamp pass no envelope `_meta` and keep
+    // the EventBus `Date.now()` fallback unchanged.
+    const updateMeta = (params.update as { _meta?: Record<string, unknown> })
+      ._meta;
+    const originalTs =
+      updateMeta?.['serverTimestamp'] ?? updateMeta?.['timestamp'];
+    const serverTimestamp =
+      typeof originalTs === 'number' && Number.isFinite(originalTs)
+        ? originalTs
+        : undefined;
+    const artifacts = entry?.artifacts
+      ? extractSessionUpdateArtifacts(
+          params,
+          updateMeta,
+          entry.artifacts.inputBatchLimit(),
+          entry.sessionId,
+        )
+      : [];
+    const publishParams = sanitizeSessionUpdateArtifacts(params, updateMeta);
+    frames.push({
       type: 'session_update',
-      data: params,
-      ...(entry?.activePromptOriginatorClientId
-        ? { originatorClientId: entry.activePromptOriginatorClientId }
-        : {}),
+      data: publishParams,
+      ...originator,
+      ...(serverTimestamp !== undefined ? { _meta: { serverTimestamp } } : {}),
     });
+    return {
+      frames,
+      artifacts,
+      trustedPublisher: isTrustedArtifactToolUpdate(params, updateMeta),
+    };
+  }
+
+  async seedSessionUpdates(
+    entry: BridgeClientSessionEntry,
+    updates: SessionUpdate[],
+    options: { ingestArtifacts?: boolean } = {},
+  ): Promise<void> {
+    const frames: Array<Omit<BridgeEvent, 'id' | 'v'>> = [];
+    const artifactBatches: Array<{
+      artifacts: SessionArtifactInput[];
+      trustedPublisher: boolean;
+    }> = [];
+    for (const update of updates) {
+      const prepared = this.prepareSessionUpdateFrames(
+        { sessionId: entry.sessionId, update },
+        entry,
+      );
+      frames.push(...prepared.frames);
+      if (options.ingestArtifacts !== false && prepared.artifacts.length > 0) {
+        artifactBatches.push({
+          artifacts: prepared.artifacts,
+          trustedPublisher: prepared.trustedPublisher,
+        });
+      }
+    }
+    entry.events.seedReplayEvents(frames);
+    for (const batch of artifactBatches) {
+      await this.upsertAndPublishArtifacts(entry, batch.artifacts, {
+        trustedPublisher: batch.trustedPublisher,
+      });
+    }
+  }
+
+  /**
+   * Daemon token-burn accounting for LIVE model turns. Called only from
+   * `sessionUpdate` (the live session/update fan-in), never from
+   * `seedSessionUpdates` — so batch load-replay never lands historical usage in
+   * the current metrics window. Additionally guarded on a live `entry`: a stray
+   * pending-restore frame (entry not yet registered) is skipped too, so replayed
+   * history can't post a phantom burn spike with no model call.
+   *
+   * Usage rides an otherwise-empty `agent_message_chunk` as `update._meta.usage`
+   * with per-round camelCase increments; subagent frames carry their own usage
+   * (tagged `parentToolCallId`) and are independent turns, so counting each
+   * frame once is the correct total. `_meta`/`usage` are optional and untyped.
+   */
+  private recordLiveTokenUsage(
+    params: SessionNotification,
+    entry: BridgeClientSessionEntry | undefined,
+  ): void {
+    if (!this.onTokenUsage || !entry) return;
+    const updateMeta = (params.update as { _meta?: Record<string, unknown> })
+      ._meta;
+    const usage = updateMeta?.['usage'];
+    if (usage === null || typeof usage !== 'object') return;
+    const inputTokens = (usage as { inputTokens?: unknown }).inputTokens;
+    const outputTokens = (usage as { outputTokens?: unknown }).outputTokens;
+    if (typeof inputTokens !== 'number' && typeof outputTokens !== 'number') {
+      return;
+    }
+    // `_meta.durationMs` (the LLM API round-trip) rides the same frame.
+    const durationMs = updateMeta?.['durationMs'];
+    this.onTokenUsage(
+      typeof inputTokens === 'number' ? inputTokens : 0,
+      typeof outputTokens === 'number' ? outputTokens : 0,
+      typeof durationMs === 'number' ? durationMs : undefined,
+    );
   }
 
   /**
@@ -460,15 +835,231 @@ export class BridgeClient implements Client {
   private readonly inFlightRestoreIds = new Set<string>();
 
   /**
-   * Handle child->bridge ACP `extNotification` calls. Six methods are
-   * recognized — `qwen/notify/session/model-update`,
+   * Handle child->bridge ACP `extMethod` requests (calls that expect a
+   * response, unlike `extNotification`). Served methods:
+   * `qwen/control/client_mcp/message` (reverse tool channel),
+   * `qwen/control/create-sub-session` (the `create_sub_session` tool → daemon
+   * spawns a sub-session and, for `'first-turn'`, returns its first-turn
+   * result), and `craft/drainMidTurnQueue`: the ACP child calls the last one
+   * between tool batches to pull any messages the browser queued mid-turn. We splice the per-session
+   * queue, return them to the child as the response, and — when non-empty —
+   * publish a `mid_turn_message_injected` SSE frame so the browser can move
+   * those messages out of its pending queue (a dedupe signal, not a transcript
+   * render). Unknown methods reject with ACP `methodNotFound` (-32601), matching
+   * the SDK's
+   * default for an unimplemented client surface; the child's drain caller
+   * treats that as "drain unsupported" and stops asking.
+   */
+  async extMethod(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    // Reverse tool channel (issue #5626, Phase 2): the child's session
+    // `McpClientManager` routes a client-hosted MCP server's
+    // `sendSdkMcpMessage` UP to the parent through this method. We hand the
+    // JSON-RPC `payload` to the per-WS-connection `ClientMcpRegistrar` (looked
+    // up by `server` name), which carries it down the daemon WS to the
+    // extension and returns the correlated response.
+    if (method === SERVE_CONTROL_EXT_METHODS.clientMcpMessage) {
+      return this.handleClientMcpMessage(params);
+    }
+    if (method === SERVE_CONTROL_EXT_METHODS.createSubSession) {
+      return this.handleCreateSubSession(params);
+    }
+    if (method !== MID_TURN_QUEUE_DRAIN_METHOD) {
+      throw RequestError.methodNotFound(method);
+    }
+    const sessionId =
+      typeof params['sessionId'] === 'string'
+        ? (params['sessionId'] as string)
+        : undefined;
+    // The drain always carries a sessionId; without one we can't route it on a
+    // multi-session channel (and `resolveEntry(undefined)` would throw there),
+    // so answer with an empty drain rather than poisoning the turn.
+    if (!sessionId) return { messages: [] };
+    const entry = this.resolveEntry(sessionId);
+    if (!entry) return { messages: [] };
+    const drained = entry.midTurnMessageQueue.splice(0);
+    const messages = drained.map((item) => item.text);
+    if (drained.length > 0) {
+      // `publish()` never throws — it returns `undefined` on a closed bus (see
+      // EventBus.publish's never-throws contract: "Don't add try/catch wrappers
+      // around publish()"). Capture the result instead. A dropped frame is
+      // teardown-only: the child still gets the spliced messages below, but the
+      // browser won't receive the echo and would resend them next turn — so log
+      // it.
+      //
+      // Publish ONE frame per originator client. The frame is broadcast to every
+      // SSE subscriber on the session, so it carries `originatorClientId` for
+      // clients to filter on — a peer that didn't queue the message must not
+      // dedupe its own coincidentally-equal entry. A mixed-originator batch (two
+      // clients pushing in the same window) is rare but still routed correctly.
+      const byOriginator = new Map<string | undefined, string[]>();
+      for (const item of drained) {
+        const group = byOriginator.get(item.originatorClientId);
+        if (group) group.push(item.text);
+        else byOriginator.set(item.originatorClientId, [item.text]);
+      }
+      for (const [originatorClientId, texts] of byOriginator) {
+        const published = entry.events.publish({
+          type: MID_TURN_MESSAGE_INJECTED_EVENT,
+          data: { sessionId: entry.sessionId, messages: texts },
+          ...(originatorClientId ? { originatorClientId } : {}),
+        });
+        writeStderrLine(
+          published
+            ? `[mid-turn] session=${entry.sessionId} drained=${texts.length}${originatorClientId ? ` originator=${originatorClientId}` : ''} injected into running turn`
+            : `[mid-turn] session=${entry.sessionId} drained=${texts.length} echo frame dropped (bus closed); browser may resend next turn`,
+        );
+      }
+    }
+    return { messages };
+  }
+
+  /**
+   * Reverse tool channel (issue #5626, Phase 2) — answer the child's
+   * `qwen/control/client_mcp/message` ext-method. The child's session
+   * `McpClientManager` calls this when its agent drives a client-hosted
+   * (extension) MCP server: `params` carries the advertised `server` name and
+   * the JSON-RPC `payload` (initialize / tools/list / tools/call / a
+   * notification). We resolve the per-WS-connection sender via the injected
+   * `clientMcpSender` lookup, deliver the payload over the daemon WS, and
+   * return the correlated response as `{ payload }`.
+   *
+   * Rejects with ACP `methodNotFound` when no `clientMcpSender` is wired (Mode
+   * A / tests can't host a client MCP server), and `invalidParams` when the
+   * frame is malformed or the named server is no longer hosted (e.g. the
+   * extension disconnected mid-turn) — the agent's `SdkControlClientTransport`
+   * surfaces that as a transport error rather than hanging.
+   */
+  private async handleClientMcpMessage(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (!this.clientMcpSender) {
+      throw RequestError.methodNotFound(
+        SERVE_CONTROL_EXT_METHODS.clientMcpMessage,
+      );
+    }
+    const server = params['server'];
+    if (typeof server !== 'string' || server.length === 0) {
+      throw RequestError.invalidParams(
+        undefined,
+        '`server` must be a non-empty string',
+      );
+    }
+    const payload = params['payload'];
+    if (payload === null || typeof payload !== 'object') {
+      throw RequestError.invalidParams(
+        undefined,
+        '`payload` must be a JSON-RPC message object',
+      );
+    }
+    const send = this.clientMcpSender(server);
+    if (!send) {
+      // The client that hosted this server is gone (WS closed / unregistered).
+      throw RequestError.invalidParams(
+        undefined,
+        `client-hosted MCP server '${server}' is not currently connected`,
+      );
+    }
+    const response = await send(payload);
+    return { payload: response as Record<string, unknown> };
+  }
+
+  /**
+   * Handle the `create_sub_session` tool's request: validate, then forward to
+   * the daemon-host `onCreateSubSession` callback (which spawns a fresh
+   * top-level sub-session and, for `'first-turn'`, waits for its first turn and
+   * returns the result). No host wired → `methodNotFound`, which the tool
+   * surfaces as "daemon-only".
+   */
+  private async handleCreateSubSession(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (!this.onCreateSubSession) {
+      throw RequestError.methodNotFound(
+        SERVE_CONTROL_EXT_METHODS.createSubSession,
+      );
+    }
+    const prompt = params['prompt'];
+    if (typeof prompt !== 'string' || prompt.length === 0) {
+      throw RequestError.invalidParams(
+        undefined,
+        '`prompt` must be a non-empty string',
+      );
+    }
+    // The child is a separate process; this is a trust boundary. Without a cap
+    // it can hand the daemon a multi-MB string to deserialize, copy for the
+    // display name, and dispatch into a new session. Same ceiling the
+    // scheduled-task REST route applies to the prompts it accepts.
+    if (prompt.length > MAX_SUB_SESSION_PROMPT_CHARS) {
+      throw RequestError.invalidParams(
+        undefined,
+        `\`prompt\` exceeds the ${MAX_SUB_SESSION_PROMPT_CHARS}-character limit`,
+      );
+    }
+    const completion = params['completion'];
+    if (completion !== 'sent' && completion !== 'first-turn') {
+      throw RequestError.invalidParams(
+        undefined,
+        "`completion` must be 'sent' or 'first-turn'",
+      );
+    }
+    const name = params['name'];
+    if (typeof name === 'string' && name.length > MAX_SUB_SESSION_NAME_CHARS) {
+      throw RequestError.invalidParams(
+        undefined,
+        `\`name\` exceeds the ${MAX_SUB_SESSION_NAME_CHARS}-character limit`,
+      );
+    }
+    // `callerSessionId` keys the launcher's per-caller concurrency bucket AND
+    // its depth-1 nesting gate. A child that names a session it does not own
+    // could evade its own cap (a fabricated id starts every bucket at zero) or
+    // exhaust a victim session's; a child that OMITS the field would get an
+    // anonymous per-call bucket and skip the nesting gate entirely. Neither is
+    // acceptable, so it is required and authenticated. Every real caller has
+    // one — the tool runs inside a session's turn.
+    const callerSessionId = params['callerSessionId'];
+    if (
+      typeof callerSessionId !== 'string' ||
+      callerSessionId.length === 0 ||
+      !this.ownsSession(callerSessionId)
+    ) {
+      throw RequestError.invalidParams(
+        undefined,
+        '`callerSessionId` is required and must name a session owned by this connection',
+      );
+    }
+    const model = params['model'];
+    const result = await this.onCreateSubSession({
+      prompt,
+      completion,
+      ...(typeof model === 'string' && model.length > 0 && model.length <= 128
+        ? { model }
+        : {}),
+      ...(typeof name === 'string' && name.length > 0 ? { name } : {}),
+      callerSessionId,
+    });
+    return {
+      sessionId: result.sessionId,
+      ...(result.result !== undefined ? { result: result.result } : {}),
+      ...(result.stopReason !== undefined
+        ? { stopReason: result.stopReason }
+        : {}),
+    };
+  }
+
+  /**
+   * Handle child->bridge ACP `extNotification` calls. Recognized methods are
+   * `qwen/notify/session/model-update`,
    * `qwen/notify/session/mode-update`,
    * `qwen/notify/session/title-update` (auto/in-process session titles),
    * `qwen/notify/session/prompt-suggestion` (followup assist),
+   * `qwen/notify/session/artifact-event` (hook artifacts),
    * `qwen/notify/session/terminal-sequence`, and
    * `qwen/notify/session/mcp-budget-event` — each translated into a
-   * session-scoped SSE frame. Unknown methods are dropped silently
-   * for forward-compat.
+   * session-scoped SSE frame. Unknown methods are dropped silently for
+   * forward-compat.
    */
   async extNotification(
     method: string,
@@ -543,6 +1134,10 @@ export class BridgeClient implements Client {
       this.publishExtNotification(sessionId, 'terminal_sequence', rest);
       return;
     }
+    if (method === 'qwen/notify/session/artifact-event') {
+      await this.handleArtifactEvent(params);
+      return;
+    }
     if (method !== 'qwen/notify/session/mcp-budget-event') return;
     const sessionId = params['sessionId'];
     if (typeof sessionId !== 'string') return;
@@ -565,6 +1160,91 @@ export class BridgeClient implements Client {
     void _sid;
     void _kind;
     this.publishExtNotification(sessionId, type, rest);
+  }
+
+  private async handleArtifactEvent(
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    const sessionId = params['sessionId'];
+    const rawArtifacts = params['artifacts'];
+    if (typeof sessionId !== 'string' || !Array.isArray(rawArtifacts)) {
+      writeStderrLine(
+        `[demux] session=${typeof sessionId === 'string' ? sessionId : '<missing>'} type=artifact_event action=dropped reason=malformed`,
+      );
+      return;
+    }
+    if (
+      !this.ownsSession(sessionId) &&
+      !this.inFlightRestoreIds.has(sessionId)
+    ) {
+      writeStderrLine(
+        `[demux] session=${sessionId} type=artifact_event action=dropped reason=session_not_owned`,
+      );
+      return;
+    }
+    const entry = this.resolveEntry(sessionId);
+    if (!entry) {
+      writeStderrLine(
+        `[demux] session=${sessionId} type=artifact_event action=dropped reason=session_not_found`,
+      );
+      return;
+    }
+    const hookEventName =
+      typeof params['hookEventName'] === 'string'
+        ? params['hookEventName']
+        : undefined;
+    const toolName =
+      typeof params['toolName'] === 'string' ? params['toolName'] : undefined;
+    const toolCallId =
+      typeof params['toolCallId'] === 'string'
+        ? params['toolCallId']
+        : undefined;
+    const artifacts = extractCappedArtifactInputs(
+      rawArtifacts,
+      entry.artifacts.inputBatchLimit(),
+      entry.sessionId,
+      'hook',
+      (artifact) => ({
+        ...artifactPayloadFields(artifact),
+        source: 'hook' as const,
+        hookEventName,
+        toolName,
+        toolCallId,
+      }),
+    );
+    await this.upsertAndPublishArtifacts(entry, artifacts);
+  }
+
+  private async upsertAndPublishArtifacts(
+    entry: BridgeClientSessionEntry,
+    artifacts: SessionArtifactInput[],
+    options?: Parameters<SessionArtifactStore['upsertMany']>[1],
+  ): Promise<void> {
+    try {
+      const result = await entry.artifacts.upsertMany(artifacts, options);
+      this.publishArtifactChanges(entry, result.changes);
+    } catch (error) {
+      writeStderrLine(
+        `[artifacts] session=${entry.sessionId} action=dropped reason=${JSON.stringify(
+          artifactIngestionErrorReason(error),
+        )}`,
+      );
+    }
+  }
+
+  private publishArtifactChanges(
+    entry: BridgeClientSessionEntry,
+    changes: SessionArtifactChange[],
+  ): void {
+    for (const change of changes) {
+      entry.events.publish({
+        type: 'artifact_changed',
+        data: { sessionId: entry.sessionId, change },
+        ...(entry.activePromptOriginatorClientId
+          ? { originatorClientId: entry.activePromptOriginatorClientId }
+          : {}),
+      });
+    }
   }
 
   private publishExtNotification(
@@ -1145,4 +1825,199 @@ export class BridgeClient implements Client {
     }
     return { content };
   }
+}
+
+// ---------------------------------------------------------------------------
+// A2UI-over-MCP extraction.
+// Detection has to key off the server/tool identity rather than mime type:
+// core's transformResourceBlock flattens EmbeddedResource blocks to `{text}`
+// and drops the application/a2ui+json mimeType, so by the time the result
+// reaches the bridge it is plain text of the form
+// `<A2UI command JSON array>\n<fallback text>`.
+// ---------------------------------------------------------------------------
+
+/**
+ * A2UI tool detection: prefer `_meta.serverId` (a server whose name contains
+ * "a2ui" is treated as a UI server, so new tools added to that server need no
+ * change here); tool-name matching is the fallback for legacy frames/replays
+ * where serverId is absent.
+ *
+ * Exported for unit testing.
+ */
+const A2UI_TOOL_RE = /(^|__)(present_ui|present_choices|a2ui_action)$/;
+export function isA2uiToolMeta(meta?: {
+  toolName?: string;
+  serverId?: string;
+}): boolean {
+  if (!meta) return false;
+  if (
+    typeof meta.serverId === 'string' &&
+    meta.serverId.toLowerCase().includes('a2ui')
+  )
+    return true;
+  return typeof meta.toolName === 'string' && A2UI_TOOL_RE.test(meta.toolName);
+}
+
+/**
+ * Extract the balanced JSON array at the start of the text; returns
+ * [command array, remaining fallback text], or null when no array parses.
+ *
+ * Exported for unit testing.
+ */
+export function splitA2uiText(raw: string): [unknown[], string] | null {
+  const s = raw.replace(/^\s+/, '');
+  if (s[0] !== '[') return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let end = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+  }
+  if (end < 0) return null;
+  try {
+    const arr = JSON.parse(s.slice(0, end));
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    return [arr, s.slice(end).trim()];
+  } catch {
+    return null;
+  }
+}
+
+/** Read the surfaceId off any of the four A2UI command kinds. */
+function surfaceIdOf(c: unknown): string | undefined {
+  const cmd = c as {
+    createSurface?: { surfaceId?: string };
+    updateComponents?: { surfaceId?: string };
+    updateDataModel?: { surfaceId?: string };
+    deleteSurface?: { surfaceId?: string };
+  };
+  return (
+    cmd?.createSurface?.surfaceId ??
+    cmd?.updateComponents?.surfaceId ??
+    cmd?.updateDataModel?.surfaceId ??
+    cmd?.deleteSurface?.surfaceId
+  );
+}
+
+export interface A2uiExtraction {
+  /** Commands grouped per surface, in first-appearance order. */
+  surfaces: Array<{ surfaceId: string; commands: unknown[] }>;
+  callId: string | undefined;
+  /** Sanitized copy of the notification: the A2UI JSON in the tool-result text is replaced with the fallback text. */
+  sanitizedParams: SessionNotification;
+}
+
+/**
+ * If the notification is a `tool_call_update` from an A2UI tool whose result
+ * carries an A2UI command array, extract the commands (grouped per surface)
+ * and produce a sanitized notification; otherwise return null (the
+ * notification is forwarded as-is).
+ *
+ * Exported for unit testing.
+ */
+export function extractA2uiToolUpdate(
+  params: SessionNotification,
+): A2uiExtraction | null {
+  const update = (params as { update?: Record<string, unknown> }).update;
+  if (!update || update['sessionUpdate'] !== 'tool_call_update') return null;
+  const meta = update['_meta'] as
+    | { toolName?: string; serverId?: string }
+    | undefined;
+  if (!isA2uiToolMeta(meta)) return null;
+
+  // The result text lives at content[].content.text (ACP ToolCallContent
+  // wraps one level); rawOutput mirrors the same text.
+  const content = update['content'];
+  if (!Array.isArray(content)) return null;
+  let split: [unknown[], string] | null = null;
+  let hitIndex = -1;
+  for (let i = 0; i < content.length; i++) {
+    const inner = (content[i] as { content?: { text?: unknown } })?.content;
+    if (typeof inner?.text === 'string') {
+      split = splitA2uiText(inner.text);
+      if (split) {
+        hitIndex = i;
+        break;
+      }
+    }
+  }
+  if (!split) return null;
+  const [commands, fallback] = split;
+
+  // Group commands per surface (updateDataModel-only / deleteSurface-only
+  // tool results are legal too). Commands without a surfaceId are dropped —
+  // every A2UI server->client command carries one per the spec.
+  const order: string[] = [];
+  const grouped = new Map<string, unknown[]>();
+  for (const c of commands) {
+    const sid = surfaceIdOf(c);
+    if (!sid) {
+      const shape =
+        c && typeof c === 'object'
+          ? Object.keys(c).join(',') || 'empty object'
+          : typeof c;
+      writeStderrLine(
+        `a2ui: dropping command with unrecognized shape (${shape})`,
+      );
+      continue;
+    }
+    if (!grouped.has(sid)) {
+      grouped.set(sid, []);
+      order.push(sid);
+    }
+    grouped.get(sid)!.push(c);
+  }
+  const surfaces = order.map((sid) => ({
+    surfaceId: sid,
+    commands: grouped.get(sid)!,
+  }));
+
+  // Sanitize: JSON -> fallback text. The model already received the raw text
+  // inside the ACP child; what is being cleaned here is the SSE/transcript copy.
+  const sanitizedText = fallback || '[A2UI surface rendered]';
+  const sanitizedContent = content.map((block, i) =>
+    i === hitIndex
+      ? {
+          ...(block as Record<string, unknown>),
+          content: {
+            ...((block as { content?: Record<string, unknown> }).content ?? {}),
+            text: sanitizedText,
+          },
+        }
+      : block,
+  );
+  const sanitizedUpdate: Record<string, unknown> = {
+    ...update,
+    content: sanitizedContent,
+  };
+  if (typeof update['rawOutput'] === 'string') {
+    sanitizedUpdate['rawOutput'] = sanitizedText;
+  }
+  return {
+    surfaces,
+    callId:
+      typeof update['toolCallId'] === 'string'
+        ? update['toolCallId']
+        : undefined,
+    sanitizedParams: {
+      ...(params as Record<string, unknown>),
+      update: sanitizedUpdate,
+    } as SessionNotification,
+  };
 }

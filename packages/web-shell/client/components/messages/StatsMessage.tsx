@@ -4,6 +4,7 @@ import type {
   DaemonSessionStatsToolByName,
 } from '@qwen-code/webui/daemon-react-sdk';
 import { useI18n } from '../../i18n';
+import { localizeToolDisplayName } from './toolFormatting';
 import styles from './StatsMessage.module.css';
 
 const SENTINEL = 'web-shell:session-stats:v1:';
@@ -35,7 +36,7 @@ export function parseStatsMessage(content: string): ParsedStats | null {
   }
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms <= 0) return '0s';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const totalSeconds = ms / 1000;
@@ -246,11 +247,13 @@ function StatsOverview({ status }: { status: DaemonSessionStatsStatus }) {
           <div className={styles.spacer} />
 
           {/* Header */}
-          <div className={styles.tableRow}>
+          <div className={`${styles.tableRow} ${styles.modelUsageRow}`}>
             <span className={styles.tableNameCol}>{t('stats.modelUsage')}</span>
-            <span className={styles.tableNumCol}>{t('stats.reqs')}</span>
-            <span className={styles.tableNumCol}>{t('stats.inputTokens')}</span>
-            <span className={styles.tableNumCol}>
+            <span className={styles.tableValueCol}>{t('stats.reqs')}</span>
+            <span className={styles.tableValueCol}>
+              {t('stats.inputTokens')}
+            </span>
+            <span className={styles.tableValueCol}>
               {t('stats.outputTokens')}
             </span>
           </div>
@@ -258,15 +261,18 @@ function StatsOverview({ status }: { status: DaemonSessionStatsStatus }) {
 
           {/* Rows */}
           {entries.map((e) => (
-            <div key={e.key} className={styles.tableRow}>
+            <div
+              key={e.key}
+              className={`${styles.tableRow} ${styles.modelUsageRow}`}
+            >
               <span className={styles.tableNameCol}>{e.label}</span>
-              <span className={styles.tableNumCol}>
+              <span className={styles.tableValueCol}>
                 {e.metrics.api.totalRequests}
               </span>
-              <span className={`${styles.tableNumCol} ${styles.warning}`}>
+              <span className={`${styles.tableValueCol} ${styles.warning}`}>
                 {e.metrics.tokens.prompt.toLocaleString()}
               </span>
-              <span className={`${styles.tableNumCol} ${styles.warning}`}>
+              <span className={`${styles.tableValueCol} ${styles.warning}`}>
                 {e.metrics.tokens.candidates.toLocaleString()}
               </span>
             </div>
@@ -365,7 +371,7 @@ function ModelStatsCard({ status }: { status: DaemonSessionStatsStatus }) {
         ))}
       />
       <PivotRow
-        metric={t('stats.prompt')}
+        metric={t('stats.inputTokens')}
         values={vals((m) => m.tokens.prompt.toLocaleString())}
         variant="sub"
       />
@@ -381,6 +387,11 @@ function ModelStatsCard({ status }: { status: DaemonSessionStatsStatus }) {
           variant="sub"
         />
       )}
+      <PivotRow
+        metric={t('stats.outputTokens')}
+        values={vals((m) => m.tokens.candidates.toLocaleString())}
+        variant="sub"
+      />
       {hasThoughts && (
         <PivotRow
           metric={t('stats.thoughts')}
@@ -388,11 +399,6 @@ function ModelStatsCard({ status }: { status: DaemonSessionStatsStatus }) {
           variant="sub"
         />
       )}
-      <PivotRow
-        metric={t('stats.output')}
-        values={vals((m) => m.tokens.candidates.toLocaleString())}
-        variant="sub"
-      />
     </div>
   );
 }
@@ -463,7 +469,7 @@ function ToolStatsCard({ status }: { status: DaemonSessionStatsStatus }) {
         return (
           <div key={e.name} className={styles.tableRow}>
             <span className={`${styles.tableToolCol} ${styles.metricCell}`}>
-              {e.name}
+              {localizeToolDisplayName(e.name, t)}
             </span>
             <span className={styles.tableNumCol}>{e.stats.count}</span>
             <span

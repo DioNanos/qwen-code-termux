@@ -179,6 +179,48 @@ describe('ToolCallEmitter', () => {
       );
     });
 
+    it('emits structured artifacts without a wire trust marker', async () => {
+      await emitter.emitResult({
+        toolName: ToolNames.ARTIFACT,
+        callId: 'call-artifact',
+        success: true,
+        message: createMockMessage('Published'),
+        artifacts: [
+          {
+            kind: 'html',
+            storage: 'published',
+            title: 'Dashboard',
+            url: 'file:///tmp/dashboard.html',
+            managedId: 'managed-1',
+          },
+        ],
+      });
+
+      expect(sendUpdateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'call-artifact',
+          status: 'completed',
+          _meta: expect.objectContaining({
+            toolName: ToolNames.ARTIFACT,
+            artifacts: [
+              expect.objectContaining({
+                title: 'Dashboard',
+                storage: 'published',
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(
+        (
+          sendUpdateSpy.mock.calls[0]?.[0] as {
+            _meta?: Record<string, unknown>;
+          }
+        )._meta,
+      ).not.toHaveProperty('artifactsTrustedPublisher');
+    });
+
     it('should emit tool_call_update with failed status on failure', async () => {
       await emitter.emitResult({
         toolName: 'test_tool',
@@ -200,6 +242,35 @@ describe('ToolCallEmitter', () => {
         ],
         _meta: { toolName: 'test_tool', provenance: 'builtin' },
       });
+    });
+
+    it('emits structured artifacts from failed tool results', async () => {
+      await emitter.emitResult({
+        toolName: ToolNames.RECORD_ARTIFACT,
+        callId: 'call-failed-artifact',
+        success: false,
+        message: [],
+        error: new Error('record failed'),
+        artifacts: [
+          { title: 'Failure report', url: 'https://example.com/drop' },
+        ],
+      });
+
+      expect(sendUpdateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'call-failed-artifact',
+          status: 'failed',
+          _meta: expect.objectContaining({
+            artifacts: [
+              expect.objectContaining({
+                title: 'Failure report',
+                url: 'https://example.com/drop',
+              }),
+            ],
+          }),
+        }),
+      );
     });
 
     it('should handle diff display format', async () => {
@@ -231,6 +302,11 @@ describe('ToolCallEmitter', () => {
           _meta: { toolName: 'edit_file', provenance: 'builtin' },
         }),
       );
+      expect(sendUpdateSpy.mock.calls[0][0].rawOutput).toEqual({
+        fileName: '/test/file.ts',
+        originalContent: 'old content',
+        newContent: 'new content',
+      });
     });
 
     it('should not replay truncated session previews as full diffs', async () => {
@@ -266,6 +342,7 @@ describe('ToolCallEmitter', () => {
           _meta: { toolName: 'edit_file', provenance: 'builtin' },
         }),
       );
+      expect(sendUpdateSpy.mock.calls[0][0].rawOutput).toBeUndefined();
     });
 
     it('should transform message parts to content', async () => {
@@ -426,6 +503,9 @@ describe('ToolCallEmitter', () => {
       expect(emitter.mapToolKind(Kind.Execute)).toBe('execute');
       expect(emitter.mapToolKind(Kind.Think)).toBe('think');
       expect(emitter.mapToolKind(Kind.Fetch)).toBe('fetch');
+      // Kind.Agent maps to 'other' on the wire: ACP has no 'agent' ToolKind,
+      // so emitting it would be Zod-rejected at the daemon's ACP boundary.
+      expect(emitter.mapToolKind(Kind.Agent)).toBe('other');
       expect(emitter.mapToolKind(Kind.Other)).toBe('other');
     });
 

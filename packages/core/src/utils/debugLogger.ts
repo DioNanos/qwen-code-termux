@@ -37,9 +37,9 @@ const sessionContext = new AsyncLocalStorage<DebugLogSession>();
 
 function isDebugLogFileEnabled(): boolean {
   const value = process.env['QWEN_DEBUG_LOG_FILE'];
-  if (!value) return true;
+  if (!value) return false;
   const normalized = value.trim().toLowerCase();
-  return !['0', 'false', 'off', 'no'].includes(normalized);
+  return !['', '0', 'false', 'off', 'no'].includes(normalized);
 }
 
 function getActiveSession(): DebugLogSession | null {
@@ -144,9 +144,14 @@ export function resetDebugLoggingState(): void {
 }
 
 const DEBUG_LATEST_ALIAS = 'latest';
+const SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function updateLatestDebugLogAlias(sessionId: string): void {
   if (!isDebugLogFileEnabled()) {
+    return;
+  }
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
     return;
   }
 

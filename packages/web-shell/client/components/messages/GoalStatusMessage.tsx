@@ -41,15 +41,44 @@ const VALID_GOAL_KINDS = new Set<string>([
 ]);
 
 function parseGoalStatusMessage(
-  content: string,
+  content: unknown,
 ): SerializedGoalStatusMessage | null {
-  const parsed = parseRawGoalStatusMessage(content);
-  if (!parsed || !parsed.kind || !parsed.condition) return null;
-  if (!VALID_GOAL_KINDS.has(parsed.kind)) return null;
-  return parsed;
+  const parsed =
+    typeof content === 'string' ? parseRawGoalStatusMessage(content) : content;
+  return normalizeGoalStatus(parsed);
 }
 
 export { serializeGoalStatusMessage, parseGoalStatusMessage };
+
+function normalizeGoalStatus(
+  value: unknown,
+): SerializedGoalStatusMessage | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  const condition = record.condition;
+  if (typeof kind !== 'string' || !VALID_GOAL_KINDS.has(kind)) return null;
+  if (typeof condition !== 'string') return null;
+  const iterations = getNumber(record.iterations);
+  const durationMs = getNumber(record.durationMs);
+  const setAt = getNumber(record.setAt);
+  const lastReason =
+    typeof record.lastReason === 'string' ? record.lastReason : undefined;
+  return {
+    kind: kind as GoalStatusKind,
+    condition,
+    ...(iterations !== undefined ? { iterations } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(setAt !== undefined ? { setAt } : {}),
+    ...(lastReason !== undefined ? { lastReason } : {}),
+  };
+}
+
+function getNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
 
 function pluralTurns(n: number, t: ReturnType<typeof useI18n>['t']): string {
   return t(n === 1 ? 'goal.turn' : 'goal.turns', { count: n });
@@ -59,14 +88,12 @@ function getTitle(
   status: SerializedGoalStatusMessage,
   t: ReturnType<typeof useI18n>['t'],
 ): {
-  prefix: string;
   title: string;
   colorClass: string;
 } {
   switch (status.kind) {
     case 'checking':
       return {
-        prefix: '○',
         title: `${t('goal.check')}${
           status.iterations && status.iterations > 0
             ? ` · ${t('goal.turnLabel', { count: status.iterations })}`
@@ -76,31 +103,26 @@ function getTitle(
       };
     case 'set':
       return {
-        prefix: '◎',
         title: t('goal.set'),
         colorClass: styles.accent,
       };
     case 'achieved':
       return {
-        prefix: '✓',
         title: t('goal.achieved'),
         colorClass: styles.success,
       };
     case 'cleared':
       return {
-        prefix: '○',
         title: t('goal.cleared'),
         colorClass: styles.muted,
       };
     case 'failed':
       return {
-        prefix: '✖',
         title: t('goal.failed'),
         colorClass: styles.error,
       };
     case 'aborted':
       return {
-        prefix: '!',
         title: t('goal.aborted'),
         colorClass: styles.warning,
       };
@@ -152,9 +174,6 @@ export function GoalStatusMessage({
 
   return (
     <div className={styles.message}>
-      <span className={`${styles.prefix} ${title.colorClass}`}>
-        {title.prefix}
-      </span>
       <div className={styles.body}>
         <div className={`${styles.title} ${title.colorClass}`}>
           {title.title}

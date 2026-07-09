@@ -12,15 +12,15 @@
 
 ## Summary
 
-| Category | Result | Notes |
-|---|---|---|
-| Install guard | ✅ PASS | Installed, version matches, binary resolves |
-| Basic CLI | ✅ PASS | `--help` shows all commands and options |
-| Termux runtime | ✅ PASS | Android aarch64, PREFIX set, Node >= 20 |
-| PTY + shell exec | ✅ PASS | `@mmmbuto/node-pty-android-arm64@1.1.0`, `uname -m` → aarch64 |
-| TTS | ✅ PASS | `termux-tts-speak` available, executes without error |
-| Filesystem | ✅ PASS | File creation and read works |
-| MCP/auth surface | ✅ PASS | `qwen mcp`, `qwen auth` commands present |
+| Category         | Result  | Notes                                                                             |
+| ---------------- | ------- | --------------------------------------------------------------------------------- |
+| Install guard    | ✅ PASS | Installed, version matches, binary resolves                                       |
+| Basic CLI        | ✅ PASS | `--help` shows all commands and options                                           |
+| Termux runtime   | ✅ PASS | Android aarch64, PREFIX set, Node >= 20                                           |
+| PTY + shell exec | ✅ PASS | `@mmmbuto/node-pty-android-arm64@1.1.0`, `uname -m` → aarch64                     |
+| TTS              | ✅ PASS | `termux-tts-speak` available, executes without error                              |
+| Filesystem       | ✅ PASS | File creation and read works                                                      |
+| MCP/auth surface | ✅ PASS | `qwen mcp`, `qwen auth` commands present                                          |
 | v0.15.5 features | ✅ PASS | Background agents, managed shell pool, channel command, TTS tool, OpenRouter auth |
 
 **Overall: 8/8 tests passing (100%) — ALL PASS**
@@ -53,6 +53,7 @@ $ qwen --help
 ```
 
 CLI starts successfully, shows:
+
 - Commands: `qwen`, `mcp`, `extensions`, `auth`, `hooks`, `channel`
 - Options: `--debug`, `--model`, `--prompt`, `--system-prompt`, `--append-system-prompt`, `--chat-recording`, `--approval-mode`, `--checkpointing`, `--acp`, `--experimental-lsp`, MCP options, auth options
 - Positional prompt support with `-i/--prompt-interactive`
@@ -177,17 +178,17 @@ All features verified present in `--help` and command surface.
 
 ## Termux patches verification
 
-| Patch | Status |
-|---|---|
-| `termux-runtime.ts` (atob/btoa polyfill) | ✅ Present (`packages/core/src/patches/termux-runtime.ts`) |
-| `termux-detect.ts` (Android detection) | ✅ Present (`packages/core/src/utils/termux-detect.ts`) |
-| `tts-notification.ts` (Termux TTS tool) | ✅ Present (`packages/core/src/tools/tts-notification.ts`) |
-| `@mmmbuto/node-pty-android-arm64` | ✅ v1.1.0 (via optionalDeps) |
-| `prepare-termux.cjs` (skip husky+bundle) | ✅ Present (`scripts/prepare-termux.cjs`) |
-| `postinstall.cjs` (Android detection) | ✅ Present (`scripts/postinstall.cjs`) |
-| installationInfo rebrand (@mmmbuto) | ✅ Present |
-| package.json rebrand v0.15.5-termux | ✅ Present |
-| `notificationService` (CLI layer) | ✅ Present (`packages/cli/src/services/notificationService.ts`) |
+| Patch                                    | Status                                                          |
+| ---------------------------------------- | --------------------------------------------------------------- |
+| `termux-runtime.ts` (atob/btoa polyfill) | ✅ Present (`packages/core/src/patches/termux-runtime.ts`)      |
+| `termux-detect.ts` (Android detection)   | ✅ Present (`packages/core/src/utils/termux-detect.ts`)         |
+| `tts-notification.ts` (Termux TTS tool)  | ✅ Present (`packages/core/src/tools/tts-notification.ts`)      |
+| `@mmmbuto/node-pty-android-arm64`        | ✅ v1.1.0 (via optionalDeps)                                    |
+| `prepare-termux.cjs` (skip husky+bundle) | ✅ Present (`scripts/prepare-termux.cjs`)                       |
+| `postinstall.cjs` (Android detection)    | ✅ Present (`scripts/postinstall.cjs`)                          |
+| installationInfo rebrand (@mmmbuto)      | ✅ Present                                                      |
+| package.json rebrand v0.15.5-termux      | ✅ Present                                                      |
+| `notificationService` (CLI layer)        | ✅ Present (`packages/cli/src/services/notificationService.ts`) |
 
 ---
 

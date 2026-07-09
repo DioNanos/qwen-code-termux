@@ -180,15 +180,20 @@ describe('SubagentManager', () => {
           runConfig: { max_time_minutes: 5, max_turns: 10 },
         };
       }
-      if (yamlString.includes('background:')) {
+      if (
+        yamlString.includes('background:') ||
+        yamlString.includes('approvalMode:')
+      ) {
         const bgMatch = yamlString.match(/background:\s*"?(true|false)"?/);
-        const bgValue = bgMatch?.[1] === 'true' ? true : false;
-        return {
+        const approvalMatch = yamlString.match(/approvalMode:\s*"?([\w-]+)"?/);
+        const result: Record<string, unknown> = {
           name: yamlString.match(/name:\s*(\S+)/)?.[1] ?? 'test-agent',
           description:
             yamlString.match(/description:\s*(.+)/)?.[1] ?? 'A test subagent',
-          background: bgValue,
         };
+        if (bgMatch) result['background'] = bgMatch[1] === 'true';
+        if (approvalMatch) result['approvalMode'] = approvalMatch[1];
+        return result;
       }
       if (yamlString.includes('name: agent1')) {
         return { name: 'agent1', description: 'First agent' };
@@ -679,6 +684,54 @@ You are an agent.
       );
 
       expect(config.background).toBeUndefined();
+    });
+
+    it('should parse approvalMode: bubble from frontmatter', () => {
+      const md = `---
+name: bubbler
+description: A background agent that bubbles approvals
+background: true
+approvalMode: bubble
+---
+
+You are a bubbler.
+`;
+      const config = manager.parseSubagentContent(
+        md,
+        validConfig.filePath!,
+        'project',
+      );
+
+      expect(config.approvalMode).toBe('bubble');
+    });
+
+    it('should reject an unknown approvalMode value', () => {
+      const md = `---
+name: weird
+description: An agent with a bogus mode
+approvalMode: telepathy
+---
+
+You are weird.
+`;
+      expect(() =>
+        manager.parseSubagentContent(md, validConfig.filePath!, 'project'),
+      ).toThrow(/Invalid "approvalMode"/);
+    });
+
+    it('should round-trip approvalMode: bubble through serialize', () => {
+      const serialized = manager.serializeSubagent({
+        ...validConfig,
+        approvalMode: 'bubble',
+      });
+      expect(serialized).toContain('approvalMode: bubble');
+
+      const reparsed = manager.parseSubagentContent(
+        serialized,
+        validConfig.filePath!,
+        'project',
+      );
+      expect(reparsed.approvalMode).toBe('bubble');
     });
 
     // --- CC 2.1.168 declarative-agent fields (DL7-parity lenient parse) ---
@@ -1602,6 +1655,61 @@ System prompt 3`);
         'Explore',
         'statusline-setup',
       ]);
+      expect(subagents.every((s) => s.level === 'builtin')).toBe(true);
+    });
+  });
+
+  describe('safe mode', () => {
+    let safeManager: SubagentManager;
+
+    beforeEach(() => {
+      const safeConfig = makeFakeConfig({ safeMode: true });
+      vi.spyOn(safeConfig, 'getToolRegistry').mockReturnValue(mockToolRegistry);
+      vi.spyOn(safeConfig, 'getProjectRoot').mockReturnValue('/test/project');
+      safeManager = new SubagentManager(safeConfig);
+    });
+
+    it('listSubagents returns only builtin subagents', async () => {
+      // Even if project/user dirs have agents, safe mode must ignore them
+      vi.mocked(fs.readdir)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValue(['evil-agent.md'] as any);
+      vi.mocked(fs.readFile).mockResolvedValue(`---
+name: evil-agent
+description: Injected via project
+---
+malicious prompt`);
+
+      const subagents = await safeManager.listSubagents();
+
+      expect(subagents.every((s) => s.level === 'builtin')).toBe(true);
+      expect(subagents.find((s) => s.name === 'evil-agent')).toBeUndefined();
+    });
+
+    it('listSubagents overrides explicit non-builtin level to builtin', async () => {
+      vi.mocked(fs.readdir)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValue([] as any);
+
+      const subagents = await safeManager.listSubagents({ level: 'project' });
+
+      expect(subagents.every((s) => s.level === 'builtin')).toBe(true);
+    });
+
+    it('refreshCache only populates builtin level', async () => {
+      vi.mocked(fs.readdir)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValue(['evil.md'] as any);
+      vi.mocked(fs.readFile).mockResolvedValue(`---
+name: evil
+description: bad
+---
+bad`);
+
+      await safeManager.refreshCache();
+
+      // After refresh, listing should only show builtin
+      const subagents = await safeManager.listSubagents();
       expect(subagents.every((s) => s.level === 'builtin')).toBe(true);
     });
   });

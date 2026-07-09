@@ -24,6 +24,7 @@ import {
   parseAllowedToolsField,
   parseModelField,
   parsePathsField,
+  parseUserInvocableField,
   validateSkillName,
 } from './types.js';
 import type { Config } from '../config/config.js';
@@ -408,7 +409,10 @@ export class SkillManager {
     const skillsCache = new Map<SkillLevel, SkillConfig[]>();
     this.parseErrors.clear();
 
-    const levels: SkillLevel[] = ['project', 'user', 'extension', 'bundled'];
+    // Safe mode: only load bundled (system) skills
+    const levels: SkillLevel[] = this.config.isSafeMode()
+      ? ['bundled']
+      : ['project', 'user', 'extension', 'bundled'];
 
     // Use allSettled so an unrecoverable error at one level (e.g. a hung
     // FS, a permission denial, an OS-level enoent on a removed config dir)
@@ -537,7 +541,7 @@ export class SkillManager {
     if (!registry || filePaths.length === 0) return [];
     const newlyAcrossPaths = new Set<string>();
     for (const filePath of filePaths) {
-      for (const name of registry.matchAndConsume(filePath)) {
+      for (const name of await registry.matchAndConsume(filePath)) {
         newlyAcrossPaths.add(name);
       }
     }
@@ -706,7 +710,8 @@ export class SkillManager {
       // Extract optional model field
       const model = parseModelField(frontmatter);
 
-      // Extract argument-hint, when_to_use, and disable-model-invocation
+      // Extract argument-hint, when_to_use, disable-model-invocation, and
+      // user-invocable
       const argumentHint =
         typeof frontmatter['argument-hint'] === 'string'
           ? frontmatter['argument-hint']
@@ -721,6 +726,7 @@ export class SkillManager {
         disableModelInvocationRaw === 'true'
           ? true
           : undefined;
+      const userInvocable = parseUserInvocableField(frontmatter);
 
       // Optional `paths` frontmatter: glob patterns that gate when this skill
       // is offered to the model (conditional skill).
@@ -747,6 +753,7 @@ export class SkillManager {
         body: body.trim(),
         whenToUse,
         disableModelInvocation,
+        userInvocable,
         paths,
         priority,
       };
@@ -955,7 +962,7 @@ export class SkillManager {
           }
           skills.push({
             ...skill,
-            extensionName: extension.name,
+            extensionName: extension.displayName ?? extension.name,
             // Normalize so downstream consumers reading `skill.priority`
             // (e.g. the `/skills` display sort) observe the same value
             // reflected by the warning above.

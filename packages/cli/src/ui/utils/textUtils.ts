@@ -244,6 +244,45 @@ export function sliceTextByVisualHeight(
 }
 
 /**
+ * Wrap text into the visual rows it occupies at `width` columns, accounting
+ * for both explicit newlines and code-point-width-aware soft wrapping. Unlike
+ * `sliceTextByVisualHeight` (which keeps only a head/tail window), this returns
+ * every visual row, so callers that scroll an arbitrary offset can slice the
+ * rows the user actually sees.
+ */
+export function wrapToVisualLines(text: string, width: number): string[] {
+  if (width <= 0) {
+    return [''];
+  }
+  const visualLines: string[] = [];
+  for (const logicalLine of text.split('\n')) {
+    if (logicalLine === '') {
+      visualLines.push('');
+      continue;
+    }
+    let currentLine = '';
+    let currentWidth = 0;
+    for (const char of logicalLine) {
+      const charWidth = getCachedStringWidth(char);
+      if (currentWidth + charWidth > width && currentWidth > 0) {
+        visualLines.push(currentLine);
+        currentLine = '';
+        currentWidth = 0;
+      }
+      currentLine += char;
+      currentWidth += charWidth;
+    }
+    if (currentLine) {
+      visualLines.push(currentLine);
+    }
+  }
+  if (visualLines.length === 0) {
+    visualLines.push('');
+  }
+  return visualLines;
+}
+
+/**
  * Clear the string width cache
  */
 export const clearStringWidthCache = (): void => {
@@ -398,7 +437,12 @@ export function sanitizeSensitiveText(
 // eslint-disable-next-line no-control-regex
 const FILENAME_CONTROL_CHARS_REGEX = /[\x00-\x1f\x7f-\x9f]/g;
 
-function escapeFilenameControlChar(ch: string): string {
+// Same as FILENAME_CONTROL_CHARS_REGEX minus `\n` (row separator) and `\t`
+// (benign indentation), which multi-line display treats as layout.
+// eslint-disable-next-line no-control-regex
+const MULTILINE_CONTROL_CHARS_REGEX = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+function escapeControlChar(ch: string): string {
   switch (ch) {
     case '\b':
       return '\\b';
@@ -434,6 +478,20 @@ function escapeFilenameControlChar(ch: string): string {
 export function sanitizeFilenameForDisplay(name: string): string {
   return escapeAnsiCtrlCodes(name).replace(
     FILENAME_CONTROL_CHARS_REGEX,
-    escapeFilenameControlChar,
+    escapeControlChar,
+  );
+}
+
+/**
+ * Make untrusted multi-line text (e.g. model-generated file contents) safe to
+ * render in the TUI while preserving its line structure: neutralizes
+ * multi-byte ANSI/VT sequences (via `escapeAnsiCtrlCodes`), then escapes the
+ * remaining bare control bytes — BEL, BS, CR, DEL, C1, the 8-bit CSI — as
+ * inert, visible text. `\n` and `\t` pass through untouched.
+ */
+export function sanitizeMultilineForDisplay(text: string): string {
+  return escapeAnsiCtrlCodes(text).replace(
+    MULTILINE_CONTROL_CHARS_REGEX,
+    escapeControlChar,
   );
 }

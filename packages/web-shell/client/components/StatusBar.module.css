@@ -2,9 +2,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 2ch;
+  padding: 2px 2px;
+  margin-bottom: 10px;
   font-size: 13px;
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
   flex-shrink: 0;
 }
 
@@ -27,10 +28,7 @@
      instead of the two touching. font: inherit so the -2ch resolves against
      the same font as the bar's 2ch padding; the 2px padding is hit area, free
      since we're out of flow. */
-  position: absolute;
   left: calc(-2ch - 6px);
-  top: 50%;
-  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -39,13 +37,13 @@
   border: none;
   background: none;
   font: inherit;
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
   cursor: pointer;
 }
 
 .settingsButton:hover,
 .settingsButton:focus-visible {
-  color: var(--text-primary);
+  color: var(--foreground);
 }
 
 .modeButton {
@@ -63,7 +61,7 @@
 
 .modeButton:hover .modeHint,
 .modeButton:focus-visible .modeHint {
-  color: var(--text-secondary);
+  color: var(--muted-foreground);
 }
 
 .modeLabel {
@@ -71,7 +69,7 @@
 }
 
 .modeDefault {
-  color: var(--text-secondary);
+  color: var(--muted-foreground);
 }
 
 .modePlan {
@@ -91,8 +89,26 @@
 }
 
 .modeHint {
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
   font-size: 12px;
+}
+
+.shortcutsButton {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.shortcutsButton:hover,
+.shortcutsButton:focus-visible {
+  color: var(--foreground);
 }
 
 .modelButton {
@@ -110,22 +126,13 @@
 
 .modelButton:hover .model,
 .modelButton:focus-visible .model {
-  color: var(--text-primary);
+  color: var(--foreground);
   text-decoration: underline;
 }
 
-.escapeHint {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
 .model {
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
   font-size: 12px;
-}
-
-.disconnected {
-  color: var(--error-color);
 }
 
 .contextButton {
@@ -142,23 +149,23 @@
 
 .contextButton:hover .context,
 .contextButton:focus-visible .context {
-  color: var(--text-primary);
+  color: var(--foreground);
   text-decoration: underline;
 }
 
 .context {
   font-size: 11px;
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
 }
 
 .goal {
   font-size: 12px;
-  color: var(--accent-color);
+  color: var(--agent-blue-500);
   white-space: nowrap;
 }
 
 .separator {
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
 }
 
 .taskPill {
@@ -166,7 +173,7 @@
   border-radius: 0;
   padding: 0 4px;
   background: transparent;
-  color: var(--text-dimmed);
+  color: var(--muted-foreground);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -174,11 +181,19 @@
 
 .taskPill:hover,
 .taskPill:focus-visible {
-  background: var(--text-dimmed);
-  color: var(--bg-primary);
+  background: var(--muted-foreground);
+  color: var(--background);
   outline: none;
 }
 
 .taskPill:disabled {
   cursor: default;
+}
+
+@media (max-width: 700px) {
+  .settingsButton,
+  .modelButton,
+  .modeHint {
+    display: none;
+  }
 }

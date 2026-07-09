@@ -1,6 +1,16 @@
-import { memo } from 'react';
-import { PromptChevron } from '../PromptChevron';
+import {
+  memo,
+  useMemo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { isSafeImageSrc } from './Markdown';
+import { useWebShellCustomization } from '../../customization';
+import { useI18n } from '../../i18n';
+import flashStyles from '../MessageLocateFlash.module.css';
 import styles from './UserMessage.module.css';
 
 interface UserMessageImage {
@@ -11,37 +21,103 @@ interface UserMessageImage {
 interface UserMessageProps {
   content: string;
   images?: UserMessageImage[];
+  isLocateFlashing?: boolean;
 }
 
 export const UserMessage = memo(function UserMessage({
   content,
   images,
+  isLocateFlashing = false,
 }: UserMessageProps) {
+  const { t } = useI18n();
+  const { renderUserMessageContent } = useWebShellCustomization();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [heightOverflowing, setHeightOverflowing] = useState(false);
+  const renderedContent = useMemo(
+    () => renderUserMessageContent?.({ content, images }) ?? content,
+    [content, images, renderUserMessageContent],
+  );
+
+  const measureOverflow = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    setHeightOverflowing(el.scrollHeight > 400);
+  }, []);
+
+  useLayoutEffect(() => {
+    setExpanded(false);
+    measureOverflow();
+  }, [content, images?.length, measureOverflow]);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [measureOverflow]);
+
   return (
-    <div className={styles.message}>
-      <span className={styles.prefix}>
-        <PromptChevron />
-      </span>
-      <div className={styles.body}>
-        {images && images.length > 0 && (
-          <div className={styles.images}>
-            {images.map((img, index) => {
-              const src = img.data.startsWith('data:')
-                ? img.data
-                : `data:${img.mimeType};base64,${img.data}`;
-              if (!isSafeImageSrc(src)) return null;
-              return (
-                <img
-                  key={index}
-                  src={src}
-                  alt={`User uploaded image ${index + 1}`}
-                  className={styles.imageThumb}
-                />
-              );
-            })}
-          </div>
+    <div className={styles.chatMessageRow}>
+      <div
+        className={`${styles.chatBubble}${
+          isLocateFlashing ? ` ${flashStyles.flash}` : ''
+        }`}
+      >
+        <div
+          ref={contentRef}
+          className={`${styles.chatContent} ${
+            heightOverflowing && !expanded ? styles.chatContentCollapsed : ''
+          }`}
+        >
+          {images && images.length > 0 && (
+            <div className={styles.chatImages}>
+              {images.map((img, index) => {
+                const src = img.data.startsWith('data:')
+                  ? img.data
+                  : `data:${img.mimeType};base64,${img.data}`;
+                if (!isSafeImageSrc(src)) return null;
+                return (
+                  <img
+                    key={index}
+                    src={src}
+                    alt={t('user.uploadedImage', { index: index + 1 })}
+                    className={styles.chatImageThumb}
+                    onLoad={measureOverflow}
+                  />
+                );
+              })}
+            </div>
+          )}
+          {renderedContent}
+        </div>
+        {heightOverflowing && (
+          <button
+            type="button"
+            className={styles.toggleButton}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <span>
+              {expanded ? t('userMessage.showLess') : t('userMessage.showMore')}
+            </span>
+            <svg
+              className={`${styles.toggleIcon} ${
+                expanded ? styles.toggleIconExpanded : ''
+              }`}
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <path
+                d="m4 6 4 4 4-4"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
         )}
-        {content}
       </div>
     </div>
   );

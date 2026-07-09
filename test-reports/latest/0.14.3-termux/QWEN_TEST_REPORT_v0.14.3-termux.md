@@ -12,16 +12,16 @@
 
 ## Summary
 
-| Category | Result | Notes |
-|---|---|---|
-| Install guard | ✅ PASS | Installed, version matches, binary resolves |
-| Basic CLI | ✅ PASS | `--help` shows all commands and options |
-| Termux runtime | ✅ PASS | Android aarch64, PREFIX set, Node >= 20 |
+| Category         | Result  | Notes                                                         |
+| ---------------- | ------- | ------------------------------------------------------------- |
+| Install guard    | ✅ PASS | Installed, version matches, binary resolves                   |
+| Basic CLI        | ✅ PASS | `--help` shows all commands and options                       |
+| Termux runtime   | ✅ PASS | Android aarch64, PREFIX set, Node >= 20                       |
 | PTY + shell exec | ✅ PASS | `@mmmbuto/node-pty-android-arm64@1.1.0`, `uname -m` → aarch64 |
-| TTS | ✅ PASS | `termux-tts-speak` available, executes without error |
-| Filesystem | ✅ PASS | File creation and read via Qwen works |
-| MCP/auth surface | ✅ PASS | `qwen mcp`, `qwen auth` commands present |
-| v0.14.3 features | ✅ PASS | compactMode, status-line, plan mode, review skill |
+| TTS              | ✅ PASS | `termux-tts-speak` available, executes without error          |
+| Filesystem       | ✅ PASS | File creation and read via Qwen works                         |
+| MCP/auth surface | ✅ PASS | `qwen mcp`, `qwen auth` commands present                      |
+| v0.14.3 features | ✅ PASS | compactMode, status-line, plan mode, review skill             |
 
 **Overall: 8/8 tests passing (100%) — ALL PASS**
 
@@ -53,6 +53,7 @@ $ qwen --help
 ```
 
 CLI starts successfully, shows:
+
 - Commands: `qwen`, `mcp`, `extensions`, `auth`, `hooks`, `channel`
 - Options: `--debug`, `--model`, `--prompt`, `--system-prompt`, `--append-system-prompt`, `--chat-recording`, MCP options, auth options
 - Positional prompt support
@@ -154,6 +155,7 @@ Commands:
 ## 8. New v0.14.3 features
 
 Upstream changes since v0.14.1:
+
 - **compactMode** (ex verboseMode) — refactored for better UX
 - **Status line customization** — inline footer layout
 - **`/model --fast`** — discoverability improvement
@@ -180,16 +182,16 @@ All features verified present in `--help` and command surface.
 
 ## Termux patches verification
 
-| Patch | Status |
-|---|---|
-| `termux-runtime.ts` (atob/btoa polyfill) | ✅ Present |
-| DEP0169 warning suppression | ✅ Present |
-| `@mmmbuto/node-pty-android-arm64` in optionalDeps | ✅ v1.1.0 |
-| `postinstall.cjs` (Android detection) | ✅ Present |
-| `prepare-termux.cjs` (skip husky+bundle) | ✅ Present |
-| Import termux-runtime in core/index.ts | ✅ Present |
-| installationInfo rebrand (@mmmbuto) | ✅ Present |
-| package.json rebrand v0.14.3-termux | ✅ Present |
+| Patch                                             | Status     |
+| ------------------------------------------------- | ---------- |
+| `termux-runtime.ts` (atob/btoa polyfill)          | ✅ Present |
+| DEP0169 warning suppression                       | ✅ Present |
+| `@mmmbuto/node-pty-android-arm64` in optionalDeps | ✅ v1.1.0  |
+| `postinstall.cjs` (Android detection)             | ✅ Present |
+| `prepare-termux.cjs` (skip husky+bundle)          | ✅ Present |
+| Import termux-runtime in core/index.ts            | ✅ Present |
+| installationInfo rebrand (@mmmbuto)               | ✅ Present |
+| package.json rebrand v0.14.3-termux               | ✅ Present |
 
 ---
 

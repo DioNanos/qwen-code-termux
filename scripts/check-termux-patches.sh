@@ -63,6 +63,8 @@ check_grep 'TTS_NOTIFICATION' packages/core/src/tools/tool-names.ts \
   'tts_notification tool name registered'
 check_grep '../tools/tts-notification.js' packages/core/src/config/config.ts \
   'tts_notification tool lazy registered'
+check_grep 'DEP0169' packages/cli/index.ts \
+  'DEP0169 url.parse deprecation suppression'
 check_grep '@mmmbuto/qwen-code-termux@latest' packages/cli/src/utils/installationInfo.ts \
   'update command points to fork package'
 check_grep 'scripts/postinstall.cjs' scripts/prepare-package.js \

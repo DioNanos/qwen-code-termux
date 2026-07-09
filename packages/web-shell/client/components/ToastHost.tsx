@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useI18n } from '../i18n';
 import styles from './ToastHost.module.css';
 
 export type ToastTone = 'info' | 'warning' | 'error' | 'success';
@@ -22,7 +23,12 @@ export function ToastHost({
 }: ToastHostProps) {
   if (toasts.length === 0) return null;
   return (
-    <div className={styles.host} role="status" aria-live="polite">
+    <div
+      className={styles.host}
+      role="status"
+      aria-live="polite"
+      data-web-shell-toast-host
+    >
       {toasts.map((toast) => (
         <ToastItem
           key={toast.id}
@@ -44,20 +50,25 @@ function ToastItem({
   onDismiss: (id: string) => void;
   autoDismissMs: number;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     const timer = window.setTimeout(() => onDismiss(toast.id), autoDismissMs);
     return () => window.clearTimeout(timer);
   }, [autoDismissMs, onDismiss, toast.id]);
 
   return (
-    <div className={`${styles.toast} ${styles[toast.tone]}`}>
+    <div
+      className={`${styles.toast} ${styles[toast.tone]}`}
+      data-web-shell-toast
+      data-tone={toast.tone}
+    >
       <div className={styles.message}>{toast.message}</div>
       <button
         type="button"
         className={styles.close}
         onClick={() => onDismiss(toast.id)}
-        aria-label="Dismiss notification"
-        title="Dismiss"
+        aria-label={t('toast.dismiss')}
+        title={t('toast.dismissShort')}
       >
         x
       </button>

@@ -283,7 +283,7 @@ export default {
   'Open in editor': 'Открыть в редакторе',
   'Edit tools': 'Редактировать инструменты',
   'Edit color': 'Редактировать цвет',
-  '❌ Error:': '❌ Ошибка:',
+  '✗ Error:': '✗ Ошибка:',
   'Are you sure you want to delete agent "{{name}}"?':
     'Вы уверены, что хотите удалить агента "{{name}}"?',
   // ============================================================================
@@ -291,12 +291,12 @@ export default {
   // ============================================================================
   'Project Level (.qwen/agents/)': 'Уровень проекта (.qwen/agents/)',
   'User Level (~/.qwen/agents/)': 'Уровень пользователя (~/.qwen/agents/)',
-  '✅ Subagent Created Successfully!': '✅ Подагент успешно создан!',
+  '✓ Subagent Created Successfully!': '✓ Подагент успешно создан!',
   'Subagent "{{name}}" has been saved to {{level}} level.':
     'Подагент "{{name}}" сохранен на уровне {{level}}.',
   'Name: ': 'Имя: ',
   'Location: ': 'Расположение: ',
-  '❌ Error saving subagent:': '❌ Ошибка сохранения подагента:',
+  '✗ Error saving subagent:': '✗ Ошибка сохранения подагента:',
   'Warnings:': 'Предупреждения:',
   'Name "{{name}}" already exists at {{level}} level - will overwrite existing subagent':
     'Имя "{{name}}" уже существует на уровне {{level}} - существующий подагент будет перезаписан',
@@ -438,12 +438,58 @@ export default {
   'Auto Edit': 'Авторедактирование',
   YOLO: 'YOLO',
   'toggle vim mode on/off': 'Включение/выключение режима vim',
-  'check session stats. Usage: /stats [model|tools]':
-    'Просмотр статистики сессии. Использование: /stats [model|tools]',
   'Show model-specific usage statistics.':
     'Показать статистику использования модели.',
   'Show tool-specific usage statistics.':
     'Показать статистику использования инструментов.',
+  'Show daily token usage statistics.':
+    'Показать дневную статистику использования токенов.',
+  'Show monthly token usage statistics.':
+    'Показать месячную статистику использования токенов.',
+  'Export token usage statistics to CSV or JSON.':
+    'Экспортировать статистику использования токенов в CSV или JSON.',
+  'No usage data.': 'Нет данных об использовании.',
+  '{{label}}: {{tokens}} tokens ({{requests}} requests)':
+    '{{label}}: {{tokens}} токенов ({{requests}} запросов)',
+  'Daily token usage for {{value}}':
+    'Дневное использование токенов за {{value}}',
+  'Monthly token usage for {{value}}':
+    'Месячное использование токенов за {{value}}',
+  'Total: {{tokens}} tokens': 'Всего: {{tokens}} токенов',
+  'Requests: {{requests}}': 'Запросы: {{requests}}',
+  'Breakdown:': 'Разбивка:',
+  'Input: {{tokens}}': 'Ввод: {{tokens}}',
+  'Output: {{tokens}}': 'Вывод: {{tokens}}',
+  'Cached (included in Input): {{tokens}}': 'Кэш (включён во ввод): {{tokens}}',
+  'Thoughts: {{tokens}}': 'Рассуждения: {{tokens}}',
+  'By model:': 'По модели:',
+  'By auth type:': 'По типу аутентификации:',
+  'By model/auth type:': 'По модели/типу аутентификации:',
+  'By source:': 'По источнику:',
+  'Failed to load token usage stats: {{error}}':
+    'Не удалось загрузить статистику использования токенов: {{error}}',
+  'Expected --format csv or --format json.':
+    'Ожидается --format csv или --format json.',
+  'Expected a file path after --output.':
+    'После --output ожидается путь к файлу.',
+  'Unexpected argument: {{argument}}': 'Неожиданный аргумент: {{argument}}',
+  'Usage: /stats export <daily|monthly> [YYYY-MM-DD|YYYY-MM] [--format csv|json] [--output path]':
+    'Использование: /stats export <daily|monthly> [YYYY-MM-DD|YYYY-MM] [--format csv|json] [--output path]',
+  'Token usage export path must be within the project working directory.':
+    'Путь экспорта использования токенов должен находиться внутри рабочего каталога проекта.',
+  'Export target does not exist: {{path}}':
+    'Цель экспорта не существует: {{path}}',
+  'Cannot resolve export path within the working directory.':
+    'Не удалось определить путь экспорта внутри рабочего каталога.',
+  'Could not create a temporary export file.':
+    'Не удалось создать временный файл экспорта.',
+  'Token usage exported to {{format}}: {{path}}':
+    'Использование токенов экспортировано в {{format}}: {{path}}',
+  'Failed to export token usage stats: {{error}}':
+    'Не удалось экспортировать статистику использования токенов: {{error}}',
+  'Unclosed quote in arguments.': 'Незакрытая кавычка в аргументах.',
+  'Note: generation timing (TTFT/TPS) belongs to generation metrics.':
+    'Примечание: время генерации (TTFT/TPS) относится к метрикам генерации.',
   'exit the cli': 'Выход из CLI',
   'Manage workspace directories':
     'Управление директориями рабочего пространства',
@@ -816,8 +862,6 @@ export default {
     'Нельзя создать fork, пока выполняется ответ или вызов инструмента. Дождитесь завершения или обработайте ожидающий вызов инструмента.',
   'Cannot fork before the first conversation turn.':
     'Нельзя создать fork до первого сообщения в разговоре.',
-  'The /fork command requires the fork feature gate. Set QWEN_CODE_ENABLE_FORK_SUBAGENT=1 to enable it.':
-    'Команде /fork требуется feature gate fork. Установите QWEN_CODE_ENABLE_FORK_SUBAGENT=1, чтобы включить его.',
   'The agent tool is unavailable; cannot fork.':
     'Инструмент агента недоступен; fork создать нельзя.',
   'Failed to launch fork: {{error}}': 'Не удалось запустить fork: {{error}}',
@@ -1084,9 +1128,9 @@ export default {
     'Выберите, как продолжить сессию:',
   'Start new chat session': 'Начать новую сессию чата',
   'Continue previous conversation': 'Продолжить предыдущий диалог',
-  '👋 Welcome back! (Last updated: {{timeAgo}})':
-    '👋 С возвращением! (Последнее обновление: {{timeAgo}})',
-  '🎯 Overall Goal:': '🎯 Общая цель:',
+  'Welcome back! (Last updated: {{timeAgo}})':
+    'С возвращением! (Последнее обновление: {{timeAgo}})',
+  'Overall Goal:': 'Общая цель:',
   'Connect a Provider': 'Подключить провайдера',
   'You must connect a provider to proceed. Press Ctrl+C again to exit.':
     'Необходимо подключить провайдера для продолжения. Нажмите Ctrl+C снова для выхода.',
@@ -1255,8 +1299,8 @@ export default {
   // Статус MCP
   // ============================================================================
   'No MCP servers configured.': 'MCP servers не настроены.',
-  '⏳ MCP servers are starting up ({{count}} initializing)...':
-    '⏳ MCP servers запускаются ({{count}} инициализируется)...',
+  '◌ MCP servers are starting up ({{count}} initializing)...':
+    '◌ MCP servers запускаются ({{count}} инициализируется)...',
   'Note: First startup may take longer. Tool availability will update automatically.':
     'Примечание: Первый запуск может занять больше времени. Доступность инструментов обновится автоматически.',
   'Configured MCP servers:': 'Настроенные MCP servers:',
@@ -1278,8 +1322,9 @@ export default {
   'Tools:': 'Инструменты:',
   'Parameters:': 'Параметры:',
   'Prompts:': 'Промпты:',
+  'Resources:': 'Ресурсы:',
   Blocked: 'Заблокировано',
-  '💡 Tips:': '💡 Подсказки:',
+  '★ Tips:': '★ Подсказки:',
   Use: 'Используйте',
   'to show server and tool descriptions':
     'для показа описаний сервера и инструментов',
@@ -1376,6 +1421,28 @@ export default {
   'Found {{count}} TOML command files:':
     'Найдено {{count}} файлов команд TOML:',
   'Current tasks': 'Текущие задачи',
+  'Background tasks': 'Фоновые задачи',
+  'No tasks currently running': 'Нет запущенных задач',
+  'No entry to show.': 'Нет записи для отображения.',
+  'needs approval': 'требует подтверждения',
+  'rejected — edit config to re-approve':
+    'отклонено — измените конфигурацию для повторного подтверждения',
+  'Background agent needs approval': 'Фоновый агент требует подтверждения',
+  'Approve or deny the request above': 'Подтвердите или отклоните запрос выше',
+  Running: 'Выполняется',
+  Paused: 'Приостановлено',
+  Completed: 'Завершено',
+  Failed: 'Ошибка',
+  Stopped: 'Остановлено',
+  Shell: 'Оболочка',
+  Monitor: 'Монитор',
+  Command: 'Команда',
+  Dream: 'Dream',
+  '[dream] memory consolidation': '[dream] консолидация памяти',
+  '[dream] memory consolidation (reviewing {{count}} session)':
+    '[dream] консолидация памяти (проверка {{count}} сессии)',
+  '[dream] memory consolidation (reviewing {{count}} sessions)':
+    '[dream] консолидация памяти (проверка {{count}} сессий)',
   '... and {{count}} more': '... и ещё {{count}}',
   'The TOML format is deprecated. Would you like to migrate them to Markdown format?':
     'Формат TOML устарел. Хотите перенести их в формат Markdown?',
@@ -1767,8 +1834,8 @@ export default {
   'Enter your Coding Plan API key: ': 'Введите ваш API Key Coding Plan: ',
   'Select authentication method:': 'Выберите метод аутентификации:',
   '\n=== Authentication Status ===\n': '\n=== Статус аутентификации ===\n',
-  '⚠️  No authentication method configured.\n':
-    '⚠️  Метод аутентификации не настроен.\n',
+  '⚠  No authentication method configured.\n':
+    '⚠  Метод аутентификации не настроен.\n',
   'Run one of the following commands to get started:\n':
     'Выполните одну из следующих команд для начала:\n',
   '  qwen auth qwen-oauth     - Authenticate with Qwen OAuth (discontinued)':
@@ -1789,8 +1856,8 @@ export default {
   '  Current Model: {{model}}': '  Текущая модель: {{model}}',
   '  Config Version: {{version}}': '  Версия конфигурации: {{version}}',
   '  Status: API key configured\n': '  Статус: API Key настроен\n',
-  '⚠️  Authentication Method: Alibaba Cloud Coding Plan (Incomplete)':
-    '⚠️  Метод аутентификации: Alibaba Cloud Coding Plan (Не завершён)',
+  '⚠  Authentication Method: Alibaba Cloud Coding Plan (Incomplete)':
+    '⚠  Метод аутентификации: Alibaba Cloud Coding Plan (Не завершён)',
   '  Issue: API key not found in environment or settings\n':
     '  Проблема: API Key не найден в окружении или настройках\n',
   '  Run `qwen auth coding-plan` to re-configure.\n':
@@ -1810,6 +1877,8 @@ export default {
     'Нажмите Ctrl+O для показа полного вывода инструментов',
   'Switch to plan mode or exit plan mode':
     'Переключиться в режим плана или выйти из режима плана',
+  'Set how hard reasoning-capable models think ({{tiers}}); mapped and clamped per provider.':
+    'Задаёт интенсивность рассуждений у моделей с поддержкой рассуждений ({{tiers}}); сопоставляется и ограничивается для каждого провайдера.',
   'Exited plan mode. Previous approval mode restored.':
     'Режим плана завершён. Предыдущий режим утверждения восстановлен.',
   'Enabled plan mode. The agent will analyze and plan without executing tools.':
@@ -1948,6 +2017,26 @@ export default {
     'Последующие dream-запуски могут пропускаться как заблокированные, пока следующая очистка устаревших сессий не удалит файл.',
   "The scheduler gate did not see this dream's timestamp; the next dream cycle may re-fire sooner than usual.":
     'Планировщик не увидел временную метку этого dream-запуска; следующий цикл dream может запуститься раньше обычного.',
+  // === History collapse/expand commands ===
+  'Set history to collapse by default when resuming a session':
+    'Set history to collapse by default when resuming a session',
+  'Set history to expand by default when resuming a session':
+    'Set history to expand by default when resuming a session',
+  'Expand the currently collapsed history transcript':
+    'Expand the currently collapsed history transcript',
+  'Control history display preferences and visibility':
+    'Control history display preferences and visibility',
+  'History will be collapsed by default for future resumed sessions.':
+    'History will be collapsed by default for future resumed sessions.',
+  'History will be expanded by default for future resumed sessions.':
+    'History will be expanded by default for future resumed sessions.',
+  'History is already expanded in this session.':
+    'History is already expanded in this session.',
+  'Usage: /history collapse-on-resume|expand-on-resume|expand-now':
+    'Usage: /history collapse-on-resume|expand-on-resume|expand-now',
+  'History collapsed: {{n}} messages hidden. Use /history expand-now to show.':
+    'История свёрнута: {{n}} сообщений скрыто. Используйте /history expand-now для отображения.',
+
   // === Same-as-English optimization ===
   ' (not in model registry)': ' (не в реестре моделей)',
   'start server': 'запустить сервер',
@@ -1990,4 +2079,81 @@ export default {
   in: 'вх.',
   out: 'вых.',
   'In/Out': 'Вх/Вых',
+  // Update command
+  'Check for Qwen Code updates and install if available':
+    'Проверить обновления Qwen Code и установить при наличии',
+  'Qwen Code update available! {{current}} → {{latest}}':
+    'Доступно обновление Qwen Code! {{current}} → {{latest}}',
+  'A new version of Qwen Code is available! {{current}} → {{latest}}':
+    'Доступна новая версия Qwen Code! {{current}} → {{latest}}',
+  'Qwen Code {{version}} is up to date!': 'Qwen Code {{version}} актуален!',
+  'Failed to check for updates. Please check your network or registry configuration.':
+    'Не удалось проверить обновления. Проверьте сеть или настройки registry.',
+  'Unable to check for updates: {{reason}}':
+    'Невозможно проверить обновления: {{reason}}',
+  'Update successful! The new version will be used on your next run.':
+    'Обновление успешно! Новая версия будет использована при следующем запуске.',
+  'Update downloaded. It will be applied after you exit this session.':
+    'Обновление загружено. Оно будет применено после выхода из этого сеанса.',
+  'Update failed: {{error}}': 'Ошибка обновления: {{error}}',
+  'Downloading update...': 'Загрузка обновления...',
+  'Update successful! Please restart Qwen Code to use the new version. Switching model providers before restarting may not work correctly.':
+    'Обновление успешно! Перезапустите Qwen Code, чтобы использовать новую версию. Переключение поставщиков моделей до перезапуска может работать некорректно.',
+  'Automatic update failed. Please try updating manually.':
+    'Автоматическое обновление не удалось. Попробуйте обновить вручную.',
+  'Automatic update failed: {{error}}. Re-run the installer to update manually.':
+    'Автоматическое обновление не удалось: {{error}}. Повторно запустите установщик, чтобы обновить вручную.',
+  'Running from a local git clone. Please update with "git pull".':
+    'Запущено из локального клона Git. Обновите с помощью "git pull".',
+  'Running via npx, update not applicable.':
+    'Запущено через npx, обновление неприменимо.',
+  'Running via pnpx, update not applicable.':
+    'Запущено через pnpx, обновление неприменимо.',
+  'Running via bunx, update not applicable.':
+    'Запущено через bunx, обновление неприменимо.',
+  'Installed via Homebrew. Please update with "brew upgrade".':
+    'Установлено через Homebrew. Обновите с помощью "brew upgrade".',
+  "Locally installed. Please update via your project's package.json.":
+    'Установлено локально. Обновите через package.json вашего проекта.',
+  'Update requires sudo. Please run:':
+    'Для обновления требуется sudo. Выполните:',
+  'Standalone install detected. Attempting to automatically update now...':
+    'Обнаружена автономная установка. Выполняется попытка автоматического обновления...',
+  'Standalone install detected. Please rerun the standalone installer to update:':
+    'Обнаружена автономная установка. Повторно запустите автономный установщик для обновления:',
+  'Run the following to update:': 'Выполните следующую команду для обновления:',
+  'Unable to auto-update this standalone installation. Please reinstall from:':
+    'Невозможно автоматически обновить эту автономную установку. Переустановите с:',
+  'Manual update required. Please reinstall Qwen Code.':
+    'Требуется ручное обновление. Переустановите Qwen Code.',
+
+  // ============================================================================
+  // reload-plugins command
+  // ============================================================================
+  '{{count}} extension': '{{count}} extension',
+  '{{count}} extensions': '{{count}} extensions',
+  '{{count}} command': '{{count}} command',
+  '{{count}} commands': '{{count}} commands',
+  '{{count}} skill': '{{count}} skill',
+  '{{count}} skills': '{{count}} skills',
+  '{{count}} agent': '{{count}} agent',
+  '{{count}} agents': '{{count}} agents',
+  '{{count}} hook': '{{count}} hook',
+  '{{count}} hooks': '{{count}} hooks',
+  '{{count}} extension MCP server': '{{count}} extension MCP server',
+  '{{count}} extension MCP servers': '{{count}} extension MCP servers',
+  '{{count}} extension LSP server': '{{count}} extension LSP server',
+  '{{count}} extension LSP servers': '{{count}} extension LSP servers',
+  'Reload extension changes from disk': 'Reload extension changes from disk',
+  'Reloaded extensions: {{summary}}': 'Reloaded extensions: {{summary}}',
+  'Reload failed: {{message}}': 'Reload failed: {{message}}',
+  'Reload failed.': 'Reload failed.',
+  'Extensions changed on disk. Run /reload-plugins to apply updates.':
+    'Extensions changed on disk. Run /reload-plugins to apply updates.',
+  'Failed to refresh extension content: {{message}}. Run /reload-plugins to apply updates.':
+    'Failed to refresh extension content: {{message}}. Run /reload-plugins to apply updates.',
+  'Failed to refresh extension content. Run /reload-plugins to apply updates.':
+    'Failed to refresh extension content. Run /reload-plugins to apply updates.',
+  'Extension reload did not complete. Run /reload-plugins to try again.':
+    'Extension reload did not complete. Run /reload-plugins to try again.',
 };

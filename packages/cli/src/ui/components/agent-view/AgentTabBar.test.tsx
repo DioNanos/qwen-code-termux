@@ -47,6 +47,7 @@ const pressKey = (overrides: Partial<Key>) => {
 describe('AgentTabBar', () => {
   const setAgentTabBarFocused = vi.fn();
   const setLivePanelFocused = vi.fn();
+  const setPillFocused = vi.fn();
 
   // Point the mocked view state at a given tab; tab bar starts focused.
   const setActiveView = (activeView: string) =>
@@ -85,10 +86,11 @@ describe('AgentTabBar', () => {
       setAgentTabBarFocused,
     } as never);
     vi.mocked(useBackgroundTaskViewState).mockReturnValue({
-      entries: [{ kind: 'agent', agentId: 'bg-agent' }],
+      entries: [{ kind: 'agent', agentId: 'bg-agent', status: 'running' }],
     } as never);
     vi.mocked(useBackgroundTaskViewActions).mockReturnValue({
       setLivePanelFocused,
+      setPillFocused,
     } as never);
     vi.mocked(useUIState).mockReturnValue({
       embeddedShellFocused: false,
@@ -145,13 +147,52 @@ describe('AgentTabBar', () => {
     expect(setLivePanelFocused).not.toHaveBeenCalled();
   });
 
-  it('Down (↓ / Ctrl+N) is a no-op — the tab bar is the bottom of the focus chain', () => {
-    // Default mock has a bg agent roster present; Down must still do nothing
-    // (the panel is reached via ↑, not by hopping down off the bottom).
+  it('Up ignores terminal bg agents after the live panel visibility window (#5067)', () => {
+    setActiveView('main');
+    vi.mocked(useBackgroundTaskViewState).mockReturnValue({
+      entries: [
+        {
+          kind: 'agent',
+          agentId: 'done-bg-agent',
+          status: 'completed',
+          endTime: Date.now() - 9000,
+        },
+      ],
+    } as never);
+    render(<AgentTabBar />);
+
+    pressKey({ name: 'up', sequence: '[A' });
+    expect(setAgentTabBarFocused).toHaveBeenCalledWith(false);
+    expect(setLivePanelFocused).not.toHaveBeenCalled();
+  });
+
+  it('Down (↓ / Ctrl+N) descends into the background-tasks pill when one is shown', () => {
+    // Default mock has bg entries → the pill is rendered. Down releases tab-bar
+    // focus and hands it to the pill, completing the chain BackgroundTasksPill
+    // documents (Composer ↓ → AgentTabBar ↓ → Pill ↓ → Dialog).
+    render(<AgentTabBar />);
+
+    pressKey({ name: 'down', sequence: '[B' });
+    expect(setAgentTabBarFocused).toHaveBeenCalledWith(false);
+    expect(setPillFocused).toHaveBeenCalledWith(true);
+    expect(setLivePanelFocused).not.toHaveBeenCalled();
+
+    // Ctrl+N is the readline alias for Down and must behave identically.
+    pressKey({ name: 'n', ctrl: true });
+    expect(setPillFocused).toHaveBeenCalledTimes(2);
+  });
+
+  it('Down is a no-op when no background-tasks pill is shown (tab bar is the bottom)', () => {
+    // With no bg entries the pill is not rendered, so there is nothing below
+    // the tab bar to descend into — Down must do nothing.
+    vi.mocked(useBackgroundTaskViewState).mockReturnValue({
+      entries: [],
+    } as never);
     render(<AgentTabBar />);
 
     pressKey({ name: 'down', sequence: '[B' });
     pressKey({ name: 'n', ctrl: true });
+    expect(setPillFocused).not.toHaveBeenCalled();
     expect(setLivePanelFocused).not.toHaveBeenCalled();
     expect(setAgentTabBarFocused).not.toHaveBeenCalled();
   });

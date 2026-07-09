@@ -27,6 +27,7 @@ import {
   SPAN_TOOL_EXECUTION,
 } from './constants.js';
 import { clearDetailedSpanState } from './detailed-span-attributes.js';
+import { ApiRequestPhase, recordApiRequestBreakdown } from './metrics.js';
 import { isTelemetrySdkInitialized } from './sdk.js';
 import { getCurrentSessionId, setSessionContext } from './session-context.js';
 import { createDebugLogger } from '../utils/debugLogger.js';
@@ -113,6 +114,8 @@ export interface LLMRequestMetadata {
   errorType?: string;
   /** HTTP status code from the provider error response. */
   errorStatusCode?: number;
+  /** Config reference for Phase 4c metric recording (recordApiRequestBreakdown). */
+  config?: Config;
 }
 
 export interface ToolSpanMetadata {
@@ -712,6 +715,40 @@ export function endLLMRequestSpan(
 
     spanCtx.span.setAttributes(endAttributes);
 
+    // Phase 4c: record per-phase breakdown histogram.
+    // Isolated in its own try/catch so metric failures cannot affect span status.
+    try {
+      if (metadata?.config && metadata.success) {
+        const model = String(spanCtx.attributes['qwen-code.model'] ?? '');
+        if (metadata.requestSetupMs !== undefined) {
+          recordApiRequestBreakdown(metadata.config, metadata.requestSetupMs, {
+            model,
+            phase: ApiRequestPhase.REQUEST_PREPARATION,
+          });
+        }
+        if (metadata.ttftMs !== undefined) {
+          recordApiRequestBreakdown(metadata.config, metadata.ttftMs, {
+            model,
+            phase: ApiRequestPhase.NETWORK_LATENCY,
+          });
+        }
+        const breakdownSamplingMs =
+          metadata.ttftMs !== undefined
+            ? Math.max(0, duration - metadata.ttftMs)
+            : undefined;
+        if (breakdownSamplingMs !== undefined && breakdownSamplingMs > 0) {
+          recordApiRequestBreakdown(metadata.config, breakdownSamplingMs, {
+            model,
+            phase: ApiRequestPhase.RESPONSE_PROCESSING,
+          });
+        }
+      }
+    } catch (error) {
+      debugLogger.warn(
+        `Failed to record API request breakdown histogram: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     if (metadata === undefined || metadata.success) {
       spanCtx.span.setStatus({ code: SpanStatusCode.OK });
     } else {
@@ -1024,8 +1061,16 @@ export function startToolBlockedOnUserSpan(
   const ctx = parentSpanCtx
     ? trace.setSpan(otelContext.active(), parentSpanCtx.span)
     : resolveParentContext(undefined);
+  const sessionParentCtx =
+    parentSpanCtx ??
+    subagentContext.getStore() ??
+    interactionContext.getStore() ??
+    undefined;
+  const sessionId = resolveSessionId(sessionParentCtx);
 
-  const attributes: Attributes = {};
+  const attributes: Attributes = {
+    ...(sessionId ? { 'session.id': sessionId } : {}),
+  };
   if (attrs?.tool_name !== undefined) attributes['tool.name'] = attrs.tool_name;
   if (attrs?.call_id !== undefined) attributes['tool.call_id'] = attrs.call_id;
 
@@ -1149,8 +1194,10 @@ export function startHookSpan(opts: StartHookSpanOptions): Span {
     interactionContext.getStore() ??
     undefined;
   const ctx = resolveParentContext(parentCtx);
+  const sessionId = resolveSessionId(parentCtx);
 
   const attributes: Attributes = {
+    ...(sessionId ? { 'session.id': sessionId } : {}),
     hook_event: opts.hookEvent,
     'tool.name': opts.toolName,
   };

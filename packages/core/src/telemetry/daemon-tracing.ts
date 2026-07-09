@@ -19,6 +19,10 @@ import { logs, type LogAttributes } from '@opentelemetry/api-logs';
 import { SERVICE_NAME } from './constants.js';
 import { isTelemetrySdkInitialized } from './sdk.js';
 import { truncateSpanError } from './session-tracing.js';
+import {
+  formatTraceparent,
+  getActiveSpanTraceContext,
+} from './trace-context.js';
 
 export const DAEMON_TRACEPARENT_META_KEY = 'qwen.telemetry.traceparent';
 export const DAEMON_TRACESTATE_META_KEY = 'qwen.telemetry.tracestate';
@@ -54,13 +58,6 @@ function errorType(error: unknown): string {
 
 const INVALID_TRACE_ID = '0'.repeat(32);
 const INVALID_SPAN_ID = '0'.repeat(16);
-
-function activeSpanContextIsValid(): boolean {
-  const span = trace.getSpan(otelContext.active());
-  if (!span) return false;
-  const ctx = span.spanContext();
-  return ctx.traceId !== INVALID_TRACE_ID && ctx.spanId !== INVALID_SPAN_ID;
-}
 
 function stripReservedTraceMeta(meta: unknown): Record<string, unknown> {
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
@@ -241,22 +238,12 @@ export async function runWithDaemonTelemetryContext<T>(
 
 export function injectDaemonTraceContext<T extends object>(request: T): T {
   const currentMeta = (request as { _meta?: unknown })._meta;
-
-  if (!activeSpanContextIsValid()) {
-    return currentMeta
-      ? { ...request, _meta: stripReservedTraceMeta(currentMeta) }
-      : request;
-  }
-
   const nextMeta = stripReservedTraceMeta(currentMeta);
+
   try {
-    const carrier: Record<string, string> = {};
-    propagation.inject(otelContext.active(), carrier);
-    if (carrier['traceparent']) {
-      nextMeta[DAEMON_TRACEPARENT_META_KEY] = carrier['traceparent'];
-    }
-    if (carrier['tracestate']) {
-      nextMeta[DAEMON_TRACESTATE_META_KEY] = carrier['tracestate'];
+    const ctx = getActiveSpanTraceContext();
+    if (ctx) {
+      nextMeta[DAEMON_TRACEPARENT_META_KEY] = formatTraceparent(ctx);
     }
   } catch {
     // Telemetry must not affect prompt forwarding.
@@ -323,6 +310,20 @@ export interface DaemonBridgeTelemetryMetrics {
   promptQueueWait(durationMs: number): void;
   promptDuration(durationMs: number): void;
   cancelled(): void;
+  /**
+   * Per-round model token usage (input/output token increments) observed at the
+   * bridge's session/update fan-in, from `agent_message_chunk._meta.usage`.
+   * Values are per-round increments, not cumulative. `durationMs` is the same
+   * frame's `_meta.durationMs` (the LLM API round-trip time), present only when
+   * the emitter stamped it. Optional: only the daemon host wires it (for the
+   * Daemon Status token-burn / LLM-latency charts); embedded/test callers may
+   * omit it.
+   */
+  tokenUsage?(
+    inputTokens: number,
+    outputTokens: number,
+    durationMs?: number,
+  ): void;
 }
 
 export function createDaemonBridgeTelemetry(): {

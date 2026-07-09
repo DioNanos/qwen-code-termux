@@ -8,13 +8,10 @@ import {
   type KeyboardEvent,
 } from 'react';
 import type { DaemonSessionTaskStatus } from '@qwen-code/sdk/daemon';
-import { useActions, useConnection } from '@qwen-code/webui/daemon-react-sdk';
+import { useConnection } from '@qwen-code/webui/daemon-react-sdk';
 import { useI18n } from '../i18n';
-import { TASKS_STATUS_ACTIVE_EVENT } from './messages/TasksStatusMessage';
 import styles from './StatusBar.module.css';
 
-const TASKS_POLL_INTERVAL_MS = 3000;
-const MAX_EMPTY_TASK_POLLS = 2;
 const GOAL_PILL_INTERVAL_MS = 1000;
 
 export interface StatusBarHandle {
@@ -43,21 +40,26 @@ function getModeIndicator(
 }
 
 interface StatusBarProps {
-  escapeHint?: boolean;
   onSelectMode: () => void;
   /** Open the model picker so the model can be chosen with the mouse. */
   onSelectModel: () => void;
   /** Show the context-usage breakdown, exactly like typing /context. */
   onShowContext: () => void;
-  /** Open the inline settings panel so settings are reachable with the mouse. */
+  /** Open the settings dialog so settings are reachable with the mouse. */
   onOpenSettings: () => void;
   onOpenTasks?: () => void;
   onReturnToInput?: (text?: string) => void;
-  taskActivityKey?: string;
+  tasks: readonly DaemonSessionTaskStatus[];
   activeGoal?: {
     condition: string;
     setAt: number;
   } | null;
+  /** Hide the settings gear button (e.g. when /settings is in hiddenSlashCommands). */
+  hideSettings?: boolean;
+  /** Toggle the keyboard-shortcuts panel (same as typing `?` in the editor). */
+  onToggleShortcuts?: () => void;
+  /** Hide secondary footer hints/details for the chat composer layout. */
+  compact?: boolean;
 }
 
 // Feather "settings" gear, stroke-based like PromptChevron so it inherits
@@ -143,12 +145,6 @@ export function getTaskPillLabel(
   });
 }
 
-function hasActiveTask(tasks: readonly DaemonSessionTaskStatus[]): boolean {
-  return tasks.some(
-    (task) => task.status === 'running' || task.status === 'paused',
-  );
-}
-
 function formatGoalElapsed(ms: number): string {
   if (ms < 1000) return '';
   const seconds = Math.floor(ms / 1000);
@@ -162,20 +158,21 @@ function formatGoalElapsed(ms: number): string {
 export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
   function StatusBar(
     {
-      escapeHint,
       onSelectMode,
       onSelectModel,
       onShowContext,
       onOpenSettings,
       onOpenTasks,
       onReturnToInput,
-      taskActivityKey,
+      tasks,
       activeGoal,
+      hideSettings,
+      onToggleShortcuts,
+      compact = false,
     },
     ref,
   ) {
     const connection = useConnection();
-    const actions = useActions();
     const connected = connection.status === 'connected';
     const currentModel = connection.currentModel ?? '';
     const currentMode = connection.currentMode ?? '';
@@ -185,87 +182,8 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
     const pct = contextWindow > 0 ? (tokenCount / contextWindow) * 100 : 0;
     const pctDisplay = pct.toFixed(1);
     const modeIndicator = getModeIndicator(currentMode, t);
-    const [tasks, setTasks] = useState<DaemonSessionTaskStatus[]>([]);
-    const [pollingActive, setPollingActive] = useState(false);
-    const [tasksPanelActive, setTasksPanelActive] = useState(false);
     const [, setGoalTick] = useState(0);
-    const emptyPollsRef = useRef(0);
-    const tasksRefreshInFlightRef = useRef(false);
     const taskPillRef = useRef<HTMLButtonElement>(null);
-
-    useEffect(() => {
-      if (!connected) {
-        setTasks([]);
-        setPollingActive(false);
-        emptyPollsRef.current = 0;
-        return;
-      }
-    }, [connected]);
-
-    useEffect(() => {
-      if (!connected || !taskActivityKey) return;
-      emptyPollsRef.current = 0;
-      setPollingActive(true);
-    }, [connected, taskActivityKey]);
-
-    useEffect(() => {
-      if (tasksPanelActive) return;
-      if (!connected || !pollingActive) return;
-
-      let disposed = false;
-      const refresh = () => {
-        if (tasksRefreshInFlightRef.current) return;
-        tasksRefreshInFlightRef.current = true;
-        actions
-          .getTasks()
-          .then((snapshot) => {
-            if (disposed) return;
-            setTasks(snapshot.tasks);
-            if (snapshot.tasks.length === 0) {
-              emptyPollsRef.current += 1;
-              if (emptyPollsRef.current >= MAX_EMPTY_TASK_POLLS) {
-                setPollingActive(false);
-              }
-              return;
-            }
-            emptyPollsRef.current = 0;
-            if (!hasActiveTask(snapshot.tasks)) {
-              setPollingActive(false);
-            }
-          })
-          .catch((error: unknown) => {
-            if (disposed) return;
-            console.warn('[web-shell] failed to refresh tasks:', error);
-          })
-          .finally(() => {
-            tasksRefreshInFlightRef.current = false;
-          });
-      };
-
-      refresh();
-      const id = setInterval(refresh, TASKS_POLL_INTERVAL_MS);
-      return () => {
-        disposed = true;
-        clearInterval(id);
-      };
-    }, [actions, connected, pollingActive, tasksPanelActive]);
-
-    useEffect(() => {
-      const onTasksPanelActive = (event: Event) => {
-        const detail = (event as CustomEvent<{ active?: boolean }>).detail;
-        const active = detail?.active === true;
-        setTasksPanelActive(active);
-        if (!active && hasActiveTask(tasks)) {
-          setPollingActive(true);
-        }
-      };
-      window.addEventListener(TASKS_STATUS_ACTIVE_EVENT, onTasksPanelActive);
-      return () =>
-        window.removeEventListener(
-          TASKS_STATUS_ACTIVE_EVENT,
-          onTasksPanelActive,
-        );
-    }, [tasks]);
 
     useEffect(() => {
       if (!activeGoal) return;
@@ -277,12 +195,18 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
     }, [activeGoal]);
 
     const taskPillLabel = useMemo(() => getTaskPillLabel(tasks, t), [tasks, t]);
+    const hasLeftPrefix = !compact && (connected || !!modeIndicator);
     const goalElapsed = activeGoal
       ? formatGoalElapsed(Date.now() - activeGoal.setAt)
       : '';
     const goalLabel = activeGoal
       ? `◎ ${t('goal.statusActive')}${goalElapsed ? ` (${goalElapsed})` : ''}`
       : '';
+    const hasLeftContent = !!taskPillLabel || !compact;
+    const hasRightContent =
+      (!compact && !!currentModel) ||
+      (!compact && contextWindow > 0 && tokenCount > 0) ||
+      !!goalLabel;
 
     useImperativeHandle(
       ref,
@@ -295,6 +219,10 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
       }),
       [taskPillLabel],
     );
+
+    if (!hasLeftContent && !hasRightContent) {
+      return null;
+    }
 
     const handleTaskPillKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
       if (
@@ -332,7 +260,7 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
     return (
       <div className={styles.bar}>
         <div className={styles.left}>
-          {connected && (
+          {connected && !hideSettings && !compact && (
             <button
               type="button"
               className={styles.settingsButton}
@@ -346,11 +274,7 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
               <GearIcon />
             </button>
           )}
-          {escapeHint ? (
-            <span className={styles.escapeHint}>
-              {t('editor.escClearHint')}
-            </span>
-          ) : modeIndicator ? (
+          {modeIndicator && !compact && (
             <button
               type="button"
               className={styles.modeButton}
@@ -365,14 +289,33 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
               >
                 {modeIndicator.label}
               </span>
-              <span className={styles.modeHint}>{t('status.modeHint')}</span>
+              {!compact && (
+                <span className={styles.modeHint}>{t('status.modeHint')}</span>
+              )}
             </button>
-          ) : (
-            <span>{t('status.shortcuts')}</span>
+          )}
+          {!compact && (
+            <>
+              {onToggleShortcuts ? (
+                <button
+                  type="button"
+                  className={styles.shortcutsButton}
+                  onClick={onToggleShortcuts}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  aria-haspopup="dialog"
+                  aria-label={t('status.shortcuts')}
+                >
+                  {t('status.shortcuts')}
+                </button>
+              ) : (
+                <span>{t('status.shortcuts')}</span>
+              )}
+            </>
           )}
           {taskPillLabel && (
             <>
-              <span className={styles.separator}>·</span>
+              {hasLeftPrefix && <span className={styles.separator}>·</span>}
               <button
                 ref={taskPillRef}
                 type="button"
@@ -388,12 +331,7 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
         </div>
 
         <div className={styles.right}>
-          {!connected && (
-            <span className={styles.disconnected}>
-              {t('status.disconnected')}
-            </span>
-          )}
-          {currentModel && (
+          {!compact && currentModel && (
             <button
               type="button"
               className={styles.modelButton}
@@ -406,7 +344,7 @@ export const StatusBar = forwardRef<StatusBarHandle, StatusBarProps>(
               <span className={styles.model}>{currentModel}</span>
             </button>
           )}
-          {contextWindow > 0 && tokenCount > 0 && (
+          {!compact && contextWindow > 0 && tokenCount > 0 && (
             <button
               type="button"
               className={styles.contextButton}

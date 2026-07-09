@@ -67,12 +67,12 @@ Fork delta is verifiable end-to-end with:
 bash scripts/check-termux-patches.sh
 ```
 
-(16 markers across `getPty.ts`, `termux-detect.ts`, `termux-runtime.ts`, `tts-notification.ts`, `cli/index.ts`, `installationInfo.ts`, `scripts/`, `package.json`)
+(17 markers across `getPty.ts`, `termux-detect.ts`, `termux-runtime.ts`, `tts-notification.ts`, `cli/index.ts`, `installationInfo.ts`, `scripts/`, `package.json`)
 
 ## Releases and Updates
 
 - Latest GitHub release: [releases/latest](https://github.com/DioNanos/qwen-code-termux/releases/latest)
-- Upstream baseline: [`QwenLM/qwen-code` v0.18.0](https://github.com/QwenLM/qwen-code/releases/tag/v0.18.0), packaged as `0.18.0-termux` (npm `next`; promoted to `latest` after validation)
+- Upstream baseline: [`QwenLM/qwen-code` v0.19.8](https://github.com/QwenLM/qwen-code/releases/tag/v0.19.8), packaged as `0.19.8-termux` (npm `next`; promoted to `latest` after validation)
 - npm package: [`@mmmbuto/qwen-code-termux`](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
 Maintainer publish flow:
@@ -138,4 +138,4 @@ See [LICENSE](./LICENSE).
 
 ---
 
-*Per aspera ad astra.*
+_Per aspera ad astra._
