@@ -1,19 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SetStateAction } from 'react';
-import type { RefObject } from 'react';
+import type { RefObject, ReactNode } from 'react';
 import type { StateEffect } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import type {
   WebShellAtItem,
   WebShellAtProvider,
+  WebShellAtProviderTab,
+  WebShellBuiltinAtProviderId,
+  WebShellBuiltinAtProvidersConfig,
   WebShellComposerTag,
 } from '../customization';
 import { useI18n } from '../i18n';
 
 export interface AtMentionProviderView {
   id: string;
-  label: string;
+  provider: WebShellAtProvider;
+  label: ReactNode;
+  textValue: string;
   description?: string;
+  tabs?: readonly WebShellAtProviderTab[];
+  selectedTabId?: string;
+  renderItem?: WebShellAtProvider['renderItem'];
 }
 
 export interface AtMentionItem extends WebShellAtItem {
@@ -38,6 +46,8 @@ export interface AtMentionMenuState {
   // search mode owns the panel input; context mode mirrors text typed in the editor.
   inputMode?: 'search' | 'context';
   validateMcpServer?: boolean;
+  tabs?: readonly WebShellAtProviderTab[];
+  selectedTabId?: string;
 }
 
 type GlobWorkspaceFn = (
@@ -154,6 +164,8 @@ export interface UseAtMentionMenuOptions {
   disabledRef: RefObject<boolean>;
   shellModeRef: RefObject<boolean>;
   workspaceActionsRef: RefObject<AtMentionWorkspaceActions | undefined>;
+  workspaceKey?: string;
+  builtinProviders?: WebShellBuiltinAtProvidersConfig;
   providers?: readonly WebShellAtProvider[];
   createInlineTagEffect?: (range: {
     from: number;
@@ -170,17 +182,118 @@ const FILE_ROOT_ITEM_LIMIT = ITEM_LIMIT + 1;
 export const FILE_PROVIDER_ID = 'files';
 const EXTENSIONS_PROVIDER_ID = 'extensions';
 export const MCP_RESOURCES_PROVIDER_ID = 'mcp-resources';
+const BUILTIN_PROVIDER_IDS: readonly WebShellBuiltinAtProviderId[] = [
+  FILE_PROVIDER_ID,
+  EXTENSIONS_PROVIDER_ID,
+  MCP_RESOURCES_PROVIDER_ID,
+];
 const ESC = String.fromCharCode(27);
 const ANSI_RE = new RegExp(`${ESC}(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])`, 'g');
 // Strip zero-width and BiDi controls so provider text cannot spoof paths/URIs.
 const BIDI_CONTROL_RE = /[\u200B\u200E\u200F\u061C\u2066-\u2069\u202A-\u202E]/g;
 const SAFE_DISPLAY_FALLBACK = '[invalid]';
 const AT_REFERENCE_UNSAFE_CHARS = /[^\p{L}\p{N}_./-]/gu;
-function isBuiltinProviderId(providerId: string): boolean {
+
+function shallowEqualMenuState(
+  current: AtMentionMenuState | null,
+  next: AtMentionMenuState | null,
+): boolean {
+  if (current === next) return true;
+  if (!current || !next) return false;
+  const keys = Object.keys(current) as Array<keyof AtMentionMenuState>;
   return (
-    providerId === FILE_PROVIDER_ID ||
-    providerId === EXTENSIONS_PROVIDER_ID ||
-    providerId === MCP_RESOURCES_PROVIDER_ID
+    keys.length === Object.keys(next).length &&
+    keys.every((key) => {
+      const currentValue = current[key];
+      const nextValue = next[key];
+      if (Object.is(currentValue, nextValue)) return true;
+      return (
+        Array.isArray(currentValue) &&
+        Array.isArray(nextValue) &&
+        currentValue.length === nextValue.length &&
+        currentValue.every((value, index) => Object.is(value, nextValue[index]))
+      );
+    })
+  );
+}
+
+function equalProviderViews(
+  current: readonly AtMentionProviderView[],
+  next: readonly AtMentionProviderView[],
+): boolean {
+  return (
+    current.length === next.length &&
+    current.every((provider, index) => {
+      const nextProvider = next[index];
+      return (
+        nextProvider !== undefined &&
+        provider.id === nextProvider.id &&
+        provider.textValue === nextProvider.textValue &&
+        Object.is(provider.label, nextProvider.label) &&
+        provider.description === nextProvider.description &&
+        provider.tabs === nextProvider.tabs &&
+        provider.selectedTabId === nextProvider.selectedTabId &&
+        provider.renderItem === nextProvider.renderItem
+      );
+    })
+  );
+}
+
+function isBuiltinProviderId(providerId: string): boolean {
+  return BUILTIN_PROVIDER_IDS.includes(
+    providerId as WebShellBuiltinAtProviderId,
+  );
+}
+
+function isBuiltinProviderEnabled(
+  providerId: WebShellBuiltinAtProviderId,
+  config: WebShellBuiltinAtProvidersConfig | undefined,
+): boolean {
+  if (config === undefined || config === true) return true;
+  if (config === false) return false;
+  if (Array.isArray(config)) {
+    return (config as readonly WebShellBuiltinAtProviderId[]).includes(
+      providerId,
+    );
+  }
+  const options = config as Exclude<
+    WebShellBuiltinAtProvidersConfig,
+    boolean | readonly WebShellBuiltinAtProviderId[]
+  >;
+  if (options.enabled === false) return false;
+  if (options.include && !options.include.includes(providerId)) return false;
+  if (options.exclude?.includes(providerId)) return false;
+  return true;
+}
+
+function getRegisteredCustomProviders(
+  customProviders: readonly WebShellAtProvider[],
+): WebShellAtProvider[] {
+  const registeredIds = new Set<string>(BUILTIN_PROVIDER_IDS);
+  const accepted: WebShellAtProvider[] = [];
+  for (const provider of customProviders) {
+    if (registeredIds.has(provider.id)) {
+      console.error(
+        `[@mention] duplicate provider id="${provider.id}" ignored`,
+      );
+      continue;
+    }
+    registeredIds.add(provider.id);
+    accepted.push(provider);
+  }
+  return accepted;
+}
+
+function getProviderTextValue(provider: WebShellAtProvider): string {
+  return (
+    (provider.textValue === undefined
+      ? undefined
+      : sanitizeDisplayText(provider.textValue)) ??
+    (typeof provider.label === 'string'
+      ? (sanitizeDisplayText(provider.label) ?? undefined)
+      : undefined) ??
+    safeDisplayText(provider.id) ??
+    SAFE_DISPLAY_FALLBACK
   );
 }
 
@@ -203,7 +316,17 @@ function normalizeDirectoryPath(path: string): string {
 }
 
 function escapeGlobQuery(query: string): string {
-  return query.replace(/[\\*?[{\]}]/g, '\\$&');
+  return Array.from(query, (char) => {
+    if (/[a-z]/i.test(char)) {
+      return `[${char.toLowerCase()}${char.toUpperCase()}]`;
+    }
+    return /[\\*?[{\]}()!@+|]/.test(char) ? `\\${char}` : char;
+  }).join('');
+}
+
+function fileSearchGlobPattern(query: string): string {
+  const normalizedQuery = unescapeAtReferenceText(query).replace(/^\.\//, '');
+  return normalizedQuery ? `**/*${escapeGlobQuery(normalizedQuery)}*` : '**/*';
 }
 
 function matchesQuery(query: string, ...values: Array<string | undefined>) {
@@ -429,6 +552,8 @@ function sanitizeComposerTag(
     value: tag.value === undefined ? undefined : sanitizeDisplayText(tag.value),
     removable: tag.removable,
     kind,
+    icon: tag.icon,
+    metadata: tag.metadata,
     serialized: sanitizeOptionalInsertText(tag.serialized),
   };
 }
@@ -444,8 +569,17 @@ function sanitizeAtMentionItem(
       item.description === undefined
         ? undefined
         : sanitizeDisplayText(item.description),
+    subtitle:
+      item.subtitle === undefined
+        ? undefined
+        : sanitizeDisplayText(item.subtitle),
     detail:
       item.detail === undefined ? undefined : sanitizeDisplayText(item.detail),
+    icon: item.icon,
+    iconTooltip:
+      item.iconTooltip === undefined
+        ? undefined
+        : sanitizeDisplayText(item.iconTooltip),
     insertText:
       item.insertText === undefined
         ? undefined
@@ -520,7 +654,7 @@ function createFileProvider(
       const actions = getActions();
       const currentDir = normalizeDirectoryPath(getCurrentDir());
       const listDirectory = actions?.listDirectory;
-      if (listDirectory) {
+      if (listDirectory && (!query || !actions?.globWorkspace)) {
         try {
           const { dirPath, entryQuery } = splitFileQuery(query, currentDir);
           const lowerQuery = entryQuery.toLowerCase();
@@ -583,7 +717,7 @@ function createFileProvider(
         return [];
       }
       try {
-        const pattern = query ? `${escapeGlobQuery(query)}*` : '**/*';
+        const pattern = fileSearchGlobPattern(query);
         const result = await getCached(getCache().globResults, pattern, () =>
           globWorkspace(pattern, { maxResults: ITEM_LIMIT, signal }),
         );
@@ -636,6 +770,7 @@ function createExtensionProvider(
             const insertName = escapeAtReferenceText(
               sanitizeInsertText(ext.name),
             );
+            const serialized = `@ext:${insertName}`;
             const displayName = sanitizeDisplayText(ext.displayName ?? '');
             const description = sanitizeDisplayText(ext.description ?? '');
             return {
@@ -649,7 +784,13 @@ function createExtensionProvider(
                 displayName && description
                   ? `${displayName} - ${description}`
                   : (displayName ?? description),
-              insertText: `@ext:${insertName} `,
+              composerTag: {
+                id: `extension:${serialized}`,
+                kind: 'extension',
+                value: displayName || label,
+                serialized,
+              },
+              insertText: `${serialized} `,
             };
           })
           .filter((ext) => {
@@ -758,6 +899,8 @@ export function useAtMentionMenu({
   disabledRef,
   shellModeRef,
   workspaceActionsRef,
+  workspaceKey,
+  builtinProviders,
   providers = EMPTY_PROVIDERS,
   createInlineTagEffect,
 }: UseAtMentionMenuOptions) {
@@ -776,7 +919,7 @@ export function useAtMentionMenu({
   const preserveProviderSelectionRef = useRef(false);
 
   const allProviders = useMemo(() => {
-    const builtinProviders = [
+    const builtinAtProviders = [
       createFileProvider(
         () => workspaceActionsRef.current,
         () => fileDirectoryRef.current,
@@ -797,15 +940,17 @@ export function useAtMentionMenu({
         t('at.category.mcpResources.description'),
         (count) => t('mcp.resourceCount', { count }),
       ),
-    ];
-    const builtinProviderIds = new Set(
-      builtinProviders.map((provider) => provider.id),
+    ].filter((provider) =>
+      isBuiltinProviderEnabled(
+        provider.id as WebShellBuiltinAtProviderId,
+        builtinProviders,
+      ),
     );
     return [
-      ...builtinProviders,
-      ...providers.filter((provider) => !builtinProviderIds.has(provider.id)),
+      ...builtinAtProviders,
+      ...getRegisteredCustomProviders(providers),
     ].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  }, [providers, t, workspaceActionsRef]);
+  }, [builtinProviders, providers, t, workspaceActionsRef]);
   const allProvidersRef = useRef(allProviders);
   allProvidersRef.current = allProviders;
 
@@ -813,12 +958,18 @@ export function useAtMentionMenu({
     () =>
       allProviders.map((provider) => ({
         id: provider.id,
+        provider,
+        textValue: getProviderTextValue(provider),
         label:
-          sanitizeDisplayText(provider.label) ?? safeDisplayText(provider.id),
+          typeof provider.label === 'string'
+            ? getProviderTextValue(provider)
+            : provider.label,
         description:
           provider.description === undefined
             ? undefined
             : sanitizeDisplayText(provider.description),
+        tabs: provider.tabs,
+        renderItem: provider.renderItem,
       })),
     [allProviders],
   );
@@ -829,11 +980,25 @@ export function useAtMentionMenu({
     (next: SetStateAction<AtMentionMenuState | null>) => {
       const resolved =
         typeof next === 'function' ? next(stateRef.current) : next;
+      if (shallowEqualMenuState(stateRef.current, resolved)) return;
       stateRef.current = resolved;
       setState(resolved);
     },
     [],
   );
+
+  useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+    fileDirectoryRef.current = '.';
+    builtinCacheRef.current = createBuiltinProviderCache();
+    stateRef.current = null;
+    setState(null);
+  }, [workspaceKey]);
 
   const clearPendingLoad = useCallback(() => {
     abortRef.current?.abort();
@@ -846,6 +1011,16 @@ export function useAtMentionMenu({
 
   const close = useCallback(
     (options: { preserveProviderSelection?: boolean } = {}) => {
+      if (
+        stateRef.current === null &&
+        abortRef.current === null &&
+        searchTimerRef.current === null &&
+        lastSelectedProviderIdRef.current === null &&
+        lastSelectedMcpServerNameRef.current === null &&
+        !preserveProviderSelectionRef.current
+      ) {
+        return;
+      }
       clearPendingLoad();
       builtinCacheRef.current = createBuiltinProviderCache();
       const preserveSelection =
@@ -878,6 +1053,8 @@ export function useAtMentionMenu({
         mcpServerName: undefined,
         fileDirectory: undefined,
         inputMode: undefined,
+        tabs: undefined,
+        selectedTabId: undefined,
       });
       return 'categories';
     }
@@ -908,6 +1085,7 @@ export function useAtMentionMenu({
       if (
         current?.level !== 'items' ||
         current.selectedProviderId !== providerId ||
+        current.selectedTabId !== baseState.selectedTabId ||
         current.itemMode !== baseState.itemMode ||
         current.mcpServerName !== baseState.mcpServerName ||
         current.fileDirectory !== baseState.fileDirectory
@@ -934,6 +1112,9 @@ export function useAtMentionMenu({
       const actions = workspaceActionsRef.current;
       const cache = builtinCacheRef.current;
       if (providerId === FILE_PROVIDER_ID) {
+        if (query && actions?.globWorkspace) {
+          return cache.globResults.has(fileSearchGlobPattern(query));
+        }
         if (actions?.listDirectory) {
           const { dirPath } = splitFileQuery(
             query,
@@ -941,7 +1122,7 @@ export function useAtMentionMenu({
           );
           return cache.directories.has(dirPath);
         }
-        const pattern = query ? `${escapeGlobQuery(query)}*` : '**/*';
+        const pattern = fileSearchGlobPattern(query);
         return (
           Boolean(actions?.globWorkspace) && cache.globResults.has(pattern)
         );
@@ -988,7 +1169,13 @@ export function useAtMentionMenu({
         setMenu({ ...baseState, items: previousItems, loading: true });
       }
       Promise.resolve()
-        .then(() => provider.search({ query, signal: abort.signal }))
+        .then(() =>
+          provider.search({
+            query,
+            signal: abort.signal,
+            tabId: baseState.selectedTabId,
+          }),
+        )
         .then((items) => {
           if (abort.signal.aborted || requestIdRef.current !== requestId) {
             return;
@@ -1292,9 +1479,24 @@ export function useAtMentionMenu({
         });
         return true;
       }
-      const filteredProviders = providerViewsRef.current.filter((provider) => {
-        return matchesQuery(parsed.query, provider.label, provider.description);
-      });
+      const filteredProviders = providerViewsRef.current
+        .filter((provider) => {
+          return matchesQuery(
+            parsed.query,
+            provider.textValue,
+            provider.description,
+          );
+        })
+        .slice(0, ITEM_LIMIT);
+      if (
+        current?.level === 'categories' &&
+        current.from === parsed.from &&
+        current.to === parsed.to &&
+        current.query === parsed.query &&
+        equalProviderViews(current.providers, filteredProviders)
+      ) {
+        return true;
+      }
       if (filteredProviders.length === 0 && parsed.query) {
         const insertedReference = splitInsertedReferenceQuery(
           parsed.query,
@@ -1470,11 +1672,14 @@ export function useAtMentionMenu({
       if (provider.id === FILE_PROVIDER_ID) {
         fileDirectoryRef.current = '.';
       }
+      const selectedTabId = provider.tabs?.find((tab) => !tab.disabled)?.id;
       scheduleLoadItems(provider.id, current.query, {
         ...current,
         level: 'items',
         selectedProviderId: provider.id,
         selectedIndex: 0,
+        tabs: provider.tabs,
+        selectedTabId,
         itemMode:
           provider.id === MCP_RESOURCES_PROVIDER_ID ? 'mcpServers' : 'default',
         mcpServerName: undefined,
@@ -1519,6 +1724,30 @@ export function useAtMentionMenu({
       return true;
     },
     [scheduleLoadItems, scheduleLoadMcpResourceItems],
+  );
+
+  const selectTab = useCallback(
+    (tabId: string) => {
+      const current = stateRef.current;
+      if (
+        !current ||
+        current.level !== 'items' ||
+        !current.selectedProviderId ||
+        !current.tabs?.some((tab) => tab.id === tabId && !tab.disabled)
+      ) {
+        return false;
+      }
+      if (current.selectedTabId === tabId) return true;
+      const baseState: Omit<AtMentionMenuState, 'items' | 'loading'> = {
+        ...current,
+        selectedTabId: tabId,
+        selectedIndex: 0,
+        inputMode: 'search',
+      };
+      scheduleLoadItems(current.selectedProviderId, current.query, baseState);
+      return true;
+    },
+    [scheduleLoadItems],
   );
 
   const backToCategories = useCallback((): false | 'items' | 'categories' => {
@@ -1568,6 +1797,8 @@ export function useAtMentionMenu({
       mcpServerName: undefined,
       fileDirectory: undefined,
       inputMode: undefined,
+      tabs: undefined,
+      selectedTabId: undefined,
     });
     clearPendingLoad();
     return 'categories';
@@ -1621,9 +1852,13 @@ export function useAtMentionMenu({
         });
         return true;
       }
-      const insert =
+      const rawInsert =
         item.insertText ??
         `@${escapeAtReferenceText(sanitizeInsertText(item.label))} `;
+      const insert =
+        item.composerTag && !/\s$/.test(rawInsert)
+          ? `${rawInsert} `
+          : rawInsert;
       const docLength = view.state.doc.length;
       if (
         current.from < 0 ||
@@ -1696,6 +1931,7 @@ export function useAtMentionMenu({
     select,
     accept,
     enterCategory,
+    selectTab,
     backToCategories,
     updateSearch,
   };

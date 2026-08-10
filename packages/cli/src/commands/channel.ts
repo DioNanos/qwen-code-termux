@@ -3,6 +3,7 @@ import { startCommand } from './channel/start.js';
 import { stopCommand } from './channel/stop.js';
 import { statusCommand } from './channel/status.js';
 import { reloadCommand } from './channel/reload.js';
+import { setCommand } from './channel/set.js';
 import { daemonWorkerCommand } from './channel/daemon-worker.js';
 import {
   pairingListCommand,
@@ -12,7 +13,7 @@ import { configureWeixinCommand } from './channel/configure.js';
 
 const pairingCommand: CommandModule = {
   command: 'pairing',
-  describe: 'Manage DM pairing requests',
+  describe: 'Manage DM and group pairing requests',
   builder: (yargs: Argv) =>
     yargs
       .command(pairingListCommand)
@@ -32,6 +33,7 @@ export const channelCommand: CommandModule = {
       .command(stopCommand)
       .command(statusCommand)
       .command(reloadCommand)
+      .command(setCommand)
       .command(pairingCommand)
       .command(configureWeixinCommand)
       .demandCommand(1, 'You need at least one command before continuing.')

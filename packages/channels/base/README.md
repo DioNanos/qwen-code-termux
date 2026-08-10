@@ -72,9 +72,9 @@ Migration note for existing TypeScript plugins: if your adapter constructor or f
 Channel adapters can run in two host modes:
 
 - `qwen channel start [name]` is the standalone service. It uses `AcpBridge` over a `qwen-code --acp` child process and remains the default channel command.
-- `qwen serve --channel <name>` and `qwen serve --channel all` are experimental daemon-managed modes. `qwen serve` starts one out-of-process channel worker, the worker connects back to the daemon through the SDK, and adapters receive a `DaemonChannelBridge`-backed `ChannelAgentBridge` facade.
+- `qwen serve --channel <name>` and `qwen serve --channel all` are experimental daemon-managed modes. Named channels are grouped by owning workspace and `qwen serve` starts one out-of-process worker per owning runtime. Each worker connects back to the daemon through the SDK, and adapters receive a `DaemonChannelBridge`-backed `ChannelAgentBridge` facade. `--channel all` stays primary-only.
 
-In daemon-managed mode, one daemon is bound to one workspace. Every selected channel's `cwd` must resolve to that same workspace. The optional `shellCommand` method is exposed to adapters only when the daemon advertises the `session_shell_command` capability.
+In daemon-managed mode, every named channel's `cwd` must resolve to exactly one registered, trusted workspace. Its worker receives that runtime's cwd and environment overlay; an ambiguous or untrusted selection fails instead of using primary. The optional `shellCommand` method is exposed to adapters only when the daemon advertises the `session_shell_command` capability.
 
 ## Architecture
 
@@ -120,7 +120,7 @@ Everything between `handleInbound()` and `sendMessage()` is handled by the base 
 | `ChannelPlugin`      | Plugin factory interface (what you export)                               |
 | `Envelope`           | Normalized inbound message format                                        |
 | `SenderPolicy`       | `'allowlist' \| 'pairing' \| 'open'`                                     |
-| `GroupPolicy`        | `'disabled' \| 'allowlist' \| 'open'`                                    |
+| `GroupPolicy`        | `'disabled' \| 'allowlist' \| 'pairing' \| 'open'`                       |
 | `SessionScope`       | `'user' \| 'thread' \| 'single'`                                         |
 | `GroupConfig`        | Per-group settings (e.g. `requireMention`)                               |
 | `SessionTarget`      | Maps a session back to its channel/sender/chat                           |
@@ -263,9 +263,9 @@ constructor(bridge: ChannelAgentBridge, defaultCwd: string, scope?: SessionScope
 constructor(policy: SenderPolicy, allowedUsers?: string[], pairingStore?: PairingStore)
 ```
 
-| Method                         | Description                                                  |
-| ------------------------------ | ------------------------------------------------------------ |
-| `check(senderId, senderName?)` | Returns `{ allowed: boolean, pairingCode?: string \| null }` |
+| Method                         | Description                                                          |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `check(senderId, senderName?)` | Returns `{ allowed: boolean, pairing?: CreatePairingRequestResult }` |
 
 **Policy behavior:**
 
@@ -278,12 +278,12 @@ constructor(policy: SenderPolicy, allowedUsers?: string[], pairingStore?: Pairin
 ### GroupGate
 
 ```typescript
-constructor(policy?: GroupPolicy, groups?: Record<string, GroupConfig>)
+constructor(policy?: GroupPolicy, groups?: Record<string, GroupConfig>, pairingStore?: PairingStore)
 ```
 
-| Method            | Description                                                                                    |
-| ----------------- | ---------------------------------------------------------------------------------------------- |
-| `check(envelope)` | Returns `{ allowed: boolean, reason?: 'disabled' \| 'not_allowlisted' \| 'mention_required' }` |
+| Method                      | Description                                                                                                                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check(envelope, options?)` | Returns the group policy decision and an optional pairing result. Under `pairing`, a mention/reply from an unapproved group creates (or reuses) a pending pairing request; pass `{ createPairingRequest: false }` for read-only probes |
 
 **Policy behavior:**
 
@@ -291,6 +291,7 @@ constructor(policy?: GroupPolicy, groups?: Record<string, GroupConfig>)
 | ----------- | ---------------------------------------- |
 | `disabled`  | All group messages rejected              |
 | `allowlist` | Only groups listed in config are allowed |
+| `pairing`   | A group must be approved once by chat ID |
 | `open`      | All groups allowed                       |
 
 When `requireMention` is `true` (default), group messages are only processed if the bot is @mentioned or the message is a reply to the bot.
@@ -298,17 +299,23 @@ When `requireMention` is `true` (default), group messages are only processed if 
 ### PairingStore
 
 ```typescript
-constructor(channelName: string)
+constructor(channelName: string, workspaceCwd?: string)
 ```
 
-Persists pairing state to `~/.qwen/channels/{channelName}-pairing.json` and `{channelName}-allowlist.json`.
+Persists pending pairing state to `{channelName}-pairing.json`, user approvals to `{channelName}-allowlist.json`, and group approvals to `{channelName}-groups.json`. With `workspaceCwd` (what `ChannelBase` passes — the channel's `cwd`), the files live under the workspace-scoped directory `~/.qwen/channels/<workspace-scope>/` so two workspaces reusing the same channel name never share pairing requests or allowlist entries. Without it, the legacy global `~/.qwen/channels/` layout is used. The first time a given (workspace, channel) pair is constructed, existing legacy global files are copied in once (grandfathering) so already-approved senders stay approved; a per-channel `<channel>.migrated` sentinel in the scope directory marks that decision, after which legacy files are never consulted again for that channel. Channel names are URI-encoded in file names, so a name containing path separators cannot escape the scope directory. `revoke(senderId)` removes the sender only from this store's allowlist and never mutates the legacy global baseline.
 
-| Method                                | Description                                                                                               |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `createRequest(senderId, senderName)` | Generate an 8-char pairing code (or return existing). Returns `null` if 3 pending requests already exist. |
-| `approve(code)`                       | Approve a pairing request, adds sender to allowlist. Returns the request or `null`.                       |
-| `isApproved(senderId)`                | Check if sender is in the approved allowlist                                                              |
-| `listPending()`                       | Get active (non-expired) pending requests                                                                 |
+| Method                                | Description                                                                                                                                                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createRequest(senderId, senderName)` | Generate an 8-char pairing code (or return the existing one). Returns `{ rejected: 'sender_pending' }` if the sender already holds a request, or `{ rejected: 'cap_reached' }` if 3 requests are already pending. |
+| `createGroupRequest(...)`             | Generate a request keyed by stable group ID and record its initiating sender.                                                                                                                                     |
+| `approve(code)`                       | Approve a user or group request and update its corresponding allowlist.                                                                                                                                           |
+| `isApproved(senderId)`                | Check if sender is in the approved allowlist                                                                                                                                                                      |
+| `isGroupApproved(groupId)`            | Check if a group is approved                                                                                                                                                                                      |
+| `listPending()`                       | Get active (non-expired) pending requests                                                                                                                                                                         |
+| `getAllowlist()`                      | Get approved sender IDs                                                                                                                                                                                           |
+| `getGroupAllowlist()`                 | Get approved group IDs                                                                                                                                                                                            |
+| `revoke(senderId)`                    | Remove an approved sender. Returns whether the sender was present.                                                                                                                                                |
+| `revokeGroup(groupId)`                | Remove an approved group. Returns whether the group was present.                                                                                                                                                  |
 
 ## Envelope
 
@@ -320,6 +327,7 @@ interface Envelope {
   senderId: string; // stable, unique sender ID
   senderName: string; // display name
   chatId: string; // distinguishes DMs from groups
+  chatName?: string; // inbound group display name, when provided
   text: string; // message text (@mentions stripped)
   messageId?: string; // platform message ID
   threadId?: string; // for thread-scoped sessions

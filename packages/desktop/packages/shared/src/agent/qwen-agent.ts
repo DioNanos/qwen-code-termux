@@ -7,7 +7,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir, platform, tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -106,9 +106,23 @@ const QWEN_TOOL_RESULT_MISSING_MESSAGE = 'Tool result was not recorded.';
 const MAX_MID_TURN_CONTENT_BUILD_FAILURES = 3;
 const MID_TURN_ATTACHMENT_PROCESSING_FAILURE_TEXT =
   '[Attachment could not be processed]';
+const SESSION_WRITER_ERROR_KINDS = new Set([
+  'session_writer_conflict',
+  'session_writer_lost',
+  'session_transcript_changed',
+  'session_writer_unavailable',
+]);
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (
+    error &&
+    typeof error === 'object' &&
+    typeof (error as JsonRecord).message === 'string'
+  ) {
+    return (error as JsonRecord).message as string;
+  }
+  return String(error);
 }
 
 function getAcpErrorDetail(data: unknown): string | undefined {
@@ -145,6 +159,19 @@ export function formatQwenAcpErrorMessage(error: unknown): string {
   return `${message}: ${detail}`;
 }
 
+function isSessionWriterAcpError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as JsonRecord;
+  const data =
+    record.data && typeof record.data === 'object'
+      ? (record.data as JsonRecord)
+      : undefined;
+  const errorKind = data?.errorKind ?? record.errorKind;
+  return (
+    typeof errorKind === 'string' && SESSION_WRITER_ERROR_KINDS.has(errorKind)
+  );
+}
+
 type AcpPermissionOption = {
   optionId?: string;
   name?: string;
@@ -156,6 +183,7 @@ type PendingPermission = {
     response: RequestPermissionResponse & { answers?: Record<string, string> },
   ) => void;
   options: AcpPermissionOption[];
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 type MiniCollector = {
@@ -182,8 +210,11 @@ type SlashCommandInvocation = {
 };
 
 const MID_TURN_QUEUE_DRAIN_METHOD = 'craft/drainMidTurnQueue';
+const TODO_STOP_GUARD_CONTINUATION_CLAIM_METHOD =
+  'craft/claimTodoStopGuardContinuation';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_INITIALIZE_TIMEOUT_MS = 120_000;
+const PERMISSION_REQUEST_TIMEOUT_MS = 5 * 60_000;
 const INCLUDE_CRAFT_CONTEXT_IN_QWEN_PROMPTS = false;
 const SHARED_ACP_IDLE_TTL_MS = 5 * 60_000;
 
@@ -417,12 +448,18 @@ class SharedQwenAcpProcess {
         const sessionId = asString(record.sessionId);
         const owner = sessionId ? this.sessionOwners.get(sessionId) : undefined;
         if (owner) return owner.onExtMethod(method, record);
+        if (method === TODO_STOP_GUARD_CONTINUATION_CLAIM_METHOD) {
+          return { claimed: false, hasQueuedPrompt: false };
+        }
 
         for (const subscriber of [...this.subscribers]) {
           const result = await subscriber.onExtMethod(method, record);
           if (Object.keys(result).length > 0) return result;
         }
-        return method === MID_TURN_QUEUE_DRAIN_METHOD ? { messages: [] } : {};
+        if (method === MID_TURN_QUEUE_DRAIN_METHOD) {
+          return { messages: [], hasQueuedPrompt: false };
+        }
+        return {};
       },
     };
   }
@@ -612,8 +649,15 @@ async function callQwenSettingsAcpMethod(
     {
       onSessionUpdate: () => {},
       onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
-      onExtMethod: async (extMethod) =>
-        extMethod === MID_TURN_QUEUE_DRAIN_METHOD ? { messages: [] } : {},
+      onExtMethod: async (extMethod) => {
+        if (extMethod === MID_TURN_QUEUE_DRAIN_METHOD) {
+          return { messages: [], hasQueuedPrompt: false };
+        }
+        if (extMethod === TODO_STOP_GUARD_CONTINUATION_CLAIM_METHOD) {
+          return { claimed: false, hasQueuedPrompt: false };
+        }
+        return {};
+      },
       onProcessExit: () => {},
       onDebug: options.debug ?? (() => {}),
     },
@@ -917,6 +961,53 @@ function isRecord(value: unknown): value is JsonRecord {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+// Keep these in sync with USER_PROMPT_SUBMIT_CONTEXT_OPEN/CLOSE in Qwen core.
+const QWEN_USER_PROMPT_CONTEXT_OPEN = '<qwen:user-prompt-submit-context>';
+const QWEN_USER_PROMPT_CONTEXT_CLOSE = '</qwen:user-prompt-submit-context>';
+
+function isQwenUserPromptContextPart(part: unknown): boolean {
+  if (!isRecord(part) || typeof part.text !== 'string') return false;
+  const text = part.text.trim();
+  const prefix = `${QWEN_USER_PROMPT_CONTEXT_OPEN}\n`;
+  const suffix = `\n${QWEN_USER_PROMPT_CONTEXT_CLOSE}`;
+  if (!text.startsWith(prefix) || !text.endsWith(suffix)) {
+    return false;
+  }
+  const body = text.slice(prefix.length, -suffix.length);
+  return (
+    !body.includes(QWEN_USER_PROMPT_CONTEXT_OPEN) &&
+    !body.includes(QWEN_USER_PROMPT_CONTEXT_CLOSE)
+  );
+}
+
+function projectQwenUserRecordText(record: JsonRecord): string {
+  const message = toRecord(record.message);
+  const parts = Array.isArray(message.parts)
+    ? message.parts.filter(isRecord)
+    : [];
+  const hasFinalHookContextPart =
+    parts.length > 1 &&
+    isQwenUserPromptContextPart(parts[parts.length - 1]);
+  const payload = isRecord(record.systemPayload)
+    ? record.systemPayload
+    : undefined;
+  const displayText =
+    payload &&
+    (asString(payload.hookContext) !== undefined || hasFinalHookContextPart)
+      ? asString(payload.displayText)
+      : undefined;
+  if (displayText !== undefined) return displayText;
+
+  const visibleParts =
+    payload === undefined && hasFinalHookContextPart
+      ? parts.slice(0, -1)
+      : parts;
+  return visibleParts
+    .map((part) => asString(part.text))
+    .filter((text): text is string => !!text)
+    .join('\n\n');
 }
 
 export function extractQwenParentToolUseId(
@@ -1646,6 +1737,7 @@ export class QwenAgent extends BaseAgent {
   private _isProcessing = false;
   private abortReason?: AbortReason;
   private persistedQwenSessionId: string | null = null;
+  private qwenPersistenceCwd: string | null = null;
   private activePromptRunId: number | null = null;
   private promptRunCounter = 0;
   private permissionRequestCounter = 0;
@@ -1687,6 +1779,9 @@ export class QwenAgent extends BaseAgent {
     super(config, config.model || '');
     this._supportsBranching = false;
     this.persistedQwenSessionId = config.session?.sdkSessionId || null;
+    this.qwenPersistenceCwd = this.persistedQwenSessionId
+      ? this.resolvedCwd()
+      : null;
     this.pendingModeOverride =
       config.session?.permissionMode && !config.session?.sdkSessionId
         ? config.session.permissionMode
@@ -1712,10 +1807,16 @@ export class QwenAgent extends BaseAgent {
   }
 
   override setSessionId(sessionId: string | null): void {
+    const previousSessionId = this.qwenSessionId ?? this.persistedQwenSessionId;
     super.setSessionId(sessionId);
     if (this.qwenSessionId) this.unregisterAcpSession(this.qwenSessionId);
     this.qwenSessionId = sessionId;
     this.persistedQwenSessionId = sessionId;
+    this.qwenPersistenceCwd = sessionId
+      ? sessionId === previousSessionId
+        ? (this.qwenPersistenceCwd ?? this.resolvedCwd())
+        : this.resolvedCwd()
+      : null;
     if (sessionId) this.registerAcpSession(sessionId);
   }
 
@@ -1724,6 +1825,7 @@ export class QwenAgent extends BaseAgent {
     if (this.qwenSessionId) this.unregisterAcpSession(this.qwenSessionId);
     this.qwenSessionId = null;
     this.persistedQwenSessionId = null;
+    this.qwenPersistenceCwd = null;
     this.pendingAvailableCommandsUpdates.clear();
     this.latestAvailableCommandsSnapshot = null;
     this.resolveAvailableCommandsWaiters(null);
@@ -1769,6 +1871,7 @@ export class QwenAgent extends BaseAgent {
       this.unregisterAcpSession(this.qwenSessionId);
       this.qwenSessionId = null;
       this.persistedQwenSessionId = null;
+      this.qwenPersistenceCwd = null;
       this.pendingAvailableCommandsUpdates.clear();
       this.latestAvailableCommandsSnapshot = null;
       this.resolveAvailableCommandsWaiters(null);
@@ -1818,12 +1921,14 @@ export class QwenAgent extends BaseAgent {
       try {
         await this.ensureQwenSession();
       } catch (error) {
+        if (isSessionWriterAcpError(error)) throw error;
         if (this.persistedQwenSessionId || this.config.session?.sdkSessionId) {
           this.debug(
             `Qwen resume failed, starting a fresh session: ${error instanceof Error ? error.message : String(error)}`,
           );
           this.qwenSessionId = null;
           this.persistedQwenSessionId = null;
+          this.qwenPersistenceCwd = null;
           this.config.onSdkSessionIdCleared?.();
           const recoveryContext = this.buildRecoveryContext();
           if (recoveryContext && !isSlashCommandPrompt(message, attachments)) {
@@ -1840,12 +1945,12 @@ export class QwenAgent extends BaseAgent {
 
       const prompt = this.buildPromptBlocks(message, attachments);
       let transcriptTextElementsPersisted = false;
-      const persistTranscriptTextElements = () => {
+      const persistTranscriptTextElements = async () => {
         if (transcriptTextElementsPersisted) return;
         transcriptTextElementsPersisted = true;
-        this.persistQwenTranscriptTextElements(
+        await this.persistQwenTranscriptTextElements(
           sessionId,
-          this.resolvedCwd(),
+          this.qwenPersistenceCwd ?? this.resolvedCwd(),
           options?.textElements,
         );
       };
@@ -1861,7 +1966,8 @@ export class QwenAgent extends BaseAgent {
           const stopReason = asString(toRecord(result).stopReason);
           await this.waitForCurrentTurnUsage();
           if (this.activePromptRunId !== promptRunId) return;
-          persistTranscriptTextElements();
+          await persistTranscriptTextElements();
+          if (this.activePromptRunId !== promptRunId) return;
           this.flushThoughtText();
           this.flushAssistantText();
           this.eventQueue.enqueue({ type: 'complete' });
@@ -1870,15 +1976,17 @@ export class QwenAgent extends BaseAgent {
             `Qwen prompt complete${stopReason ? ` (${stopReason})` : ''}`,
           );
         })
-        .catch((error) => {
+        .catch(async (error) => {
           if (this.activePromptRunId !== promptRunId) return;
           if (this.abortReason) {
-            persistTranscriptTextElements();
+            await persistTranscriptTextElements();
+            if (this.activePromptRunId !== promptRunId) return;
             this.eventQueue.complete();
             return;
           }
           const message = formatQwenAcpErrorMessage(error);
-          persistTranscriptTextElements();
+          await persistTranscriptTextElements();
+          if (this.activePromptRunId !== promptRunId) return;
           this.eventQueue.enqueue({ type: 'error', message });
           this.eventQueue.enqueue({ type: 'complete' });
           this.eventQueue.complete();
@@ -2030,8 +2138,8 @@ export class QwenAgent extends BaseAgent {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) return;
 
-    this.pendingPermissions.delete(requestId);
-    pending.resolve(
+    this.resolvePendingPermission(
+      requestId,
       this.createPermissionResponse(
         pending.options,
         allowed,
@@ -2513,7 +2621,8 @@ export class QwenAgent extends BaseAgent {
     sessionId: string,
     options: { cwd?: string } = {},
   ): Promise<BackendSessionMessagesResult> {
-    const cwd = options.cwd || this.resolvedCwd();
+    const requestedCwd = options.cwd || this.resolvedCwd();
+    const cwd = this.resolveQwenPersistenceCwd(sessionId, requestedCwd);
     await this.ensureProcess();
 
     const buildResultFromUpdates = (
@@ -2689,7 +2798,7 @@ export class QwenAgent extends BaseAgent {
   override destroy(): void {
     super.destroy();
     this.killSubprocess();
-    this.pendingPermissions.clear();
+    this.cancelPendingPermissions();
     this.miniCollectors.clear();
     this.historyCollectors.clear();
     this.ensureProcessPromise = null;
@@ -2795,7 +2904,10 @@ export class QwenAgent extends BaseAgent {
     method: string,
     params: JsonRecord,
   ): Promise<JsonRecord> {
-    if (method !== MID_TURN_QUEUE_DRAIN_METHOD) {
+    if (
+      method !== MID_TURN_QUEUE_DRAIN_METHOD &&
+      method !== TODO_STOP_GUARD_CONTINUATION_CLAIM_METHOD
+    ) {
       return {};
     }
 
@@ -2807,10 +2919,14 @@ export class QwenAgent extends BaseAgent {
     if (!isCurrentSession) {
       if (sessionId) {
         this.debug(
-          `Ignored mid-turn queue drain for non-current session ${sessionId}`,
+          `Ignored ${method} for non-current session ${sessionId}`,
         );
       }
       return {};
+    }
+
+    if (method === TODO_STOP_GUARD_CONTINUATION_CLAIM_METHOD) {
+      return { claimed: true, hasQueuedPrompt: false };
     }
 
     const entries = this.midTurnMessageQueue.splice(0);
@@ -2830,7 +2946,10 @@ export class QwenAgent extends BaseAgent {
           ),
         );
       }
-      return { messages: entries.map((entry) => entry.message) };
+      return {
+        messages: entries.map((entry) => entry.message),
+        hasQueuedPrompt: false,
+      };
     }
 
     const items: Array<{ content: ContentBlock[]; displayText: string }> = [];
@@ -2857,7 +2976,10 @@ export class QwenAgent extends BaseAgent {
           items.push({
             content: [
               { type: 'text', text: displayText },
-              { type: 'text', text: MID_TURN_ATTACHMENT_PROCESSING_FAILURE_TEXT },
+              {
+                type: 'text',
+                text: MID_TURN_ATTACHMENT_PROCESSING_FAILURE_TEXT,
+              },
             ],
             displayText,
           });
@@ -2882,6 +3004,7 @@ export class QwenAgent extends BaseAgent {
 
     return {
       items,
+      hasQueuedPrompt: false,
     };
   }
 
@@ -3031,6 +3154,7 @@ export class QwenAgent extends BaseAgent {
         );
         this.qwenSessionId = existingSessionId;
         this.persistedQwenSessionId = existingSessionId;
+        this.qwenPersistenceCwd = cwd;
         this.registerAcpSession(existingSessionId);
         this.recordSessionModels(result);
         this.recordSessionModes(result);
@@ -3065,6 +3189,7 @@ export class QwenAgent extends BaseAgent {
 
     this.qwenSessionId = sessionId;
     this.persistedQwenSessionId = sessionId;
+    this.qwenPersistenceCwd = cwd;
     this.registerAcpSession(sessionId);
     this.recordSessionModels(result);
     this.recordSessionModes(result);
@@ -3095,7 +3220,10 @@ export class QwenAgent extends BaseAgent {
           (connection) =>
             connection.loadSession({
               sessionId,
-              cwd: this.resolvedCwd(),
+              cwd: this.resolveQwenPersistenceCwd(
+                sessionId,
+                this.resolvedCwd(),
+              ),
               mcpServers: this.buildAcpMcpServers(),
             }),
           60_000,
@@ -3306,7 +3434,20 @@ export class QwenAgent extends BaseAgent {
     );
   }
 
+  private resolveQwenPersistenceCwd(
+    sessionId: string,
+    fallback: string,
+  ): string {
+    return sessionId === this.qwenSessionId ||
+      sessionId === this.persistedQwenSessionId
+      ? (this.qwenPersistenceCwd ?? fallback)
+      : fallback;
+  }
+
   private extractQwenRecordText(record: JsonRecord): string {
+    if (record.type === 'user') {
+      return projectQwenUserRecordText(record);
+    }
     const message = toRecord(record.message);
     const parts = Array.isArray(message.parts)
       ? message.parts.filter(isRecord)
@@ -3338,12 +3479,15 @@ export class QwenAgent extends BaseAgent {
     return toRecord(record.systemPayload).phase === 'invocation';
   }
 
-  private persistQwenTranscriptTextElements(
+  private async persistQwenTranscriptTextElements(
     sessionId: string,
     cwd: string,
     sourceElements?: MessageTextElement[],
-  ): void {
-    const transcriptPath = getQwenTranscriptPath(sessionId, cwd);
+  ): Promise<void> {
+    const transcriptPath = getQwenTranscriptPath(
+      sessionId,
+      this.resolveQwenPersistenceCwd(sessionId, cwd),
+    );
     if (!existsSync(transcriptPath)) return;
 
     let fileContent: string;
@@ -3356,7 +3500,6 @@ export class QwenAgent extends BaseAgent {
       return;
     }
 
-    const hadTrailingNewline = fileContent.endsWith('\n');
     const lines = fileContent.split(/\r?\n/);
     if (lines[lines.length - 1] === '') lines.pop();
 
@@ -3384,19 +3527,19 @@ export class QwenAgent extends BaseAgent {
       const next = JSON.stringify(textElements);
       if (existing === next) return;
 
-      record.textElements = textElements;
-      lines[index] = JSON.stringify(record);
-
-      const tmpPath = `${transcriptPath}.craft-text-elements-${process.pid}-${Date.now()}.tmp`;
       try {
-        writeFileSync(
-          tmpPath,
-          lines.join('\n') + (hadTrailingNewline ? '\n' : ''),
-          'utf8',
+        await this.callAcp(
+          'ext/qwen/session/recordTextElements',
+          (connection) =>
+            connection.extMethod('qwen/session/recordTextElements', {
+              sessionId,
+              content,
+              textElements,
+            }),
+          30_000,
         );
-        renameSync(tmpPath, transcriptPath);
         this.debug(
-          `Wrote ${textElements.length} text element(s) into Qwen transcript ${transcriptPath}`,
+          `Recorded ${textElements.length} text element(s) for Qwen session ${sessionId}`,
         );
       } catch (error) {
         this.debug(
@@ -3411,7 +3554,10 @@ export class QwenAgent extends BaseAgent {
     sessionId: string,
     cwd: string,
   ): Array<{ content: string; textElements: MessageTextElement[] }> {
-    const transcriptPath = getQwenTranscriptPath(sessionId, cwd);
+    const transcriptPath = getQwenTranscriptPath(
+      sessionId,
+      this.resolveQwenPersistenceCwd(sessionId, cwd),
+    );
     if (!existsSync(transcriptPath)) return [];
 
     let fileContent: string;
@@ -3435,11 +3581,26 @@ export class QwenAgent extends BaseAgent {
         continue;
       }
 
-      if (!this.isPatchableQwenUserRecord(record, sessionId)) continue;
-      const textElements = toQwenTranscriptTextElements(record.textElements);
+      const textElementPayload =
+        record.sessionId === sessionId &&
+        record.type === 'system' &&
+        record.subtype === 'user_text_elements'
+          ? toRecord(record.systemPayload)
+          : undefined;
+      if (
+        !textElementPayload &&
+        !this.isPatchableQwenUserRecord(record, sessionId)
+      ) {
+        continue;
+      }
+      const textElements = toQwenTranscriptTextElements(
+        textElementPayload?.textElements ?? record.textElements,
+      );
       if (!textElements) continue;
 
-      const content = this.getQwenTranscriptPatchContent(record);
+      const content = textElementPayload
+        ? asString(textElementPayload.content) || ''
+        : this.getQwenTranscriptPatchContent(record);
       if (!content) continue;
       records.push({ content, textElements });
     }
@@ -3542,9 +3703,10 @@ export class QwenAgent extends BaseAgent {
     }
 
     const textParts: string[] = [];
-    const context = includeContext && INCLUDE_CRAFT_CONTEXT_IN_QWEN_PROMPTS
-      ? this.buildCraftContext()
-      : '';
+    const context =
+      includeContext && INCLUDE_CRAFT_CONTEXT_IN_QWEN_PROMPTS
+        ? this.buildCraftContext()
+        : '';
 
     for (const attachment of attachments ?? []) {
       if (attachment.mimeType?.startsWith('image/') && attachment.base64) {
@@ -4321,14 +4483,21 @@ export class QwenAgent extends BaseAgent {
     const toolUseId =
       asString(record.uuid) || `qwen-transcript-tool-${nextId()}`;
     const input = toRecord(uiEvent.function_args);
-    const isError = uiEvent.success === false || uiEvent.status === 'error';
+    const status = asString(uiEvent.status);
+    const isInterrupted = isQwenUserInterruptStatus(status);
+    const isError =
+      uiEvent.success === false ||
+      isQwenToolFailureStatus(status) ||
+      isInterrupted;
     const error = asString(uiEvent.error);
     const contentLength = asNumber(uiEvent.content_length);
-    const toolResult = isError
-      ? error || 'Tool failed'
-      : contentLength != null
-        ? `Completed (${contentLength} bytes)`
-        : 'Completed';
+    const toolResult = isInterrupted
+      ? 'Interrupted'
+      : isError
+        ? error || 'Tool failed'
+        : contentLength != null
+          ? `Completed (${contentLength} bytes)`
+          : 'Completed';
 
     return {
       id: nextId(),
@@ -4625,9 +4794,23 @@ export class QwenAgent extends BaseAgent {
   }
 
   private handleToolCallUpdate(update: JsonRecord): void {
+    // Silent-shell liveness heartbeats arrive as in_progress frames with no
+    // kind, carrying _meta.shellProgress, while the tool is still running;
+    // converting one into a tool_result would prematurely complete the call
+    // with an empty result. Match the web-shell normalizer's predicate
+    // exactly — in_progress AND kind-absent AND shellProgress — so a
+    // kind-bearing frame is never dropped here while the normalizer forwards
+    // it (heartbeats emitted by the ACP session never carry a kind).
+    const meta = toRecord(update._meta);
+    if (
+      asString(update.status) === 'in_progress' &&
+      asString(update.kind) === undefined &&
+      meta.shellProgress !== undefined
+    ) {
+      return;
+    }
     const toolUseId =
       asString(update.toolCallId) || `qwen-tool-${++this.toolIdCounter}`;
-    const meta = toRecord(update._meta);
     const toolName =
       this.toolNames.get(toolUseId) ||
       normalizeToolName(asString(meta.toolName), asString(update.kind));
@@ -5024,7 +5207,10 @@ export class QwenAgent extends BaseAgent {
 
     return new Promise<RequestPermissionResponse>((resolve) => {
       const requestId = `qwen-permission-${++this.permissionRequestCounter}`;
-      this.pendingPermissions.set(requestId, { resolve, options });
+      const timeout = setTimeout(() => {
+        this.respondToPermission(requestId, false);
+      }, PERMISSION_REQUEST_TIMEOUT_MS);
+      this.pendingPermissions.set(requestId, { resolve, options, timeout });
 
       try {
         this.onPermissionRequest?.({
@@ -5044,8 +5230,7 @@ export class QwenAgent extends BaseAgent {
         this.debug(
           `Qwen permission callback failed: ${error instanceof Error ? error.message : String(error)}`,
         );
-        this.pendingPermissions.delete(requestId);
-        resolve(this.createPermissionResponse(options, false, false));
+        this.respondToPermission(requestId, false);
       }
     });
   }
@@ -5110,12 +5295,21 @@ export class QwenAgent extends BaseAgent {
   }
 
   private cancelPendingPermissions(): void {
-    for (const [, pending] of this.pendingPermissions) {
-      pending.resolve(
-        this.createPermissionResponse(pending.options, false, false),
-      );
+    for (const requestId of this.pendingPermissions.keys()) {
+      this.respondToPermission(requestId, false);
     }
-    this.pendingPermissions.clear();
+  }
+
+  private resolvePendingPermission(
+    requestId: string,
+    response: RequestPermissionResponse & { answers?: Record<string, string> },
+  ): void {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    this.pendingPermissions.delete(requestId);
+    pending.resolve(response);
   }
 
   protected override debug(message: string): void {

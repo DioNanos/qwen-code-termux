@@ -1,29 +1,38 @@
 # Latest Test Suite (Termux / Android ARM64)
 
-Target release: `0.16.1-termux`
+Target release: `0.21.8-termux`
 
 Purpose: validate the published Termux package directly on Android/Termux.
 
-## Install guard
+## Registry install guard
 
 ```bash
-npm ls -g --depth=0 @mmmbuto/qwen-code-termux || true
+npm install -g \
+  --allow-scripts=@mmmbuto/qwen-code-termux,@mmmbuto/node-pty-android-arm64,sharp \
+  @mmmbuto/qwen-code-termux@0.21.8-termux
+hash -r
+QWEN_ROOT="$(npm root -g)/@mmmbuto/qwen-code-termux"
+npm ls -g --depth=0 @mmmbuto/qwen-code-termux
 qwen --version
-command -v qwen
+type -a qwen
 ```
 
 Expected:
 
 - package is installed globally
-- version reports `0.16.1-termux` or an intentionally matching release string
+- npm reports no blocked install scripts
+- version reports `0.21.8-termux`
 - `qwen` resolves from npm global bin
+- if an exact orphaned upstream standalone wrapper existed, it is retained as
+  `qwen.qwen-code-termux-orphan`; any nonmatching wrapper is untouched
 
 ## Basic CLI
 
 ```bash
 qwen --help
-qwen -p "print current directory" --yolo
 ```
+
+The release gate does not require provider credentials or a model request.
 
 ## Termux runtime checks
 
@@ -37,13 +46,13 @@ npm --version
 Expected:
 
 - running on Android/Termux
-- Node.js >= 20
+- Node.js >= 22
 
 ## PTY check
 
 ```bash
-npm ls -g @mmmbuto/node-pty-android-arm64 2>/dev/null || true
-qwen -p "run uname -m and report the result" --yolo
+npm ls -g @mmmbuto/node-pty-android-arm64
+node -e 'const p=require(process.argv[1]); const t=p.spawn("uname",["-m"]); t.onData(d=>process.stdout.write(d)); t.onExit(e=>process.exit(e.exitCode))' "$QWEN_ROOT/node_modules/@mmmbuto/node-pty-android-arm64"
 ```
 
 Expected:
@@ -73,20 +82,20 @@ echo "hello" > hello.txt
 cat hello.txt
 ```
 
-## MCP and auth surface
+## Package identity
 
 ```bash
-qwen --help | grep -i mcp || true
-qwen
+node -e 'const p=require(process.argv[1]); console.log(p.name,p.version,p.bin.qwen)' "$QWEN_ROOT/package.json"
 ```
 
 Expected:
 
-- CLI starts
-- MCP/auth help surface is present
+- package is `@mmmbuto/qwen-code-termux@0.21.8-termux`
+- launcher is `cli-entry.js`
+- managed npm updates remain pinned to the fork package
 
 ## Report target
 
 Write results into:
 
-- [latest/0.16.1-termux/QWEN_TEST_REPORT_v0.16.1-termux.md](../../latest/0.16.1-termux/QWEN_TEST_REPORT_v0.16.1-termux.md)
+- [latest/v0.21.8-termux/QWEN_TEST_REPORT_v0.21.8-termux.md](../../latest/v0.21.8-termux/QWEN_TEST_REPORT_v0.21.8-termux.md)

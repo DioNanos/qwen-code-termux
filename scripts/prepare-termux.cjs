@@ -6,6 +6,8 @@
  */
 
 const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const isTermux =
   os.platform() === 'android' ||
@@ -17,5 +19,14 @@ if (isTermux) {
   process.exit(0);
 }
 
-console.log('Non-Termux environment: normal prepare path should be used.');
-process.exit(1);
+const result = spawnSync(process.execPath, [path.join(__dirname, 'prepare.js')], {
+  stdio: 'inherit',
+});
+
+if (result.error) {
+  throw result.error;
+}
+if (result.signal) {
+  process.kill(process.pid, result.signal);
+}
+process.exit(result.status ?? 1);

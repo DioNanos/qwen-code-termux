@@ -20,7 +20,7 @@ const {
   symlinkSync,
   writeFileSync,
 } = await vi.importActual('node:fs');
-const { execFileSync } = await vi.importActual('node:child_process');
+const { execFileSync, spawnSync } = await vi.importActual('node:child_process');
 const crypto = await vi.importActual('node:crypto');
 const { tmpdir } = await vi.importActual('node:os');
 const path = await vi.importActual('node:path');
@@ -28,6 +28,9 @@ const { pathToFileURL } = await vi.importActual('node:url');
 const readScript = (path) => readFileSync(path, 'utf8');
 const standaloneReleaseScriptUrl = pathToFileURL(
   path.resolve('scripts/build-standalone-release.js'),
+).href;
+const standalonePackageScriptUrl = pathToFileURL(
+  path.resolve('scripts/create-standalone-package.js'),
 ).href;
 const hostedInstallationScriptUrl = pathToFileURL(
   path.resolve('scripts/build-hosted-installation-assets.js'),
@@ -42,6 +45,20 @@ const releaseScriptUtilsUrl = pathToFileURL(
 // Windows batch behavior has separate Windows-only E2E coverage below.
 const itOnUnix = process.platform === 'win32' ? it.skip : it;
 const itOnWindows = process.platform === 'win32' ? it : it.skip;
+// The POSIX fixture helpers shell out to the `zip` and `unzip` binaries.
+// Local minimal images may omit them, but CI must keep the archive-safety
+// cases active.
+const zipAvailable =
+  process.platform === 'win32' ||
+  (spawnSync('zip', ['--version']).error === undefined &&
+    spawnSync('unzip', ['-v']).error === undefined);
+if (process.env.CI && process.platform !== 'win32' && !zipAvailable) {
+  throw new Error(
+    '`zip`/`unzip` missing on a CI host; archive tests would skip.',
+  );
+}
+const itWithZip = zipAvailable ? it : it.skip;
+const itOnUnixWithZip = zipAvailable ? itOnUnix : it.skip;
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -642,6 +659,7 @@ describe('standalone release packaging', () => {
     expect(packageScript).toContain('symlink cycle');
     expect(packageScript).toContain('refusing to write empty SHA256SUMS');
     expect(packageScript).toContain('--skip-checksums');
+    expect(packageScript).toContain('--native-modules-dir');
     expect(packageScript).toContain('dereference: true');
     expect(packageScript).toContain('fs.createReadStream');
     expect(packageScript).toContain('Expand-Archive');
@@ -794,6 +812,35 @@ describe('standalone release packaging', () => {
 
     expect(checksums.get('node-v22.0.0-linux-x64.tar.xz')).toBe('a'.repeat(64));
     expect(checksums.get('node-v22.0.0-win-x64.zip')).toBe('b'.repeat(64));
+  });
+
+  it('stages the locked clipboard packages for every release target', async () => {
+    const { readClipboardPackageSpecs } = await import(
+      standaloneReleaseScriptUrl
+    );
+
+    expect(readClipboardPackageSpecs()).toEqual([
+      '@teddyzhu/clipboard@0.0.5',
+      '@teddyzhu/clipboard-darwin-arm64@0.0.5',
+      '@teddyzhu/clipboard-darwin-x64@0.0.5',
+      '@teddyzhu/clipboard-linux-arm64-gnu@0.0.5',
+      '@teddyzhu/clipboard-linux-x64-gnu@0.0.5',
+      '@teddyzhu/clipboard-win32-x64-msvc@0.0.5',
+    ]);
+  });
+
+  it('maps every release target to its clipboard native package', async () => {
+    const { TARGET_CLIPBOARD_PACKAGE } = await import(
+      standalonePackageScriptUrl
+    );
+
+    expect([...TARGET_CLIPBOARD_PACKAGE]).toEqual([
+      ['darwin-arm64', '@teddyzhu/clipboard-darwin-arm64'],
+      ['darwin-x64', '@teddyzhu/clipboard-darwin-x64'],
+      ['linux-arm64', '@teddyzhu/clipboard-linux-arm64-gnu'],
+      ['linux-x64', '@teddyzhu/clipboard-linux-x64-gnu'],
+      ['win-x64', '@teddyzhu/clipboard-win32-x64-msvc'],
+    ]);
   });
 
   it('validates standalone release checksum output', async () => {
@@ -1646,7 +1693,7 @@ describe('standalone release packaging', () => {
     }
   });
 
-  it('requires the standalone cli-entry wrapper in dist', () => {
+  itWithZip('requires the standalone cli-entry wrapper in dist', () => {
     const createdDist = ensureMinimalDist({ includeCliEntry: false });
     const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
 
@@ -1676,105 +1723,117 @@ describe('standalone release packaging', () => {
     }
   });
 
-  it('packages a win-x64 standalone archive', () => {
-    const createdDist = ensureMinimalDist();
-    const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
+  itWithZip(
+    'packages a win-x64 standalone archive',
+    () => {
+      const createdDist = ensureMinimalDist();
+      const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
 
-    try {
-      const outDir = path.join(tmpDir, 'out');
-      execFileSync(
-        'node',
-        [
-          'scripts/create-standalone-package.js',
-          '--target',
-          'win-x64',
-          '--node-archive',
-          createFakeWindowsNodeArchive(tmpDir),
-          '--out-dir',
-          outDir,
-          '--version',
-          '0.0.0-test',
-        ],
-        { stdio: 'pipe' },
-      );
+      try {
+        const outDir = path.join(tmpDir, 'out');
+        execFileSync(
+          'node',
+          [
+            'scripts/create-standalone-package.js',
+            '--target',
+            'win-x64',
+            '--node-archive',
+            createFakeWindowsNodeArchive(tmpDir),
+            '--out-dir',
+            outDir,
+            '--version',
+            '0.0.0-test',
+          ],
+          { stdio: 'pipe' },
+        );
 
-      const archive = path.join(outDir, 'qwen-code-win-x64.zip');
-      const extractDir = path.join(tmpDir, 'extract');
-      mkdirSync(extractDir, { recursive: true });
-      extractZipForTest(archive, extractDir);
+        const archive = path.join(outDir, 'qwen-code-win-x64.zip');
+        const extractDir = path.join(tmpDir, 'extract');
+        mkdirSync(extractDir, { recursive: true });
+        extractZipForTest(archive, extractDir);
 
-      expect(existsSync(path.join(extractDir, 'qwen-code'))).toBe(true);
-      expect(
-        existsSync(path.join(extractDir, 'qwen-code', 'bin', 'qwen.cmd')),
-      ).toBe(true);
-      expect(
-        existsSync(path.join(extractDir, 'qwen-code', 'lib', 'cli-entry.js')),
-      ).toBe(true);
-      expect(
-        existsSync(path.join(extractDir, 'qwen-code', 'node', 'node.exe')),
-      ).toBe(true);
-      const shim = readScript(
-        path.join(extractDir, 'qwen-code', 'bin', 'qwen.cmd'),
-      );
-      expect(shim).toContain('if "%~1"=="serve" goto serve');
-      expect(shim).toContain(
-        '"%ROOT%\\node\\node.exe" --expose-gc "%ROOT%\\lib\\cli.js" %*',
-      );
-      expect(shim).toContain(
-        '"%ROOT%\\node\\node.exe" "%ROOT%\\lib\\cli-entry.js" %*',
-      );
-      expect((shim.match(/exit \/b %ERRORLEVEL%/g) || []).length).toBe(2);
-      expect(readScript(path.join(outDir, 'SHA256SUMS'))).toContain(
-        'qwen-code-win-x64.zip',
-      );
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-      restoreMinimalDist(createdDist);
-    }
-  }, 30_000);
+        expect(existsSync(path.join(extractDir, 'qwen-code'))).toBe(true);
+        expect(
+          existsSync(path.join(extractDir, 'qwen-code', 'bin', 'qwen.cmd')),
+        ).toBe(true);
+        expect(
+          existsSync(path.join(extractDir, 'qwen-code', 'lib', 'cli-entry.js')),
+        ).toBe(true);
+        expect(
+          existsSync(path.join(extractDir, 'qwen-code', 'node', 'node.exe')),
+        ).toBe(true);
+        const shim = readScript(
+          path.join(extractDir, 'qwen-code', 'bin', 'qwen.cmd'),
+        );
+        expect(shim).toContain(
+          'set "QWEN_CODE_LAUNCHER_PATH=%ROOT%\\bin\\qwen.cmd"',
+        );
+        expect(shim).toContain(
+          '"%ROOT%\\node\\node.exe" "%ROOT%\\lib\\cli-entry.js" %*',
+        );
+        expect((shim.match(/exit \/b %ERRORLEVEL%/g) || []).length).toBe(1);
+        expect(readScript(path.join(outDir, 'SHA256SUMS'))).toContain(
+          'qwen-code-win-x64.zip',
+        );
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+        restoreMinimalDist(createdDist);
+      }
+    },
+    30_000,
+  );
 
-  it('skips npm-only artifacts staged in dist', () => {
-    const createdDist = ensureMinimalDist({
-      includeNpmPackageArtifacts: true,
-    });
-    const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
+  itWithZip(
+    'skips npm-only artifacts staged in dist',
+    () => {
+      const createdDist = ensureMinimalDist({
+        includeNpmPackageArtifacts: true,
+      });
+      const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
 
-    try {
-      const outDir = path.join(tmpDir, 'out');
-      execFileSync(
-        'node',
-        [
-          'scripts/create-standalone-package.js',
-          '--target',
-          'win-x64',
-          '--node-archive',
-          createFakeWindowsNodeArchive(tmpDir),
-          '--out-dir',
-          outDir,
-          '--version',
-          '0.0.0-test',
-        ],
-        { stdio: 'pipe' },
-      );
+      try {
+        const outDir = path.join(tmpDir, 'out');
+        execFileSync(
+          'node',
+          [
+            'scripts/create-standalone-package.js',
+            '--target',
+            'win-x64',
+            '--node-archive',
+            createFakeWindowsNodeArchive(tmpDir),
+            '--out-dir',
+            outDir,
+            '--version',
+            '0.0.0-test',
+          ],
+          { stdio: 'pipe' },
+        );
 
-      const extractDir = path.join(tmpDir, 'extract');
-      mkdirSync(extractDir, { recursive: true });
-      extractZipForTest(path.join(outDir, 'qwen-code-win-x64.zip'), extractDir);
+        const extractDir = path.join(tmpDir, 'extract');
+        mkdirSync(extractDir, { recursive: true });
+        extractZipForTest(
+          path.join(outDir, 'qwen-code-win-x64.zip'),
+          extractDir,
+        );
 
-      expect(
-        existsSync(path.join(extractDir, 'qwen-code', 'lib', 'cli-entry.js')),
-      ).toBe(true);
-      expect(
-        existsSync(path.join(extractDir, 'qwen-code', 'lib', 'postinstall.js')),
-      ).toBe(false);
-      expect(
-        existsSync(path.join(extractDir, 'qwen-code', 'lib', 'patches')),
-      ).toBe(false);
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-      restoreMinimalDist(createdDist);
-    }
-  }, 30_000);
+        expect(
+          existsSync(path.join(extractDir, 'qwen-code', 'lib', 'cli-entry.js')),
+        ).toBe(true);
+        expect(
+          existsSync(
+            path.join(extractDir, 'qwen-code', 'lib', 'postinstall.js'),
+          ),
+        ).toBe(false);
+        expect(
+          existsSync(path.join(extractDir, 'qwen-code', 'lib', 'patches')),
+        ).toBe(false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+        restoreMinimalDist(createdDist);
+      }
+    },
+    30_000,
+  );
 
   it('requires the native audio prebuild when release packaging opts in', () => {
     const createdDist = ensureMinimalDist();
@@ -1871,7 +1930,7 @@ describe('standalone release packaging', () => {
   });
 
   itOnUnix(
-    'packages a Unix standalone archive with a serve fast path shim',
+    'packages a Unix standalone archive through the CLI entry wrapper',
     () => {
       const createdDist = ensureMinimalDist();
       const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
@@ -1890,12 +1949,8 @@ describe('standalone release packaging', () => {
         const shim = readScript(
           path.join(extractDir, 'qwen-code', 'bin', 'qwen'),
         );
-        expect(shim).toContain('if [ "${1:-}" = "serve" ]; then');
         expect(shim).toContain(
-          'exec "$ROOT/node/bin/node" "$ROOT/lib/cli-entry.js" "$@"',
-        );
-        expect(shim).toContain(
-          'exec "$ROOT/node/bin/node" --expose-gc "$ROOT/lib/cli.js" "$@"',
+          'QWEN_CODE_LAUNCHER_PATH="$ROOT/bin/qwen" exec "$ROOT/node/bin/node" "$ROOT/lib/cli-entry.js" "$@"',
         );
       } finally {
         restoreMinimalDist(createdDist);
@@ -1957,6 +2012,65 @@ describe('standalone release packaging', () => {
       if (createdPrebuildDir) {
         rmSync(prebuildDir, { recursive: true, force: true });
       }
+      restoreMinimalDist(createdDist);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  itOnUnix('packages only the matching clipboard native addon', () => {
+    const createdDist = ensureMinimalDist();
+    const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
+
+    try {
+      const nativeModulesDir = createFakeClipboardModules(tmpDir, [
+        '@teddyzhu/clipboard-linux-x64-gnu',
+        '@teddyzhu/clipboard-darwin-arm64',
+      ]);
+      const archive = packageFakeStandalone(tmpDir, {}, { nativeModulesDir });
+      const extractDir = path.join(tmpDir, 'extract');
+      mkdirSync(extractDir, { recursive: true });
+      execFileSync('tar', ['-xzf', archive, '-C', extractDir], {
+        stdio: 'ignore',
+      });
+
+      const clipboardScope = path.join(
+        extractDir,
+        'qwen-code',
+        'lib',
+        'node_modules',
+        '@teddyzhu',
+      );
+      expect(
+        existsSync(path.join(clipboardScope, 'clipboard', 'index.js')),
+      ).toBe(true);
+      expect(
+        existsSync(
+          path.join(
+            clipboardScope,
+            'clipboard-linux-x64-gnu',
+            'clipboard.linux-x64-gnu.node',
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        existsSync(path.join(clipboardScope, 'clipboard-darwin-arm64')),
+      ).toBe(false);
+    } finally {
+      restoreMinimalDist(createdDist);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  itOnUnix('rejects incomplete explicit clipboard staging', () => {
+    const createdDist = ensureMinimalDist();
+    const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
+
+    try {
+      const nativeModulesDir = createFakeClipboardModules(tmpDir, []);
+      expect(() =>
+        packageFakeStandalone(tmpDir, {}, { nativeModulesDir }),
+      ).toThrow(/Required clipboard packages for linux-x64/);
+    } finally {
       restoreMinimalDist(createdDist);
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -2049,7 +2163,7 @@ describe('standalone release packaging', () => {
     }
   });
 
-  it('rejects unexpected dist assets', () => {
+  itWithZip('rejects unexpected dist assets', () => {
     const createdDist = ensureMinimalDist();
     const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-package-test-'));
 
@@ -3476,7 +3590,7 @@ describe('Linux/macOS installer end-to-end', { timeout: 15000 }, () => {
     }
   });
 
-  itOnUnix(
+  itOnUnixWithZip(
     'rejects standalone archives containing path traversal entries',
     () => {
       const tmpDir = mkdtempSync(path.join(tmpdir(), 'qwen-install-test-'));
@@ -4426,25 +4540,56 @@ function extractZipForTest(archive, destination) {
   });
 }
 
-function packageFakeStandalone(tmpDir, nodeArchiveOptions = {}) {
+function packageFakeStandalone(
+  tmpDir,
+  nodeArchiveOptions = {},
+  { nativeModulesDir } = {},
+) {
   const outDir = path.join(tmpDir, 'out');
   mkdirSync(outDir, { recursive: true });
-  execFileSync(
-    'node',
-    [
-      'scripts/create-standalone-package.js',
-      '--target',
-      'linux-x64',
-      '--node-archive',
-      createFakeNodeArchive(tmpDir, nodeArchiveOptions),
-      '--out-dir',
-      outDir,
-      '--version',
-      '0.0.0-smoke',
-    ],
-    { stdio: 'pipe' },
-  );
+  const args = [
+    'scripts/create-standalone-package.js',
+    '--target',
+    'linux-x64',
+    '--node-archive',
+    createFakeNodeArchive(tmpDir, nodeArchiveOptions),
+    '--out-dir',
+    outDir,
+    '--version',
+    '0.0.0-smoke',
+  ];
+  if (nativeModulesDir) {
+    args.push('--native-modules-dir', nativeModulesDir);
+  }
+  execFileSync('node', args, { stdio: 'pipe' });
   return path.join(outDir, 'qwen-code-linux-x64.tar.gz');
+}
+
+function createFakeClipboardModules(tmpDir, nativePackages) {
+  const modulesDir = path.join(tmpDir, 'clipboard-modules');
+  const clipboardDir = path.join(modulesDir, '@teddyzhu', 'clipboard');
+  mkdirSync(clipboardDir, { recursive: true });
+  writeFileSync(
+    path.join(clipboardDir, 'package.json'),
+    JSON.stringify({ name: '@teddyzhu/clipboard', version: '0.0.5' }),
+  );
+  writeFileSync(path.join(clipboardDir, 'index.js'), 'module.exports = {};\n');
+
+  for (const packageName of nativePackages) {
+    const packageDir = path.join(modulesDir, packageName);
+    const binaryName = packageName.replace(
+      '@teddyzhu/clipboard-',
+      'clipboard.',
+    );
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      path.join(packageDir, 'package.json'),
+      JSON.stringify({ name: packageName, version: '0.0.5' }),
+    );
+    writeFileSync(path.join(packageDir, `${binaryName}.node`), 'native\n');
+  }
+
+  return modulesDir;
 }
 
 function runUnixInstaller(

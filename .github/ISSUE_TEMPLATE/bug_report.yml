@@ -1,15 +1,14 @@
-name: 'Termux Bug Report'
-description: 'Report a Termux/Android issue in Qwen Code Termux'
+name: 'Bug Report'
+description: 'Report a bug to help us improve Qwen Code'
+labels: ['type/bug', 'status/needs-triage']
 body:
   - type: 'markdown'
     attributes:
       value: |-
         > [!IMPORTANT]
-        > Thanks for taking the time to fill out this bug report.
+        > Thanks for taking the time to fill out this bug report!
         >
-        > Use this tracker for Termux/Android packaging and runtime issues.
-        > Generic Qwen Code issues should be reported upstream at
-        > https://github.com/QwenLM/qwen-code/issues.
+        > Please search **[existing issues](https://github.com/QwenLM/qwen-code/issues)** to see if an issue already exists for the bug you encountered.
 
   - type: 'textarea'
     id: 'problem'
@@ -30,7 +29,7 @@ body:
     id: 'info'
     attributes:
       label: 'Client information'
-      description: 'Please paste the full text from the `/about` command. Remove your email address before submitting if present.'
+      description: 'Please paste the full text from the `/about` command run from Qwen Code. Also include which platform (macOS, Windows, Linux).'
       value: |
         <details>
         <summary>Client Information</summary>
@@ -38,7 +37,7 @@ body:
         Run `qwen` to enter the interactive CLI, then run the `/about` command.
 
         ```console
-        > /about
+        $ qwen /about
         # paste output here
         ```
 
@@ -47,10 +46,10 @@ body:
       required: true
 
   - type: 'textarea'
-    id: 'termux-info'
+    id: 'login-info'
     attributes:
-      label: 'Termux information'
-      description: 'Include Android device, Android version, Termux source, Node.js version, and install command.'
+      label: 'Login information'
+      description: 'Describe how you are logging in (e.g., API Config).'
 
   - type: 'textarea'
     id: 'additional-context'

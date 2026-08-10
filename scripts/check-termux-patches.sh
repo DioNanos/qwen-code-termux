@@ -67,8 +67,16 @@ check_grep 'DEP0169' packages/cli/index.ts \
   'DEP0169 url.parse deprecation suppression'
 check_grep '@mmmbuto/qwen-code-termux@latest' packages/cli/src/utils/installationInfo.ts \
   'update command points to fork package'
+check_grep "const PACKAGE_NAME = '@mmmbuto/qwen-code-termux'" packages/cli/src/utils/managed-npm-update.ts \
+  'managed npm updater installs fork package'
+check_grep "managedNpmPackageName = '@mmmbuto/qwen-code-termux'" scripts/cli-entry.js \
+  'managed npm launcher loads fork package'
 check_grep 'scripts/postinstall.cjs' scripts/prepare-package.js \
   'publish package copies postinstall'
+check_grep 'repairLegacyStandaloneShim' scripts/postinstall.cjs \
+  'orphaned standalone wrapper migration'
+check_grep 'npm-launcher-mismatch' scripts/postinstall.cjs \
+  'wrapper migration requires npm-owned replacement'
 check_grep '@mmmbuto/node-pty-android-arm64' scripts/prepare-package.js \
   'publish package includes Android PTY optional dependency'
 

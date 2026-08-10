@@ -5,7 +5,7 @@
  */
 
 import type React from 'react';
-import { useMemo, useRef, useCallback } from 'react';
+import { memo, useMemo, useRef, useCallback } from 'react';
 import type { DOMElement } from 'ink';
 import {
   escapeAnsiCtrlCodes,
@@ -60,10 +60,17 @@ import { MemorySavedMessage } from './messages/MemorySavedMessage.js';
 import { DiffStatsDisplay } from './messages/DiffStatsDisplay.js';
 import { GoalStatusMessage } from './messages/GoalStatusMessage.js';
 import { useSettings } from '../contexts/SettingsContext.js';
+import { useVirtualViewport } from '../contexts/VirtualViewportContext.js';
 import { useThoughtExpanded } from '../contexts/ThoughtExpandedContext.js';
 import { useMouseEvents } from '../hooks/useMouseEvents.js';
+import { useMouseTrackingEnabled } from '../hooks/use-mouse-tracking-enabled.js';
 import type { MouseEvent } from '../utils/mouse.js';
-import { measureElementPosition } from '../utils/measure-element-position.js';
+import {
+  measureElementPosition,
+  layoutRowForEvent,
+} from '../utils/measure-element-position.js';
+import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import { ICON } from '../constants.js';
 
 interface HistoryItemDisplayProps {
   item: HistoryItem;
@@ -79,6 +86,13 @@ interface HistoryItemDisplayProps {
   sourceCopyIndexOffsets?: MarkdownSourceCopyIndexOffsets;
   /** Force thinking blocks expanded (e.g. in SessionPreview). */
   thoughtExpanded?: boolean;
+  /**
+   * Full-detail mode (Ctrl+O). When true, collapse is lifted:
+   * thinking blocks render expanded and tool groups force `forceExpandAll`
+   * + `forceShowResult` (every tool with its full, untruncated result).
+   * Default false (main view stays at the #5661 partition baseline).
+   */
+  fullDetail?: boolean;
   /**
    * Head id of the thought group this item belongs to (the `gemini_thought`
    * head id for both the head and its `gemini_thought_content` continuations).
@@ -110,33 +124,54 @@ const ClickableThinkMessage: React.FC<{
   onToggle,
 }) => {
   const ref = useRef<DOMElement>(null);
-  // Click toggles the thought's inline expansion in place (it then scrolls
-  // with the conversation). Click needs SGR mouse tracking; useMouseEvents
-  // enables it only in VP mode (no `bypassVpGate`), so in non-VP the handler
-  // stays dormant and native scrollback is preserved — the block still toggles
-  // via Alt+T. Advertise "click" in the collapsed hint only in VP, where the
-  // click actually does something.
+  const pressRef = useRef<{ col: number; row: number } | null>(null);
+  const { rows: terminalHeight } = useTerminalSize();
   const settings = useSettings();
-  const clickable = !!settings.merged.ui?.useTerminalBuffer;
+  const mouseTrackingEnabled = useMouseTrackingEnabled();
+  const clickable =
+    useVirtualViewport(settings.merged.ui?.useTerminalBuffer) &&
+    mouseTrackingEnabled;
   const isActive = !isPending;
 
   useMouseEvents(
     useCallback(
       (event: MouseEvent) => {
-        if (event.name !== 'left-press' || !ref.current) return;
+        if (!ref.current) return;
+        if (event.name === 'move') {
+          if (
+            pressRef.current &&
+            (event.col !== pressRef.current.col ||
+              event.row !== pressRef.current.row)
+          ) {
+            pressRef.current = null;
+          }
+          return;
+        }
+        if (event.name !== 'left-press' && event.name !== 'left-release') {
+          pressRef.current = null;
+          return;
+        }
         const metrics = measureElementPosition(ref.current);
         const col = event.col - 1;
-        const row = event.row - 1;
-        if (
+        const row = layoutRowForEvent(ref.current, event.row, terminalHeight);
+        const isInside =
           col >= metrics.x &&
           col < metrics.x + metrics.width &&
           row >= metrics.y &&
-          row < metrics.y + metrics.height
-        ) {
+          row < metrics.y + metrics.height;
+        if (event.name === 'left-press') {
+          pressRef.current = isInside
+            ? { col: event.col, row: event.row }
+            : null;
+          return;
+        }
+        const press = pressRef.current;
+        pressRef.current = null;
+        if (isInside && press?.col === event.col && press.row === event.row) {
           onToggle();
         }
       },
-      [onToggle],
+      [onToggle, terminalHeight],
     ),
     { isActive },
   );
@@ -182,6 +217,7 @@ function getHistoryItemMarginTop(item: HistoryItem): number {
     case 'stop_hook_loop':
     case 'stop_hook_system_message':
     case 'goal_status':
+    case 'goal_state':
     case 'vision_notice':
       return 0;
     default:
@@ -202,6 +238,7 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
   availableTerminalHeightGemini,
   sourceCopyIndexOffsets,
   thoughtExpanded,
+  fullDetail = false,
   thoughtHeadId,
 }) => {
   const marginTop = getHistoryItemMarginTop(item);
@@ -216,8 +253,12 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
   // click expands the whole group. Continuations receive the head id via
   // `thoughtHeadId`; the head itself falls back to its own id.
   const thoughtGroupHeadId = thoughtHeadId ?? item.id;
+  // Ctrl+O full-detail forces every thought open; otherwise honor an explicit
+  // `thoughtExpanded` prop, then the global Alt+T toggle / per-group click set.
   const resolvedThoughtExpanded =
-    thoughtExpanded ?? (allExpanded || expandedHeadIds.has(thoughtGroupHeadId));
+    fullDetail ||
+    (thoughtExpanded ??
+      (allExpanded || expandedHeadIds.has(thoughtGroupHeadId)));
   const settings = useSettings();
   const showTimestamps = settings.merged.output?.showTimestamps === true;
 
@@ -259,6 +300,8 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
           )}
           <AssistantMessage
             text={itemForDisplay.text}
+            images={itemForDisplay.images}
+            omittedImageCount={itemForDisplay.omittedImageCount}
             isPending={isPending}
             availableTerminalHeight={
               availableTerminalHeightGemini ?? availableTerminalHeight
@@ -271,6 +314,8 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
       {itemForDisplay.type === 'gemini_content' && (
         <AssistantMessageContent
           text={itemForDisplay.text}
+          images={itemForDisplay.images}
+          omittedImageCount={itemForDisplay.omittedImageCount}
           isPending={isPending}
           availableTerminalHeight={
             availableTerminalHeightGemini ?? availableTerminalHeight
@@ -365,11 +410,15 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
           memoryWriteCount={itemForDisplay.memoryWriteCount}
           memoryReadCount={itemForDisplay.memoryReadCount}
           isUserInitiated={itemForDisplay.isUserInitiated}
+          fullDetail={fullDetail}
         />
       )}
       {itemForDisplay.type === 'tool_use_summary' && (
-        <Box paddingLeft={1}>
-          <Text dimColor>● {itemForDisplay.summary}</Text>
+        <Box flexDirection="row">
+          <Box width={2} flexShrink={0}>
+            <Text dimColor>{ICON.CIRCLE_FILLED}</Text>
+          </Box>
+          <Text dimColor>{itemForDisplay.summary}</Text>
         </Box>
       )}
       {itemForDisplay.type === 'compression' && (
@@ -470,9 +519,22 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
           lastReason={itemForDisplay.lastReason}
         />
       )}
+      {itemForDisplay.type === 'goal_state' && (
+        <GoalStatusMessage
+          snapshot={itemForDisplay.snapshot}
+          cause={itemForDisplay.cause}
+        />
+      )}
     </Box>
   );
 };
 
-// Export alias for backward compatibility
-export { HistoryItemDisplayComponent as HistoryItemDisplay };
+// Memoized so the Ctrl+O transcript — which re-renders on every scroll tick —
+// skips re-rendering frozen-snapshot items whose props are shallowly unchanged.
+// The transcript hands stable `item` references (from the freeze snapshot), so
+// the default shallow compare is effective. Harmless for the main view, whose
+// items live in Ink's `<Static>` and render once anyway.
+const HistoryItemDisplay = memo(HistoryItemDisplayComponent);
+HistoryItemDisplay.displayName = 'HistoryItemDisplay';
+
+export { HistoryItemDisplay };

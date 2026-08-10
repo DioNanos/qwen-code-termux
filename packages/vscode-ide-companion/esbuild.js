@@ -6,10 +6,10 @@
 
 import esbuild from 'esbuild';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wasmLoader } from 'esbuild-plugin-wasm';
+import { createWasmBinaryPlugin } from '../../scripts/esbuild-wasm-binary-plugin.js';
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -90,31 +90,7 @@ const publicCliExportPlugin = {
   },
 };
 
-/**
- * Resolve `*.wasm?binary` imports to embedded Uint8Array content.
- * This keeps the companion bundle compatible with core's inline-WASM loader.
- * @type {import('esbuild').Plugin}
- */
-const wasmBinaryPlugin = {
-  name: 'wasm-binary',
-  setup(build) {
-    build.onResolve({ filter: /\.wasm\?binary$/ }, (args) => {
-      const specifier = args.path.replace(/\?binary$/, '');
-      const localRequire = createRequire(
-        resolve(args.resolveDir || repoRoot, '_dummy_.js'),
-      );
-      return {
-        path: localRequire.resolve(specifier),
-        namespace: 'wasm-binary',
-      };
-    });
-
-    build.onLoad({ filter: /.*/, namespace: 'wasm-binary' }, (args) => ({
-      contents: readFileSync(args.path),
-      loader: 'binary',
-    }));
-  },
-};
+const wasmBinaryPlugin = createWasmBinaryPlugin(repoRoot);
 
 /**
  * @type {import('esbuild').Plugin}

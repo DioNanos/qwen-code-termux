@@ -44,12 +44,34 @@ export interface CronTaskRun {
    * owner id was known.
    */
   sessionId?: string;
+  /**
+   * READ-ONLY backward-compatibility field. A pre-removal version stamped this
+   * on a fire whose precondition withheld the prompt (it was booked as a run
+   * but nothing executed). The isolated/precondition machinery is gone, so this
+   * is never written anymore — but stored history still carries it, and dropping
+   * it would misreport a deliberately-skipped fire as an ordinary successful
+   * run. Preserved through read/validation/passthrough so the UI keeps its
+   * "skipped" marker on legacy entries. Absent = a real dispatched run.
+   */
+  withheld?: boolean;
 }
 
 /** Cap on a task's on-disk run history. A ring, newest kept — this bounds the
  * per-task growth of the tasks file (every fire already rewrites it to stamp
  * `lastFiredAt`, so appending a capped run adds no extra write, only bytes). */
 export const MAX_TASK_RUNS = 20;
+
+export const MAX_CHANNEL_DELIVERY_NAME_LENGTH = 2048;
+export const MAX_CHANNEL_DELIVERY_TARGET_ID_LENGTH = 2048;
+
+export interface CronTaskDelivery {
+  kind: 'channel';
+  target: {
+    channelName: string;
+    type: 'user' | 'chat';
+    id: string;
+  };
+}
 
 export interface DurableCronTask {
   id: string;
@@ -87,17 +109,7 @@ export interface DurableCronTask {
    * (`cron_create`) and legacy tasks, which keep the shared-owner firing model.
    */
   sessionId?: string;
-  /**
-   * How each scheduled fire runs. Absent or `'shared'` = the #6389 model: the
-   * task fires inside its single bound {@link sessionId} session and every run
-   * accumulates in that one transcript. `'isolated'` = the owning session
-   * dispatches each fire straight into a FRESH sub-session (its own clean
-   * context and transcript) and never runs the prompt inline. Absent defaults to
-   * `'shared'` so tool-created and legacy tasks are unchanged. The scheduler
-   * treats both modes identically — it only carries the field to `onFire`, which
-   * is where the routing happens.
-   */
-  runMode?: 'shared' | 'isolated';
+  delivery?: CronTaskDelivery;
   /**
    * Bounded, newest-last history of recent fires (capped at MAX_TASK_RUNS).
    * Absent on tool-created tasks and on any task that has not fired yet.
@@ -122,6 +134,38 @@ export function appendCronRun(
   return next.length > MAX_TASK_RUNS
     ? next.slice(next.length - MAX_TASK_RUNS)
     : next;
+}
+
+/**
+ * True for a task written by a pre-removal version as an `isolated` task with a
+ * `condition` precondition. The field is no longer part of {@link
+ * DurableCronTask} (validation accepts it as an unknown key), so it is read off
+ * the raw object. A blank/absent condition is not a gate.
+ *
+ * The isolated run mode and its preconditions were removed; such a task can no
+ * longer be evaluated. Every consumer — the scheduler, the REST list view, and
+ * the manual `/run` endpoint — uses this to FAIL CLOSED (skip / block / reject)
+ * so a removed safety gate ("only run when X") can never silently degrade into
+ * "always run" on any path. The user re-creates the task if they still want it.
+ */
+export function taskHasLegacyCondition(task: DurableCronTask): boolean {
+  const condition = (task as unknown as Record<string, unknown>)['condition'];
+  return typeof condition === 'string' && condition.length > 0;
+}
+
+/**
+ * True for a task written by a pre-removal version with `runMode: 'isolated'`
+ * (with or without a precondition). The field is no longer part of {@link
+ * DurableCronTask}, so it is read off the raw object.
+ *
+ * Unlike a legacy precondition (which is a safety gate → fail closed), a bare
+ * isolated task has no gate: it can still run, just no longer in a fresh
+ * per-run session — it now accumulates history in its bound session. So the
+ * scheduler still fires it, but logs a one-time notice so an operator who
+ * relied on the clean-slate isolation is not left wondering why runs now differ.
+ */
+export function taskHasLegacyRunMode(task: DurableCronTask): boolean {
+  return (task as unknown as Record<string, unknown>)['runMode'] === 'isolated';
 }
 
 /**
@@ -230,8 +274,10 @@ export async function readCronTasks(
 export async function writeCronTasks(
   projectRoot: string,
   tasks: DurableCronTask[],
+  options: { assertCanCommit?: () => void } = {},
 ): Promise<void> {
   const filePath = getCronFilePath(projectRoot);
+  options.assertCanCommit?.();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   // noFollow: this file lives inside the project working tree, so a cloned
   // or hand-edited repo could pre-place it as a symlink. Following it would
@@ -239,7 +285,10 @@ export async function writeCronTasks(
   // same project-controlled-symlink threat the credential write sites guard
   // against (see the noFollow docs in atomicFileWrite.ts). Replace the link
   // with a regular file instead of writing through it.
-  await atomicWriteJSON(filePath, tasks, { noFollow: true });
+  await atomicWriteJSON(filePath, tasks, {
+    noFollow: true,
+    assertCanCommit: options.assertCanCommit,
+  });
 }
 
 /**
@@ -313,6 +362,7 @@ async function acquireUpdateLock(
 export async function updateCronTasks(
   projectRoot: string,
   mutate: (tasks: DurableCronTask[]) => DurableCronTask[],
+  options: { assertCanCommit?: () => void } = {},
 ): Promise<void> {
   const filePath = getCronFilePath(projectRoot);
   return getUpdateMutex(filePath).runExclusive(async () => {
@@ -321,7 +371,7 @@ export async function updateCronTasks(
       const tasks = await readCronTasks(projectRoot);
       const next = mutate(tasks);
       if (next !== tasks) {
-        await writeCronTasks(projectRoot, next);
+        await writeCronTasks(projectRoot, next, options);
       }
     } finally {
       await release();
@@ -377,9 +427,40 @@ function isValidRuns(value: unknown): value is CronTaskRun[] {
     return (
       isFiniteTimestamp(run['at']) &&
       (run['kind'] === undefined || typeof run['kind'] === 'string') &&
-      (run['sessionId'] === undefined || typeof run['sessionId'] === 'string')
+      (run['sessionId'] === undefined ||
+        typeof run['sessionId'] === 'string') &&
+      // Read-only legacy compat: validate so a stored `withheld` marker isn't
+      // rejected on read (it is never written anymore).
+      (run['withheld'] === undefined || typeof run['withheld'] === 'boolean')
     );
   });
+}
+
+function isValidDelivery(value: unknown): value is CronTaskDelivery {
+  if (typeof value !== 'object' || value === null) return false;
+  const delivery = value as Record<string, unknown>;
+  const rawTarget = delivery['target'];
+  if (
+    delivery['kind'] !== 'channel' ||
+    typeof rawTarget !== 'object' ||
+    rawTarget === null ||
+    !Object.keys(delivery).every((key) => key === 'kind' || key === 'target')
+  ) {
+    return false;
+  }
+  const target = rawTarget as Record<string, unknown>;
+  return (
+    typeof target['channelName'] === 'string' &&
+    target['channelName'].trim().length > 0 &&
+    target['channelName'].length <= MAX_CHANNEL_DELIVERY_NAME_LENGTH &&
+    (target['type'] === 'user' || target['type'] === 'chat') &&
+    typeof target['id'] === 'string' &&
+    target['id'].trim().length > 0 &&
+    target['id'].length <= MAX_CHANNEL_DELIVERY_TARGET_ID_LENGTH &&
+    Object.keys(target).every(
+      (key) => key === 'channelName' || key === 'type' || key === 'id',
+    )
+  );
 }
 
 function isValidTask(value: unknown): value is DurableCronTask {
@@ -405,12 +486,7 @@ function isValidTask(value: unknown): value is DurableCronTask {
     // would treat it as unbound, so a "bound" task would silently run unbound.
     (obj['sessionId'] === undefined ||
       (typeof obj['sessionId'] === 'string' && obj['sessionId'].length > 0)) &&
-    // Absent = 'shared'. Any string other than the two known modes routes
-    // through fix-or-delete rather than being silently treated as 'shared',
-    // so a typo can't quietly disable per-run isolation.
-    (obj['runMode'] === undefined ||
-      obj['runMode'] === 'shared' ||
-      obj['runMode'] === 'isolated') &&
+    (obj['delivery'] === undefined || isValidDelivery(obj['delivery'])) &&
     (obj['runs'] === undefined || isValidRuns(obj['runs']))
   );
 }

@@ -6,7 +6,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useHistory, UI_COMPACT_CLEARED_MESSAGE } from './useHistoryManager.js';
+import {
+  useHistory,
+  UI_COMPACT_CLEARED_MESSAGE,
+  UI_COMPACT_CLEARED_IMAGE_MESSAGE,
+} from './useHistoryManager.js';
 import type { UseHistoryManagerReturn } from './useHistoryManager.js';
 import type { HistoryItemWithoutId, HistoryItemToolGroup } from '../types.js';
 import { ToolCallStatus } from '../types.js';
@@ -320,6 +324,225 @@ describe('useHistoryManager', () => {
         result.current.history[24] as unknown as HistoryItemToolGroup
       ).tools[0];
       expect(recentTool.resultDisplay).toBe('some file content here');
+    });
+
+    it('should also clear detailedDisplay when clearing an old tool result (Ctrl+O privacy)', () => {
+      const { result } = renderHook(() => useHistory());
+      const ts = Date.now();
+
+      // Add 25 collapsible tool_groups carrying the raw functionResponse text
+      // in `detailedDisplay` (the Ctrl+O full-detail source). The first ones
+      // fall outside keep-recent-20 and must be compacted.
+      for (let i = 0; i < 25; i++) {
+        act(() => {
+          result.current.addItem(
+            {
+              type: 'tool_group',
+              tools: [
+                {
+                  callId: String(i),
+                  name: 'read_file',
+                  description: '',
+                  resultDisplay: 'some file content here',
+                  detailedDisplay: 'full secret file content here',
+                  status: ToolCallStatus.Success,
+                  confirmationDetails: undefined,
+                },
+              ],
+            } as unknown as HistoryItemWithoutId,
+            ts + i,
+          );
+        });
+      }
+
+      act(() => {
+        result.current.compactOldItems();
+      });
+
+      // Oldest compacted tool: both resultDisplay AND detailedDisplay cleared,
+      // so reopening Ctrl+O cannot re-surface the cleared output.
+      const tool = (
+        result.current.history[0] as unknown as HistoryItemToolGroup
+      ).tools[0];
+      expect(tool.resultDisplay).toBe(UI_COMPACT_CLEARED_MESSAGE);
+      expect(tool.detailedDisplay).toBeUndefined();
+      // Newest tool untouched: still has both fields.
+      const recentTool = (
+        result.current.history[24] as unknown as HistoryItemToolGroup
+      ).tools[0];
+      expect(recentTool.resultDisplay).toBe('some file content here');
+      expect(recentTool.detailedDisplay).toBe('full secret file content here');
+    });
+
+    it('clears image payloads from old tool results', () => {
+      const { result } = renderHook(() => useHistory());
+      const ts = Date.now();
+
+      for (let i = 0; i < 25; i++) {
+        act(() => {
+          result.current.addItem(
+            {
+              type: 'tool_group',
+              tools: [
+                {
+                  callId: String(i),
+                  name: 'screenshot',
+                  description: '',
+                  resultDisplay: undefined,
+                  images: [{ data: 'aW1hZ2U=', mimeType: 'image/png' }],
+                  omittedImageCount: 2,
+                  status: ToolCallStatus.Success,
+                  confirmationDetails: undefined,
+                },
+              ],
+            } as unknown as HistoryItemWithoutId,
+            ts + i,
+          );
+        });
+      }
+
+      act(() => {
+        result.current.compactOldItems();
+      });
+
+      const oldestTool = (
+        result.current.history[0] as unknown as HistoryItemToolGroup
+      ).tools[0];
+      expect(oldestTool.resultDisplay).toBe(UI_COMPACT_CLEARED_MESSAGE);
+      expect(oldestTool.images).toBeUndefined();
+      expect(oldestTool.omittedImageCount).toBeUndefined();
+
+      const recentTool = (
+        result.current.history[24] as unknown as HistoryItemToolGroup
+      ).tools[0];
+      expect(recentTool.images).toHaveLength(1);
+      expect(recentTool.omittedImageCount).toBe(2);
+    });
+
+    it('clears old assistant image payloads while keeping recent images', () => {
+      const { result } = renderHook(() => useHistory());
+      const ts = Date.now();
+
+      for (let i = 0; i < 25; i++) {
+        act(() => {
+          result.current.addItem(
+            {
+              type: i === 0 ? 'gemini' : 'gemini_content',
+              text: i === 0 ? 'Generated chart' : '',
+              images: [{ data: `aW1hZ2Ut${i}`, mimeType: 'image/png' }],
+              omittedImageCount: 2,
+            },
+            ts + i,
+          );
+        });
+      }
+
+      act(() => {
+        result.current.compactOldItems();
+      });
+
+      const oldestItem = result.current.history[0];
+      expect(oldestItem).toMatchObject({
+        type: 'gemini',
+        text: `Generated chart\n\n${UI_COMPACT_CLEARED_IMAGE_MESSAGE}`,
+      });
+      expect(
+        oldestItem.type === 'gemini' ? oldestItem.images : undefined,
+      ).toBeUndefined();
+      expect(
+        oldestItem.type === 'gemini' ? oldestItem.omittedImageCount : undefined,
+      ).toBeUndefined();
+
+      const recentItem = result.current.history[24];
+      expect(
+        recentItem.type === 'gemini_content' ? recentItem.images : undefined,
+      ).toHaveLength(1);
+      expect(
+        recentItem.type === 'gemini_content'
+          ? recentItem.omittedImageCount
+          : undefined,
+      ).toBe(2);
+    });
+
+    it('compacts old assistant image overflow markers without payloads', () => {
+      const { result } = renderHook(() => useHistory());
+      const ts = Date.now();
+
+      for (let i = 0; i < 25; i++) {
+        act(() => {
+          result.current.addItem(
+            {
+              type: 'gemini_content',
+              text: '',
+              omittedImageCount: 2,
+            },
+            ts + i,
+          );
+        });
+      }
+
+      act(() => {
+        result.current.compactOldItems();
+      });
+
+      const oldestItem = result.current.history[0];
+      expect(oldestItem).toMatchObject({
+        type: 'gemini_content',
+        text: UI_COMPACT_CLEARED_IMAGE_MESSAGE,
+      });
+      expect(
+        oldestItem.type === 'gemini_content'
+          ? oldestItem.omittedImageCount
+          : undefined,
+      ).toBeUndefined();
+
+      const recentItem = result.current.history[24];
+      expect(
+        recentItem.type === 'gemini_content'
+          ? recentItem.omittedImageCount
+          : undefined,
+      ).toBe(2);
+    });
+
+    it('clears a tool that carries detailedDisplay but no resultDisplay (defensive)', () => {
+      const { result } = renderHook(() => useHistory());
+      const ts = Date.now();
+
+      // Degenerate shape: detailedDisplay set with resultDisplay null. Both the
+      // compaction trigger AND the clear must cover it so the raw transcript
+      // detail can't survive compaction, even though the live/resume paths
+      // don't currently produce this shape.
+      for (let i = 0; i < 25; i++) {
+        act(() => {
+          result.current.addItem(
+            {
+              type: 'tool_group',
+              tools: [
+                {
+                  callId: String(i),
+                  name: 'read_file',
+                  description: '',
+                  resultDisplay: undefined,
+                  detailedDisplay: 'full secret file content here',
+                  status: ToolCallStatus.Success,
+                  confirmationDetails: undefined,
+                },
+              ],
+            } as unknown as HistoryItemWithoutId,
+            ts + i,
+          );
+        });
+      }
+
+      act(() => {
+        result.current.compactOldItems();
+      });
+
+      const tool = (
+        result.current.history[0] as unknown as HistoryItemToolGroup
+      ).tools[0];
+      expect(tool.resultDisplay).toBe(UI_COMPACT_CLEARED_MESSAGE);
+      expect(tool.detailedDisplay).toBeUndefined();
     });
 
     it('should blank fileDiff object on old tool_group items', () => {

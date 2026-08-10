@@ -1,15 +1,16 @@
-name: 'Termux Feature Request'
-description: 'Suggest a Termux/Android compatibility improvement'
+name: 'Feature Request'
+description: 'Suggest an idea for this project'
+labels:
+  - 'type/feature-request'
+  - 'status/needs-triage'
 body:
   - type: 'markdown'
     attributes:
       value: |-
         > [!IMPORTANT]
-        > Thanks for taking the time to suggest an enhancement.
+        > Thanks for taking the time to suggest an enhancement!
         >
-        > This fork only carries Termux/Android compatibility changes.
-        > Generic Qwen Code feature requests belong upstream:
-        > https://github.com/QwenLM/qwen-code/issues.
+        > Please search **[existing issues](https://github.com/QwenLM/qwen-code/issues)** to see if a similar feature has already been requested.
 
   - type: 'textarea'
     id: 'feature'

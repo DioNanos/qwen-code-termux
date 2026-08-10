@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type {
   Config,
+  GoalSnapshotV2,
   ServerGeminiStreamEvent,
 } from '@qwen-code/qwen-code-core';
 import { GeminiEventType } from '@qwen-code/qwen-code-core';
@@ -19,6 +20,23 @@ function createMockConfig(): Config {
     getModel: vi.fn().mockReturnValue('test-model'),
   } as unknown as Config;
 }
+
+const goalSnapshot: GoalSnapshotV2 = {
+  v: 2,
+  activity: 'running',
+  goal: {
+    goalId: 'goal-1',
+    revision: 2,
+    objective: 'finish the refactor',
+    status: 'active',
+    evidenceCursor: { recordId: 'record-1' },
+    turnCount: 3,
+    activeTimeMs: 12_000,
+    createdAt: 1,
+    updatedAt: 2,
+    lastReason: 'keep going',
+  },
+};
 
 describe('StreamJsonOutputAdapter', () => {
   let adapter: StreamJsonOutputAdapter;
@@ -151,6 +169,67 @@ describe('StreamJsonOutputAdapter', () => {
             },
           }),
         ]);
+      });
+
+      it('emits v2 goal_state before the gated legacy projection', () => {
+        adapter.processEvent({
+          type: GeminiEventType.GoalState,
+          value: goalSnapshot,
+          cause: 'edit',
+        });
+        adapter.processEvent({
+          type: GeminiEventType.ActiveGoal,
+          value: {
+            condition: 'finish the refactor',
+            iterations: 3,
+            setAt: 1,
+            tokensAtStart: 0,
+            hookId: 'goal-v2:goal-1:2',
+            lastReason: 'keep going',
+          },
+        });
+
+        const goalEvents = stdoutWriteSpy.mock.calls
+          .map((call: unknown[]) => JSON.parse(call[0] as string))
+          .filter(
+            (message: { type?: string; event?: { type?: string } }) =>
+              message.type === 'stream_event' &&
+              (message.event?.type === 'goal_state' ||
+                message.event?.type === 'active_goal'),
+          );
+
+        expect(
+          goalEvents.map(
+            (message: { event: { type: string } }) => message.event.type,
+          ),
+        ).toEqual(['goal_state', 'active_goal']);
+        expect(goalEvents[0]).toMatchObject({
+          session_id: 'test-session-id',
+          parent_tool_use_id: null,
+          event: {
+            type: 'goal_state',
+            goal_state: goalSnapshot,
+          },
+        });
+      });
+
+      it('does not emit duplicate v2 goal snapshots from overlapping sources', () => {
+        adapter.processEvent({
+          type: GeminiEventType.GoalState,
+          value: goalSnapshot,
+        });
+        adapter.processEvent({
+          type: GeminiEventType.GoalState,
+          value: structuredClone(goalSnapshot),
+        });
+
+        const goalEvents = stdoutWriteSpy.mock.calls
+          .map((call: unknown[]) => JSON.parse(call[0] as string))
+          .filter(
+            (message: { event?: { type?: string } }) =>
+              message.event?.type === 'goal_state',
+          );
+        expect(goalEvents).toHaveLength(1);
       });
 
       it('should emit message_start event on first content', () => {
@@ -300,6 +379,36 @@ describe('StreamJsonOutputAdapter', () => {
       );
 
       expect(activeGoalEventCall).toBeUndefined();
+    });
+
+    it('still emits v2 goal_state without the partial-message gate', () => {
+      adapter.processEvent({
+        type: GeminiEventType.GoalState,
+        value: goalSnapshot,
+        cause: 'edit',
+      });
+      adapter.processEvent({
+        type: GeminiEventType.ActiveGoal,
+        value: {
+          condition: 'finish the refactor',
+          iterations: 3,
+          setAt: 1,
+          tokensAtStart: 0,
+          hookId: 'goal-v2:goal-1:2',
+          lastReason: 'keep going',
+        },
+      });
+
+      const events = stdoutWriteSpy.mock.calls
+        .map((call: unknown[]) => JSON.parse(call[0] as string))
+        .filter(
+          (message: { type?: string }) => message.type === 'stream_event',
+        );
+      expect(events).toHaveLength(1);
+      expect(events[0].event).toEqual({
+        type: 'goal_state',
+        goal_state: goalSnapshot,
+      });
     });
 
     it('should still emit final assistant message', () => {
@@ -1034,6 +1143,41 @@ describe('StreamJsonOutputAdapter', () => {
       });
 
       expect(stdoutWriteSpy).not.toHaveBeenCalled();
+    });
+
+    it('should emit shell heartbeats as tool_progress stream events', () => {
+      adapter = new StreamJsonOutputAdapter(mockConfig, true);
+      stdoutWriteSpy.mockClear();
+
+      adapter.emitToolProgress(
+        { ...mockRequest, name: 'run_shell_command' },
+        {
+          type: 'shell_progress',
+          elapsedMs: 10_000,
+          lastOutputAgeMs: 4_000,
+          totalLines: 12,
+          totalBytes: 512,
+          timeoutMs: 120_000,
+        },
+      );
+
+      expect(stdoutWriteSpy).toHaveBeenCalledTimes(1);
+      const output = stdoutWriteSpy.mock.calls[0][0] as string;
+      const parsed = JSON.parse(output);
+
+      expect(parsed.type).toBe('stream_event');
+      expect(parsed.event).toEqual({
+        type: 'tool_progress',
+        tool_use_id: 'tool-call-1',
+        content: {
+          type: 'shell_progress',
+          elapsedMs: 10_000,
+          lastOutputAgeMs: 4_000,
+          totalLines: 12,
+          totalBytes: 512,
+          timeoutMs: 120_000,
+        },
+      });
     });
 
     it('should emit multiple tool_progress events for sequential progress updates', () => {

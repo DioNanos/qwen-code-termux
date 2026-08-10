@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type OpenAI from 'openai';
 import type {
   Content,
   GenerateContentConfig,
@@ -16,6 +17,8 @@ import { AuthType, type ContentGenerator } from '../core/contentGenerator.js';
 import {
   GeminiChat,
   InvalidStreamError,
+  approvedPlanRedactionText,
+  redactApprovedPlansInHistory,
   redactStructuredOutputArgsForRecording,
   StreamEventType,
   type StreamEvent,
@@ -23,6 +26,10 @@ import {
 import { RETRYABLE_STREAM_TRANSPORT_CODES } from './stream-transport-retry.js';
 import { classifyRetryError } from '../utils/retryErrorClassification.js';
 import { StreamContentError } from './openaiContentGenerator/pipeline.js';
+import { OpenAIContentGenerator } from './openaiContentGenerator/openaiContentGenerator.js';
+import { EnhancedErrorHandler } from './openaiContentGenerator/errorHandler.js';
+import { APIConnectionTimeoutError } from 'openai';
+import type { OpenAICompatibleProvider } from './openaiContentGenerator/provider/index.js';
 import type { Config } from '../config/config.js';
 import { setSimulate429 } from '../utils/testUtils.js';
 import { uiTelemetryService } from '../telemetry/uiTelemetry.js';
@@ -37,6 +44,12 @@ import {
 } from '../services/tokenEstimation.js';
 import { SYSTEM_REMINDER_OPEN } from '../utils/environmentContext.js';
 import { SessionStartSource } from '../hooks/types.js';
+import * as sideQueryModule from '../utils/sideQuery.js';
+import {
+  getToolCallPreparations,
+  setToolCallPreparations,
+} from './tool-call-preparation.js';
+import { ApprovalMode } from '../config/approval-mode.js';
 
 // Mock fs module to prevent actual file system operations during tests
 const mockFileSystem = new Map<string, string>();
@@ -78,14 +91,20 @@ vi.mock('../utils/retry.js', async (importOriginal) => {
   };
 });
 
-const { mockLogContentRetry, mockLogContentRetryFailure } = vi.hoisted(() => ({
+const {
+  mockLogContentRetry,
+  mockLogContentRetryFailure,
+  mockLogProtocolTagSanitized,
+} = vi.hoisted(() => ({
   mockLogContentRetry: vi.fn(),
   mockLogContentRetryFailure: vi.fn(),
+  mockLogProtocolTagSanitized: vi.fn(),
 }));
 
 vi.mock('../telemetry/loggers.js', () => ({
   logContentRetry: mockLogContentRetry,
   logContentRetryFailure: mockLogContentRetryFailure,
+  logProtocolTagSanitized: mockLogProtocolTagSanitized,
   // Real ChatCompressionService.compress() calls logChatCompression on
   // every attempt; the R3.4 integration test exercises that path, so the
   // mock has to expose it (no-op).
@@ -171,15 +190,22 @@ describe('GeminiChat', async () => {
         getTool: vi.fn(),
       }),
       getContentGenerator: vi.fn().mockReturnValue(mockContentGenerator),
+      getEffectiveInputModalities: vi.fn().mockReturnValue({ image: true }),
       getBaseLlmClient: vi.fn().mockReturnValue(undefined),
       getModelFallbacks: vi.fn().mockReturnValue([]),
       getChatCompression: vi.fn().mockReturnValue(undefined),
+      getClearContextOnIdle: vi.fn().mockReturnValue({
+        toolResultsThresholdMinutes: 30,
+        toolResultsNumToKeep: 1,
+      }),
       getAutoCompactThreshold: vi.fn().mockReturnValue(undefined),
       getHookSystem: vi.fn().mockReturnValue(undefined),
       getDebugLogger: vi
         .fn()
         .mockReturnValue({ debug: vi.fn(), warn: vi.fn(), info: vi.fn() }),
       getApprovalMode: vi.fn().mockReturnValue('default'),
+      takePendingManualPlanExitNotice: vi.fn().mockReturnValue(undefined),
+      restorePendingManualPlanExitNotice: vi.fn(),
       getFileReadCache: vi.fn().mockReturnValue({ clear: vi.fn() }),
     } as unknown as Config;
 
@@ -236,6 +262,25 @@ describe('GeminiChat', async () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(advanceByMs);
     return collecting;
+  }
+
+  function streamResponse(
+    ...responses: GenerateContentResponse[]
+  ): AsyncGenerator<GenerateContentResponse> {
+    return (async function* () {
+      yield* responses;
+    })();
+  }
+
+  function stopResponse(parts: Part[]): GenerateContentResponse {
+    return {
+      candidates: [
+        {
+          content: { parts },
+          finishReason: 'STOP',
+        },
+      ],
+    } as unknown as GenerateContentResponse;
   }
 
   describe('system instruction helpers', () => {
@@ -371,6 +416,382 @@ describe('GeminiChat', async () => {
         'Qwen Code is streaming a model response',
       );
       expect(mockSleepInhibitorRelease).toHaveBeenCalledTimes(1);
+    });
+
+    describe('manual plan-exit notices', () => {
+      beforeEach(() => {
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () =>
+          streamResponse(stopResponse([{ text: 'ok' }])),
+        );
+      });
+
+      it('is disabled by default', async () => {
+        vi.mocked(mockConfig.takePendingManualPlanExitNotice).mockReturnValue({
+          version: 1,
+          currentMode: ApprovalMode.DEFAULT,
+        });
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'continue' },
+          'prompt-id-plan-exit-disabled',
+        );
+        for await (const _ of stream) {
+          /* consume */
+        }
+
+        expect(
+          mockConfig.takePendingManualPlanExitNotice,
+        ).not.toHaveBeenCalled();
+        expect(
+          chat
+            .getHistory()
+            .flatMap((content) => content.parts ?? [])
+            .some((part) =>
+              part.text?.includes(
+                'changed outside the approved exit_plan_mode flow',
+              ),
+            ),
+        ).toBe(false);
+      });
+
+      it('appends one notice after a function response', async () => {
+        vi.mocked(mockConfig.takePendingManualPlanExitNotice)
+          .mockReturnValueOnce({
+            version: 7,
+            currentMode: ApprovalMode.AUTO_EDIT,
+          })
+          .mockReturnValue(undefined);
+        chat.enableManualPlanExitNotices();
+        chat.setHistory([
+          { role: 'user', parts: [{ text: 'read it' }] },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call-plan-exit',
+                  name: 'read_file',
+                  args: { path: '/tmp/input' },
+                },
+              },
+            ],
+          },
+        ]);
+
+        const firstStream = await chat.sendMessageStream(
+          'test-model',
+          {
+            message: {
+              functionResponse: {
+                id: 'call-plan-exit',
+                name: 'read_file',
+                response: { output: 'contents' },
+              },
+            },
+          },
+          'prompt-id-plan-exit-tool-result',
+        );
+        for await (const _ of firstStream) {
+          /* consume */
+        }
+
+        const secondStream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'next turn' },
+          'prompt-id-plan-exit-next-turn',
+        );
+        for await (const _ of secondStream) {
+          /* consume */
+        }
+
+        const toolResultTurn = chat.getHistory()[2]!;
+        expect(toolResultTurn.parts?.[0]?.functionResponse?.id).toBe(
+          'call-plan-exit',
+        );
+        expect(toolResultTurn.parts?.at(-1)?.text).toContain(
+          'The current approval mode is: auto-edit.',
+        );
+        expect(
+          chat
+            .getHistory()
+            .flatMap((content) => content.parts ?? [])
+            .filter((part) =>
+              part.text?.includes(
+                'changed outside the approved exit_plan_mode flow',
+              ),
+            ),
+        ).toHaveLength(1);
+      });
+
+      it('restores a claim when setup rolls back the history push', async () => {
+        vi.mocked(mockConfig.takePendingManualPlanExitNotice).mockReturnValue({
+          version: 11,
+          currentMode: ApprovalMode.DEFAULT,
+        });
+        chat.enableManualPlanExitNotices();
+        vi.spyOn(
+          chat as unknown as { getRequestHistory: () => Content[] },
+          'getRequestHistory',
+        ).mockImplementationOnce(() => {
+          throw new Error('history setup failed');
+        });
+
+        await expect(
+          chat.sendMessageStream(
+            'test-model',
+            { message: 'first' },
+            'prompt-id-plan-exit-rollback-1',
+          ),
+        ).rejects.toThrow('history setup failed');
+
+        expect(
+          mockConfig.restorePendingManualPlanExitNotice,
+        ).toHaveBeenCalledWith(11);
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'second' },
+          'prompt-id-plan-exit-rollback-2',
+        );
+        for await (const _ of stream) {
+          /* consume */
+        }
+
+        const history = chat.getHistory();
+        expect(
+          history.some((content) =>
+            content.parts?.some((part) => part.text === 'first'),
+          ),
+        ).toBe(false);
+        expect(
+          history
+            .flatMap((content) => content.parts ?? [])
+            .filter((part) =>
+              part.text?.includes(
+                'changed outside the approved exit_plan_mode flow',
+              ),
+            ),
+        ).toHaveLength(1);
+        expect(
+          mockConfig.restorePendingManualPlanExitNotice,
+        ).toHaveBeenCalledTimes(1);
+      });
+
+      it('commits one history part when provider setup retries', async () => {
+        vi.mocked(
+          mockConfig.takePendingManualPlanExitNotice,
+        ).mockReturnValueOnce({
+          version: 13,
+          currentMode: ApprovalMode.DEFAULT,
+        });
+        chat.enableManualPlanExitNotices();
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockRejectedValueOnce(new Error('transient transport setup'))
+          .mockImplementationOnce(async () =>
+            streamResponse(stopResponse([{ text: 'recovered' }])),
+          );
+        mockRetryWithBackoff.mockImplementationOnce(async (apiCall) => {
+          try {
+            return await apiCall();
+          } catch {
+            return apiCall();
+          }
+        });
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'retry me' },
+          'prompt-id-plan-exit-provider-retry',
+        );
+        for await (const _ of stream) {
+          /* consume */
+        }
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(2);
+        expect(
+          mockConfig.takePendingManualPlanExitNotice,
+        ).toHaveBeenCalledTimes(1);
+        expect(
+          chat
+            .getHistory()
+            .flatMap((content) => content.parts ?? [])
+            .filter((part) =>
+              part.text?.includes(
+                'changed outside the approved exit_plan_mode flow',
+              ),
+            ),
+        ).toHaveLength(1);
+        expect(
+          mockConfig.restorePendingManualPlanExitNotice,
+        ).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        {
+          tail: 'model',
+          compressedHistory: [
+            { role: 'user', parts: [{ text: 'summary' }] },
+            { role: 'model', parts: [{ text: 'ack' }] },
+          ] satisfies Content[],
+        },
+        {
+          tail: 'user',
+          compressedHistory: [
+            { role: 'user', parts: [{ text: 'summary' }] },
+            { role: 'model', parts: [{ text: 'ack' }] },
+            {
+              role: 'user',
+              parts: [{ text: 'restored attachment context' }],
+            },
+          ] satisfies Content[],
+        },
+      ])(
+        'preserves the committed notice across reactive compression with a $tail tail',
+        async ({ compressedHistory }) => {
+          vi.mocked(
+            mockConfig.takePendingManualPlanExitNotice,
+          ).mockReturnValueOnce({
+            version: 15,
+            currentMode: ApprovalMode.DEFAULT,
+          });
+          chat.enableManualPlanExitNotices();
+          vi.spyOn(ChatCompressionService.prototype, 'compress')
+            .mockResolvedValueOnce({
+              newHistory: null,
+              info: {
+                originalTokenCount: 0,
+                newTokenCount: 0,
+                compressionStatus: CompressionStatus.NOOP,
+              },
+            })
+            .mockResolvedValueOnce({
+              newHistory: compressedHistory,
+              info: {
+                originalTokenCount: 135_000,
+                newTokenCount: 40_000,
+                compressionStatus: CompressionStatus.COMPRESSED,
+              },
+            });
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockRejectedValueOnce(
+              new Error('prompt is too long: 135000 tokens > 128000 maximum'),
+            )
+            .mockImplementationOnce(async () =>
+              streamResponse(stopResponse([{ text: 'after compression' }])),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'retry after overflow' },
+            'prompt-id-plan-exit-reactive-compression',
+          );
+          for await (const _ of stream) {
+            /* consume */
+          }
+
+          const retryRequest = vi.mocked(
+            mockContentGenerator.generateContentStream,
+          ).mock.calls[1]![0] as { contents: Content[] };
+          expect(
+            retryRequest.contents
+              .flatMap((content) => content.parts ?? [])
+              .filter((part) =>
+                part.text?.includes(
+                  'changed outside the approved exit_plan_mode flow',
+                ),
+              ),
+          ).toHaveLength(1);
+          expect(
+            chat
+              .getHistory()
+              .flatMap((content) => content.parts ?? [])
+              .filter((part) =>
+                part.text?.includes(
+                  'changed outside the approved exit_plan_mode flow',
+                ),
+              ),
+          ).toHaveLength(1);
+          const history = chat.getHistory();
+          const noticeTurn = history.find((content) =>
+            content.parts?.some((part) =>
+              part.text?.includes(
+                'changed outside the approved exit_plan_mode flow',
+              ),
+            ),
+          );
+          expect(noticeTurn?.parts?.at(-1)?.text).toContain(
+            'changed outside the approved exit_plan_mode flow',
+          );
+          expect(
+            history.some(
+              (content, index) =>
+                content.role === 'user' && history[index + 1]?.role === 'user',
+            ),
+          ).toBe(false);
+          expect(
+            mockConfig.takePendingManualPlanExitNotice,
+          ).toHaveBeenCalledTimes(1);
+          expect(
+            mockConfig.restorePendingManualPlanExitNotice,
+          ).not.toHaveBeenCalled();
+        },
+      );
+
+      it('does not redeliver after rebuilding a chat with the same cursor', async () => {
+        let pending = true;
+        vi.mocked(
+          mockConfig.takePendingManualPlanExitNotice,
+        ).mockImplementation(() => {
+          if (!pending) {
+            return undefined;
+          }
+          pending = false;
+          return {
+            version: 17,
+            currentMode: ApprovalMode.DEFAULT,
+          };
+        });
+        chat.enableManualPlanExitNotices();
+
+        const firstStream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'first chat' },
+          'prompt-id-plan-exit-before-rebuild',
+        );
+        for await (const _ of firstStream) {
+          /* consume */
+        }
+
+        const replacementChat = new GeminiChat(mockConfig, config);
+        replacementChat.enableManualPlanExitNotices();
+        const replacementStream = await replacementChat.sendMessageStream(
+          'test-model',
+          { message: 'replacement chat' },
+          'prompt-id-plan-exit-after-rebuild',
+        );
+        for await (const _ of replacementStream) {
+          /* consume */
+        }
+
+        expect(
+          replacementChat
+            .getHistory()
+            .flatMap((content) => content.parts ?? [])
+            .some((part) =>
+              part.text?.includes(
+                'changed outside the approved exit_plan_mode flow',
+              ),
+            ),
+        ).toBe(false);
+        expect(
+          mockConfig.takePendingManualPlanExitNotice,
+        ).toHaveBeenCalledTimes(2);
+      });
     });
 
     it('increments the user-content push counter once per surviving send', async () => {
@@ -979,6 +1400,88 @@ describe('GeminiChat', async () => {
       ).resolves.not.toThrow();
     });
 
+    it('uses the normalized function call ID for preparation metadata', async () => {
+      chat.setHistory([
+        { role: 'user', parts: [{ text: 'first request' }] },
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call-1',
+                name: 'read_file',
+                args: { file_path: 'a.txt' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                id: 'call-1',
+                name: 'read_file',
+                response: { output: 'first result' },
+              },
+            },
+          ],
+        },
+      ]);
+      const preparationResponse = {
+        candidates: [{ content: { role: 'model', parts: [] } }],
+      } as unknown as GenerateContentResponse;
+      setToolCallPreparations(preparationResponse, [
+        { callId: 'call-1', toolName: 'read_file' },
+      ]);
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield preparationResponse;
+          yield {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    {
+                      functionCall: {
+                        id: 'call-1',
+                        name: 'read_file',
+                        args: { file_path: 'b.txt' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'second request' },
+        'prompt-normalized-preparation-id',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      const preparation = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => getToolCallPreparations(event.value))[0];
+      const functionCall = events.find(
+        (event) =>
+          event.type === StreamEventType.CHUNK &&
+          event.value.functionCalls?.length,
+      );
+      expect(preparation?.callId).toBe('call-1__qwen_dup_2');
+      expect(
+        functionCall?.type === StreamEventType.CHUNK
+          ? functionCall.value.functionCalls?.[0]?.id
+          : undefined,
+      ).toBe(preparation?.callId);
+    });
+
     it('persists partial assistant turn when stream throws after a tool_use chunk', async () => {
       // Weak-network scenario: Anthropic-compatible providers emit the
       // `functionCall` part on `content_block_stop`; the SSE may then drop
@@ -1277,15 +1780,439 @@ describe('GeminiChat', async () => {
       });
     });
 
-    it('should succeed when there is finish reason and response text', async () => {
-      // Setup: Stream with both finish reason and text content
+    it('should retry semantically empty responses after a tool result', async () => {
+      vi.useFakeTimers();
+      try {
+        const recordAssistantTurn = vi.fn();
+        const chatWithRecording = new GeminiChat(
+          mockConfig,
+          config,
+          [],
+          {
+            recordAssistantTurn,
+            recordChatCompression: vi.fn(),
+          } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+          uiTelemetryService,
+        );
+        chatWithRecording.setHistory([
+          { role: 'user', parts: [{ text: 'inspect the project' }] },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call_read_file',
+                  name: 'read_file',
+                  args: { path: '/tmp/example' },
+                },
+              },
+            ],
+          },
+        ]);
+
+        const responses: GenerateContentResponse[][] = [
+          [stopResponse([{ thought: true, text: 'I should keep working.' }])],
+          [
+            stopResponse([
+              { thought: true, text: 'I should still keep working.' },
+              { text: '(empty content)' },
+            ]),
+          ],
+          [
+            {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      { thought: true, text: 'One more attempt.' },
+                      { text: '(empty ' },
+                    ],
+                  },
+                },
+              ],
+            } as GenerateContentResponse,
+            stopResponse([{ text: 'content)' }]),
+          ],
+          [stopResponse([{ text: 'Finished the analysis.' }])],
+        ];
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () =>
+          (async function* () {
+            yield* responses.shift()!;
+          })(),
+        );
+
+        const stream = await chatWithRecording.sendMessageStream(
+          'test-model',
+          {
+            message: [
+              {
+                functionResponse: {
+                  id: 'call_read_file',
+                  name: 'read_file',
+                  response: { output: 'file contents' },
+                },
+              },
+            ],
+          },
+          'prompt-id-tool-result-empty-response',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 15_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(4);
+        expect(
+          events.some((event) => event.type === StreamEventType.RETRY),
+        ).toBe(true);
+        const lastRetryIndex = events.findLastIndex(
+          (event) => event.type === StreamEventType.RETRY,
+        );
+        const finishIndex = events.findIndex(
+          (event) =>
+            event.type === StreamEventType.CHUNK &&
+            Boolean(event.value.candidates?.[0]?.finishReason),
+        );
+        expect(finishIndex).toBeGreaterThan(lastRetryIndex);
+        expect(
+          events
+            .slice(lastRetryIndex + 1)
+            .some(
+              (event) =>
+                event.type === StreamEventType.CHUNK &&
+                event.value.candidates?.[0]?.content?.parts?.some(
+                  (part) => part.text === '(empty content)',
+                ),
+            ),
+        ).toBe(false);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(3);
+        expect(mockLogContentRetry).toHaveBeenLastCalledWith(
+          mockConfig,
+          expect.objectContaining({
+            error_type: 'NO_TOOL_RESULT_PROGRESS',
+            model: 'test-model',
+          }),
+        );
+        expect(recordAssistantTurn).toHaveBeenCalledOnce();
+        expect(recordAssistantTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: [{ text: 'Finished the analysis.' }],
+          }),
+        );
+        const history = chatWithRecording.getHistory();
+        expect(history).toHaveLength(4);
+        expect(history.at(-1)).toEqual({
+          role: 'model',
+          parts: [{ text: 'Finished the analysis.' }],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should surface the last empty tool result continuation after retry exhaustion', async () => {
+      vi.useFakeTimers();
+      try {
+        chat.setHistory([
+          { role: 'user', parts: [{ text: 'inspect the project' }] },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call_read_file',
+                  name: 'read_file',
+                  args: { path: '/tmp/example' },
+                },
+              },
+            ],
+          },
+        ]);
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () =>
+          streamResponse(
+            stopResponse([{ thought: true, text: 'I should keep working.' }]),
+          ),
+        );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          {
+            message: [
+              {
+                functionResponse: {
+                  id: 'call_read_file',
+                  name: 'read_file',
+                  response: { output: 'file contents' },
+                },
+              },
+            ],
+          },
+          'prompt-id-tool-result-empty-response-exhausted',
+        );
+        const collecting = (async () => {
+          for await (const _ of stream) {
+            // consume stream
+          }
+        })();
+        const resultPromise = collecting.then(
+          () => {
+            throw new Error('Expected stream to reject');
+          },
+          (error: unknown) => {
+            expect(error).toMatchObject({
+              message:
+                'Model stream ended after a tool result without visible progress.',
+              type: 'NO_TOOL_RESULT_PROGRESS',
+            });
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(35_000);
+        await resultPromise;
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(5);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should not retry tool result continuations that make another tool call', async () => {
+      chat.setHistory([
+        { role: 'user', parts: [{ text: 'inspect the project' }] },
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call_read_file',
+                name: 'read_file',
+                args: { path: '/tmp/example' },
+              },
+            },
+          ],
+        },
+      ]);
+
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        streamResponse(
+          stopResponse([
+            {
+              functionCall: {
+                id: 'call_list_files',
+                name: 'list_files',
+                args: { path: '/tmp' },
+              },
+            },
+          ]),
+        ),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        {
+          message: [
+            {
+              functionResponse: {
+                id: 'call_read_file',
+                name: 'read_file',
+                response: { output: 'file contents' },
+              },
+            },
+          ],
+        },
+        'prompt-id-tool-result-next-tool-call',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+        false,
+      );
+      expect(
+        events.some(
+          (event) =>
+            event.type === StreamEventType.CHUNK &&
+            event.value.candidates?.[0]?.content?.parts?.some(
+              (part) => part.functionCall?.id === 'call_list_files',
+            ),
+        ),
+      ).toBe(true);
+    });
+
+    it('should escalate thought-only MAX_TOKENS responses after a tool result', async () => {
+      chat.setHistory([
+        { role: 'user', parts: [{ text: 'inspect the project' }] },
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call_read_file',
+                name: 'read_file',
+                args: { path: '/tmp/example' },
+              },
+            },
+          ],
+        },
+      ]);
+
+      const responses = [
+        streamResponse({
+          candidates: [
+            {
+              content: {
+                parts: [{ thought: true, text: 'I need more tokens.' }],
+              },
+              finishReason: 'MAX_TOKENS',
+            },
+          ],
+        } as GenerateContentResponse),
+        streamResponse(stopResponse([{ text: 'Finished the analysis.' }])),
+      ];
+      vi.mocked(mockContentGenerator.generateContentStream).mockImplementation(
+        async () => responses.shift()!,
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        {
+          message: [
+            {
+              functionResponse: {
+                id: 'call_read_file',
+                name: 'read_file',
+                response: { output: 'file contents' },
+              },
+            },
+          ],
+        },
+        'prompt-id-tool-result-max-tokens',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      const calls = vi.mocked(mockContentGenerator.generateContentStream).mock
+        .calls;
+      expect(calls[1]![0].config?.maxOutputTokens).toBeGreaterThan(
+        calls[0]![0].config?.maxOutputTokens ?? 0,
+      );
+      expect(
+        events.some(
+          (event) =>
+            event.type === StreamEventType.RETRY &&
+            event.maxOutputTokensEscalated !== undefined,
+        ),
+      ).toBe(true);
+      expect(chat.getHistory().at(-1)).toEqual({
+        role: 'model',
+        parts: [{ text: 'Finished the analysis.' }],
+      });
+    });
+
+    it('should not escalate thought-only MAX_TOKENS responses when max tokens are user-set', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+          authType: AuthType.USE_GEMINI,
+          model: 'test-model',
+          samplingParams: { max_tokens: 1024 },
+        });
+        chat.setHistory([
+          { role: 'user', parts: [{ text: 'inspect the project' }] },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call_read_file',
+                  name: 'read_file',
+                  args: { path: '/tmp/example' },
+                },
+              },
+            ],
+          },
+        ]);
+
+        const responses = [
+          streamResponse({
+            candidates: [
+              {
+                content: {
+                  parts: [{ thought: true, text: 'I need more tokens.' }],
+                },
+                finishReason: 'MAX_TOKENS',
+              },
+            ],
+          } as GenerateContentResponse),
+          streamResponse(stopResponse([{ text: 'Finished the analysis.' }])),
+        ];
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => responses.shift()!);
+
+        const stream = await chat.sendMessageStream(
+          'gemini-pro',
+          {
+            message: [
+              {
+                functionResponse: {
+                  id: 'call_read_file',
+                  name: 'read_file',
+                  response: { output: 'file contents' },
+                },
+              },
+            ],
+          },
+          'prompt-id-tool-result-user-max-tokens',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(2);
+        expect(
+          events.some(
+            (event) =>
+              event.type === StreamEventType.RETRY &&
+              event.maxOutputTokensEscalated !== undefined,
+          ),
+        ).toBe(false);
+        expect(mockLogContentRetry).toHaveBeenCalledWith(
+          mockConfig,
+          expect.objectContaining({
+            error_type: 'NO_TOOL_RESULT_PROGRESS_MAX_TOKENS',
+            model: 'gemini-pro',
+          }),
+        );
+        expect(chat.getHistory().at(-1)).toEqual({
+          role: 'model',
+          parts: [{ text: 'Finished the analysis.' }],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should preserve (empty content) outside tool result continuations', async () => {
       const validStream = (async function* () {
         yield {
           candidates: [
             {
               content: {
                 role: 'model',
-                parts: [{ text: 'valid response' }],
+                parts: [{ text: '(empty content)' }],
               },
               finishReason: 'STOP',
             },
@@ -1311,6 +2238,10 @@ describe('GeminiChat', async () => {
           }
         })(),
       ).resolves.not.toThrow();
+      expect(chat.getHistory().at(-1)).toEqual({
+        role: 'model',
+        parts: [{ text: '(empty content)' }],
+      });
     });
 
     it('should not lose finish reason when last chunk only has usage metadata', async () => {
@@ -1504,7 +2435,9 @@ describe('GeminiChat', async () => {
               parts: [{ text: 'hello' }],
             },
           ],
-          config: {},
+          // The send path window-clamps every main-turn request; with a
+          // near-empty prompt the 32K default ceiling binds.
+          config: { maxOutputTokens: 32_000 },
         },
         'prompt-id-1',
       );
@@ -1521,11 +2454,61 @@ describe('GeminiChat', async () => {
       );
     });
 
+    it('caps function responses at the provider send boundary without changing user text', async () => {
+      (
+        mockConfig as Config & {
+          getToolOutputBatchBudget: () => number;
+        }
+      ).getToolOutputBatchBudget = () => 100;
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        streamResponse({
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'done' }] },
+              finishReason: 'STOP',
+              index: 0,
+              safetyRatings: [],
+            },
+          ],
+          usageMetadata: { totalTokenCount: 1 },
+        } as unknown as GenerateContentResponse),
+      );
+      const userText = 'ordinary user text must stay unchanged';
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        {
+          message: [
+            { text: userText },
+            {
+              functionResponse: {
+                id: 'large-tool',
+                name: 'shell',
+                response: { output: 'x'.repeat(1000) },
+              },
+            },
+          ],
+        },
+        'prompt-send-guard',
+      );
+      for await (const _ of stream) {
+        // consume stream
+      }
+
+      const request = vi.mocked(mockContentGenerator.generateContentStream).mock
+        .calls[0][0];
+      const sentParts = (request.contents as Content[])[0].parts ?? [];
+      expect(sentParts[0].text).toBe(userText);
+      const output = sentParts[1].functionResponse?.response?.['output'];
+      expect(typeof output).toBe('string');
+      expect((output as string).length).toBeLessThanOrEqual(100);
+      expect(chat.getHistory()[0].parts).toEqual(sentParts);
+    });
+
     it('keeps historical image refs stable and reattaches only recent image bytes', async () => {
       vi.mocked(mockConfig.getChatCompression).mockReturnValue({
         maxRecentImagesToRetain: 1,
         imagePayloadThreshold: 1,
-
       });
       chat.setHistory([
         {
@@ -1544,7 +2527,6 @@ describe('GeminiChat', async () => {
           role: 'model',
           parts: [{ text: 'I see the second image' }],
         },
-
       ]);
       const response = (async function* () {
         yield {
@@ -1863,6 +2845,103 @@ describe('GeminiChat', async () => {
       },
     );
 
+    it('sanitizes a standalone closing thinking tag without retrying valid tool calls', async () => {
+      const recordAssistantTurn = vi.fn();
+      const chatWithRecording = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        {
+          recordAssistantTurn,
+          recordChatCompression: vi.fn(),
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      const create = vi.fn().mockImplementation(async () =>
+        (async function* () {
+          yield {
+            id: 'sanitized-protocol-tag',
+            created: 1,
+            model: 'test-model',
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  reasoning_content: 'hidden reasoning',
+                  content: '\n</think>\n',
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_read',
+                      type: 'function',
+                      function: { name: 'read_file', arguments: '{}' },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+          } as unknown as OpenAI.Chat.ChatCompletionChunk;
+        })(),
+      );
+      const provider = {
+        buildClient: () =>
+          ({ chat: { completions: { create } } }) as unknown as OpenAI,
+        buildRequest: (request: OpenAI.Chat.ChatCompletionCreateParams) =>
+          request,
+        buildHeaders: () => ({}),
+        getDefaultGenerationConfig: () => ({}),
+      } as OpenAICompatibleProvider;
+      const generator = new OpenAIContentGenerator(
+        { model: 'test-model', authType: AuthType.USE_OPENAI },
+        mockConfig,
+        provider,
+      );
+      vi.mocked(mockConfig.getContentGenerator).mockReturnValue(generator);
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        model: 'test-model',
+        authType: AuthType.USE_OPENAI,
+      });
+
+      const stream = await chatWithRecording.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-sanitized-protocol-tag',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+      const parts = events.flatMap((event) =>
+        event.type === StreamEventType.CHUNK
+          ? (event.value.candidates?.[0]?.content?.parts ?? [])
+          : [],
+      );
+
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(mockLogContentRetry).not.toHaveBeenCalled();
+      expect(mockLogProtocolTagSanitized).toHaveBeenCalledTimes(1);
+      expect(mockLogProtocolTagSanitized).toHaveBeenCalledWith(
+        mockConfig,
+        expect.objectContaining({
+          model: 'test-model',
+          prompt_id: 'prompt-id-sanitized-protocol-tag',
+          response_id: 'sanitized-protocol-tag',
+          tag_name: 'think',
+          tool_call_count: 1,
+        }),
+      );
+      expect(parts).toContainEqual({
+        functionCall: { id: 'call_read', name: 'read_file', args: {} },
+      });
+      expect(parts.some((part) => part.text?.includes('</think>'))).toBe(false);
+      expect(JSON.stringify(chatWithRecording.getHistory())).not.toContain(
+        '</think>',
+      );
+      expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.stringify(recordAssistantTurn.mock.calls[0]?.[0].message),
+      ).not.toContain('</think>');
+    });
+
     it('falls back to coerced totalTokenCount when promptTokenCount is hostile', async () => {
       const response = (async function* () {
         yield {
@@ -2135,7 +3214,7 @@ describe('GeminiChat', async () => {
       ).toBe(200);
     });
 
-    it('forwards the pending user message to the compression cheap-gate', async () => {
+    it('forwards the pending user message and request config to compression', async () => {
       // The cheap-gate inside ChatCompressionService.compress uses
       // estimatePromptTokens(history, pendingUserMessage, lastPromptTokenCount)
       // so the very first send after inherited history (where
@@ -2163,9 +3242,16 @@ describe('GeminiChat', async () => {
       );
 
       const userMessageText = 'next user prompt';
+      const requestTools = [
+        {
+          functionDeclarations: [
+            { name: 'subagent_tool', description: 'Subagent-only tool' },
+          ],
+        },
+      ];
       const stream = await chat.sendMessageStream(
         'test-model',
-        { message: userMessageText },
+        { message: userMessageText, config: { tools: requestTools } },
         'prompt-id-first-turn',
       );
       // The first event in the stream should be COMPRESSED because the
@@ -2188,18 +3274,21 @@ describe('GeminiChat', async () => {
           (part) => part.text === userMessageText,
         ),
       ).toBe(true);
+      expect(compressSpy.mock.calls[0][1].requestGenerationConfig?.tools).toBe(
+        requestTools,
+      );
     });
 
-    it('triggers compaction end-to-end through the real ChatCompressionService when lastPromptTokenCount === 0 and inherited history is large (R3.4)', async () => {
+    it('triggers cache-sharing compaction end-to-end when a provider token count is available (R3.4)', async () => {
       // Reviewer R3.4: the "forwards the pending user message" test above
-      // mocks the service entirely, so the real cheap-gate (the actual
-      // estimatePromptTokens fallback branch when lastPromptTokenCount===0)
-      // never runs. Exercise the full chain here:
+      // mocks the service entirely, so the real cheap-gate never runs there.
+      // Exercise the full chain here with the provider token-count anchor
+      // required for cache sharing:
       //   sendMessageStream → tryCompress → service.compress (REAL) →
-      //   cheap-gate (real estimate via getHistory + userMessage) →
-      //   splitter (real) → runSideQuery (mocked at baseLlmClient) →
+      //   cheap-gate (count-based estimate from the 172K anchor) →
+      //   splitter (real) → cache-sharing request (mocked at baseLlmClient) →
       //   persistence.
-      const largeChars = 'x'.repeat(520_000); // ~130K estimated tokens
+      const largeChars = 'x'.repeat(688_000); // ~172K estimated tokens
       const inheritedHistory: Content[] = [
         { role: 'user', parts: [{ text: largeChars }] },
         { role: 'model', parts: [{ text: 'ack' }] },
@@ -2207,11 +3296,13 @@ describe('GeminiChat', async () => {
         { role: 'model', parts: [{ text: 'response' }] },
       ];
       chat.setHistory(inheritedHistory);
-      expect(chat.getLastPromptTokenCount()).toBe(0);
+      chat.setLastPromptTokenCount(172_000);
+      expect(chat.getLastPromptTokenCount()).toBe(172_000);
 
-      // Default DEFAULT_TOKEN_LIMIT = 200K minus the 64K output reservation
-      // leaves a 136K effective window; 130K crosses the auto threshold, so
-      // cheap-gate must let compaction proceed.
+      // Full 200K window (DEFAULT_TOKEN_LIMIT): auto = 0.85 × 200K = 170K,
+      // hard = 177K. ~172K sits between them, so the cheap-gate (force=false
+      // path) must let compaction proceed without tripping hard-rescue.
+      const coldSpy = vi.spyOn(sideQueryModule, 'runSideQuery');
       const generateText = vi.fn().mockResolvedValue({
         text: '<state_snapshot>compressed</state_snapshot>',
         usage: {
@@ -2245,9 +3336,80 @@ describe('GeminiChat', async () => {
         (compressed as { type: StreamEventType; info: ChatCompressionInfo })
           .info.compressionStatus,
       ).toBe(CompressionStatus.COMPRESSED);
-      // Real runSideQuery was hit (proves the cheap-gate didn't short-circuit
-      // and the splitter produced a non-empty historyToCompress).
+      // Google GenAI uses the cache-sharing request rather than the cold side
+      // query, while still exercising the real splitter and accounting path.
       expect(generateText).toHaveBeenCalled();
+      expect(coldSpy).not.toHaveBeenCalled();
+    });
+
+    it('routes zero-baseline compression through the cold side query end-to-end (R5-3)', async () => {
+      // Companion to the R3.4 test above without a provider token-count
+      // anchor: an inherited history with lastPromptTokenCount === 0 must
+      // derive a non-zero compression baseline locally, and the service must
+      // skip cache sharing (no provider-reported anchor) and run the cold
+      // side query. Pins the tryCompress-baseline → service-anchor-gate
+      // composition; a gate re-sourced from opts.originalTokenCount would
+      // mis-route this to the shared path, and a dropped derivation would
+      // zero the baseline.
+      const largeChars = 'x'.repeat(688_000); // ~172K estimated tokens
+      const inheritedHistory: Content[] = [
+        { role: 'user', parts: [{ text: largeChars }] },
+        { role: 'model', parts: [{ text: 'ack' }] },
+        { role: 'user', parts: [{ text: 'follow up' }] },
+        { role: 'model', parts: [{ text: 'response' }] },
+      ];
+      chat.setHistory(inheritedHistory);
+      expect(chat.getLastPromptTokenCount()).toBe(0);
+
+      const compressSpy = vi.spyOn(
+        ChatCompressionService.prototype,
+        'compress',
+      );
+      const coldSpy = vi
+        .spyOn(sideQueryModule, 'runSideQuery')
+        .mockResolvedValue({
+          text: '<state_snapshot>compressed</state_snapshot>',
+          usage: {
+            promptTokenCount: 99_000,
+            candidatesTokenCount: 1500,
+            totalTokenCount: 100_500,
+          },
+        } as never);
+      const generateText = vi.fn();
+      vi.mocked(mockConfig.getBaseLlmClient).mockReturnValue({
+        generateText,
+      } as unknown as ReturnType<typeof mockConfig.getBaseLlmClient>);
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        makeStreamResponse('done'),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'follow-up after restore' },
+        'prompt-r5-3',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      const compressed = events.find(
+        (e) => e.type === StreamEventType.COMPRESSED,
+      );
+      expect(compressed).toBeDefined();
+      expect(
+        (compressed as { type: StreamEventType; info: ChatCompressionInfo })
+          .info.compressionStatus,
+      ).toBe(CompressionStatus.COMPRESSED);
+      // The derived non-zero baseline (not the zero counter) reached the
+      // service...
+      expect(compressSpy.mock.calls[0][1].originalTokenCount).toBeGreaterThan(
+        0,
+      );
+      // ...and the missing provider anchor kept the request on the cold
+      // path.
+      expect(generateText).not.toHaveBeenCalled();
+      expect(coldSpy).toHaveBeenCalledTimes(1);
     });
 
     it('clears consecutiveFailures after a forced successful compression', async () => {
@@ -2294,7 +3456,7 @@ describe('GeminiChat', async () => {
           compressionStatus: CompressionStatus.COMPRESSED,
         },
       });
-      await chat.tryCompress('prompt-latch-force', 'test-model', true);
+      await chat.tryCompress('prompt-latch-force', true);
       // tryCompress was called with force=true, so the service got
       // consecutiveFailures=1 (carried from step 1's increment); force
       // bypasses the breaker, but the counter was still forwarded as-is.
@@ -2371,6 +3533,9 @@ describe('GeminiChat', async () => {
       expect(compressSpy.mock.calls[1][1].force).toBe(true);
       expect(compressSpy.mock.calls[1][1].trigger).toBe('auto');
       expect(compressSpy.mock.calls[1][1].originalTokenCount).toBe(135_000);
+      expect(compressSpy.mock.calls[1][1].precomputedEffectiveTokens).toBe(
+        135_000,
+      );
       expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
         2,
       );
@@ -2794,18 +3959,17 @@ describe('GeminiChat', async () => {
     }
 
     /**
-     * 264K raw window in our mocks. With effectiveReservedOutput = 64K
-     * (max(ESCALATED_MAX_TOKENS, tokenLimit('test-model','output'))):
-     *   contextLimit    = 264K - 64K = 200K
+     * 200K raw window in our mocks. Thresholds run against the FULL window
+     * (the output clamp replaced the reservation):
      *   effectiveWindow = 200K - 20K (SUMMARY_RESERVE) = 180K
-     *   hard            = max(180K - 3K, auto) = 177K
+     *   hard            = max(180K - 3K, auto + 3K) = 177K
      * So lastPromptTokenCount=176K + a small user message tips over 177K.
      */
     beforeEach(() => {
       vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
         authType: AuthType.USE_GEMINI,
         model: 'test-model',
-        contextWindowSize: 264_000,
+        contextWindowSize: 200_000,
       });
     });
 
@@ -2832,6 +3996,7 @@ describe('GeminiChat', async () => {
           info: {
             originalTokenCount: 176_000,
             newTokenCount: 40_000,
+            newTokenCountIsEstimated: true,
             compressionStatus: CompressionStatus.COMPRESSED,
           },
         });
@@ -2877,6 +4042,7 @@ describe('GeminiChat', async () => {
           newTokenCount: 40_000,
         }),
       );
+      expect(recordPayload.info.newTokenCountIsEstimated).toBe(true);
       expect(recordPayload.compressedHistory).toEqual([
         { role: 'user', parts: [{ text: 'summary' }] },
         { role: 'model', parts: [{ text: 'ack' }] },
@@ -2971,6 +4137,7 @@ describe('GeminiChat', async () => {
       expect(mockContentGenerator.generateContentStream).not.toHaveBeenCalled();
       expect(recordChatCompression).not.toHaveBeenCalled();
       expect(chatWithRecording.getLastPromptTokenCount()).toBe(176_999);
+      expect(chatWithRecording.isLastPromptTokenCountEstimated()).toBe(false);
       expect(chatWithRecording.getHistory()[0].parts?.[0].text).toBe(
         originalHistory[0].parts?.[0].text,
       );
@@ -3024,6 +4191,7 @@ describe('GeminiChat', async () => {
       expect(mockContentGenerator.generateContentStream).not.toHaveBeenCalled();
       expect(recordChatCompression).not.toHaveBeenCalled();
       expect(chatWithRecording.getLastPromptTokenCount()).toBe(175_500);
+      expect(chatWithRecording.isLastPromptTokenCountEstimated()).toBe(false);
       expect(chatWithRecording.getHistory()[0].parts?.[0].text).toBe(
         originalHistory[0].parts?.[0].text,
       );
@@ -3876,15 +5044,13 @@ describe('GeminiChat', async () => {
       expect(compressSpy.mock.calls[0][1].force).toBe(false);
     });
 
-    it('sources reservedOutputTokens from model output limit when params.config.maxOutputTokens is absent (issue #5950)', async () => {
-      // Use claude-sonnet-4-6 which has a 65536 output limit in tokenLimits.ts.
-      // ESCALATED_MAX_TOKENS is 64000, so effectiveReservedOutput =
-      // max(64000, 65536) = 65536.
-      // With 200K window: contextLimit = 200000 - 65536 = 134464
-      // computeThresholds(134464): effectiveWindow = 114464, hard = 111464
-      // Without the fix: contextLimit = 200000, hard = 177000
-      // Setting lastPromptTokenCount to 112000 should trigger hard-rescue
-      // ONLY when the output budget is correctly reserved.
+    it('gates thresholds on the full window and clamps maxOutputTokens to the room left (issue #5950)', async () => {
+      // claude-sonnet-4-6 has a 65,536 output limit, clipped to the 64K
+      // ceiling. With the old reservation, a 170K prompt on a 200K window
+      // would have hard-rescued (hard was ~111K); with full-window
+      // thresholds hard = 177K, so this send takes the normal cheap-gate
+      // path — and the outgoing request is window-clamped instead:
+      // maxOutputTokens = 200000 − ~170001 − 10000 (margin) ≈ 20K.
       vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
         authType: AuthType.USE_GEMINI,
         model: 'claude-sonnet-4-6',
@@ -3894,18 +5060,15 @@ describe('GeminiChat', async () => {
       const compressSpy = vi
         .spyOn(ChatCompressionService.prototype, 'compress')
         .mockResolvedValueOnce({
-          newHistory: [
-            { role: 'user', parts: [{ text: 'summary' }] },
-            { role: 'model', parts: [{ text: 'ack' }] },
-          ],
+          newHistory: null,
           info: {
-            originalTokenCount: 112_000,
-            newTokenCount: 40_000,
-            compressionStatus: CompressionStatus.COMPRESSED,
+            originalTokenCount: 170_000,
+            newTokenCount: 170_000,
+            compressionStatus: CompressionStatus.NOOP,
           },
         });
       vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
-        makeStreamResponse('after output-budget rescue'),
+        makeStreamResponse('clamped response'),
       );
 
       const chatInstance = new GeminiChat(
@@ -3915,40 +5078,80 @@ describe('GeminiChat', async () => {
         undefined,
         uiTelemetryService,
       );
-      chatInstance.setLastPromptTokenCount(112_000);
+      chatInstance.setLastPromptTokenCount(170_000);
 
-      // Do NOT pass params.config.maxOutputTokens — exercises the real
-      // sourcing path where effectiveReservedOutput is computed from
-      // tokenLimit(model, 'output') / ESCALATED_MAX_TOKENS.
       const stream = await chatInstance.sendMessageStream(
         'claude-sonnet-4-6',
         { message: 'hi' },
-        'prompt-output-budget-sourcing',
+        'prompt-window-clamp-taper',
       );
       for await (const _ of stream) {
         /* consume */
       }
 
-      // Compression must have been triggered with force=true (hard-rescue)
-      // proving that the adjusted threshold (111464) was used, not the raw
-      // threshold (177K) which 112K would NOT exceed.
+      // Full-window thresholds: 170K < hard (177K) → cheap-gate, not rescue.
       expect(compressSpy).toHaveBeenCalledTimes(1);
-      expect(compressSpy.mock.calls[0][1].force).toBe(true);
-      // Also verify reservedOutputTokens was threaded to the compression
-      // service cheap-gate.
-      expect(compressSpy.mock.calls[0][1].reservedOutputTokens).toBe(65_536);
+      expect(compressSpy.mock.calls[0][1].force).toBe(false);
+
+      // The outgoing request is clamped to the room left in the window:
+      // char/4("hi") = 1 token, inflated by the conservative safety factor
+      // (1.5x, ceil'd) to 2, estimate = 170,000 + 2,
+      // room = 200,000 − 170,002 − 10,000.
+      const requestConfig = vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mock.calls[0][0].config as { maxOutputTokens?: number };
+      expect(requestConfig.maxOutputTokens).toBe(19_998);
+      expect(170_000 + requestConfig.maxOutputTokens!).toBeLessThanOrEqual(
+        200_000,
+      );
     });
 
-    it('sources reservedOutputTokens from QWEN_CODE_MAX_OUTPUT_TOKENS env var when no config override is present', async () => {
-      // When QWEN_CODE_MAX_OUTPUT_TOKENS is set (32000) and there is no
-      // samplingParams.max_tokens nor params.config.maxOutputTokens, the env
-      // var value becomes effectiveReservedOutput.
-      // With 200K window: contextLimit = 200000 - 32000 = 168000
-      // computeThresholds(168000): effectiveWindow = 148000, hard = 145000
-      // Without the fix (raw 200K): hard = 177000, and 150K would NOT exceed.
-      // Setting lastPromptTokenCount to 150000 triggers hard-rescue ONLY when
-      // the env var budget is correctly subtracted.
-      process.env['QWEN_CODE_MAX_OUTPUT_TOKENS'] = '32000';
+    it('sends the default ceiling when the window has room (unknown model → 32K)', async () => {
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'test-model',
+        contextWindowSize: 200_000,
+      });
+
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: null,
+        info: {
+          originalTokenCount: 50_000,
+          newTokenCount: 50_000,
+          compressionStatus: CompressionStatus.NOOP,
+        },
+      });
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        makeStreamResponse('roomy response'),
+      );
+
+      const chatInstance = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        undefined,
+        uiTelemetryService,
+      );
+      chatInstance.setLastPromptTokenCount(50_000);
+
+      const stream = await chatInstance.sendMessageStream(
+        'test-model',
+        { message: 'hi' },
+        'prompt-window-clamp-ceiling',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      // Room = 200K − ~50K − 10K = ~140K; the 32K default ceiling binds.
+      const requestConfig = vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mock.calls[0][0].config as { maxOutputTokens?: number };
+      expect(requestConfig.maxOutputTokens).toBe(32_000);
+    });
+
+    it('uses QWEN_CODE_MAX_OUTPUT_TOKENS as the ceiling when set', async () => {
+      process.env['QWEN_CODE_MAX_OUTPUT_TOKENS'] = '12000';
       try {
         vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
           authType: AuthType.USE_GEMINI,
@@ -3956,21 +5159,19 @@ describe('GeminiChat', async () => {
           contextWindowSize: 200_000,
         });
 
-        const compressSpy = vi
-          .spyOn(ChatCompressionService.prototype, 'compress')
-          .mockResolvedValueOnce({
-            newHistory: [
-              { role: 'user', parts: [{ text: 'summary' }] },
-              { role: 'model', parts: [{ text: 'ack' }] },
-            ],
-            info: {
-              originalTokenCount: 150_000,
-              newTokenCount: 40_000,
-              compressionStatus: CompressionStatus.COMPRESSED,
-            },
-          });
+        vi.spyOn(
+          ChatCompressionService.prototype,
+          'compress',
+        ).mockResolvedValue({
+          newHistory: null,
+          info: {
+            originalTokenCount: 50_000,
+            newTokenCount: 50_000,
+            compressionStatus: CompressionStatus.NOOP,
+          },
+        });
         vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
-          makeStreamResponse('after env-var rescue'),
+          makeStreamResponse('env ceiling response'),
         );
 
         const chatInstance = new GeminiChat(
@@ -3980,37 +5181,232 @@ describe('GeminiChat', async () => {
           undefined,
           uiTelemetryService,
         );
-        chatInstance.setLastPromptTokenCount(150_000);
+        chatInstance.setLastPromptTokenCount(50_000);
 
         const stream = await chatInstance.sendMessageStream(
           'test-model',
           { message: 'hi' },
-          'prompt-env-var-output-budget',
+          'prompt-window-clamp-env-ceiling',
         );
         for await (const _ of stream) {
           /* consume */
         }
 
-        // Compression must have been triggered with force=true (hard-rescue)
-        // proving that the adjusted threshold (145000) was used, not the raw
-        // threshold (177K) which 150K would NOT exceed.
-        expect(compressSpy).toHaveBeenCalledTimes(1);
-        expect(compressSpy.mock.calls[0][1].force).toBe(true);
-        expect(compressSpy.mock.calls[0][1].reservedOutputTokens).toBe(32_000);
+        const requestConfig = vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mock.calls[0][0].config as { maxOutputTokens?: number };
+        expect(requestConfig.maxOutputTokens).toBe(12_000);
       } finally {
         delete process.env['QWEN_CODE_MAX_OUTPUT_TOKENS'];
       }
     });
 
-    it('caps reservedOutputTokens at half the context window for small custom windows (issue #6144)', async () => {
-      // Custom local model (unknown to tokenLimits.ts) with a 65,536-token
-      // window and no max_tokens overrides. Without the cap,
-      // effectiveReservedOutput = max(ESCALATED_MAX_TOKENS, 32000) = 64000,
-      // collapsing the input budget to 65536 - 64000 = 1536 tokens: a ~6K
-      // prompt trips the hard-rescue guard, compression NOOPs, and the send
-      // fails with "Context is too large to send safely...". With the cap,
-      // the reservation is floor(65536 / 2) = 32768, thresholds are sane
-      // (hard ≈ 25.9K), and the same prompt sends normally.
+    it('pads the first-send clamp estimate for unseen system/tool overhead', async () => {
+      // On the very first send (lastPromptTokenCount === 0) the char/4
+      // history estimate misses ~15-20K of system-prompt + tool-schema
+      // overhead. Without the pad, the clamp on a 40K window would grant
+      // ~30K of output against a real prompt of ~18K+ → prompt + max_tokens
+      // overflows the window (observed live in the E2E dry-run: 18,359 +
+      // 26,764 = 45,123 > 40,000). With the 20K pad the grant drops to
+      // ~10K, keeping the invariant even in the worst under-count case.
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'test-model',
+        contextWindowSize: 40_000,
+      });
+
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: null,
+        info: {
+          originalTokenCount: 0,
+          newTokenCount: 0,
+          compressionStatus: CompressionStatus.NOOP,
+        },
+      });
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        makeStreamResponse('first send'),
+      );
+
+      const chatInstance = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        undefined,
+        uiTelemetryService,
+      );
+      // lastPromptTokenCount deliberately left at 0 (fresh session).
+
+      const stream = await chatInstance.sendMessageStream(
+        'test-model',
+        { message: 'hi' },
+        'prompt-first-send-clamp-pad',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      // clamp = 40000 − (1-token estimate + 20000 pad) − 10000 margin = 9,999,
+      // NOT the ~30K an unpadded estimate would produce.
+      const requestConfig = vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mock.calls[0][0].config as { maxOutputTokens?: number };
+      expect(requestConfig.maxOutputTokens).toBe(9_999);
+    });
+
+    it('keeps the overhead pad after compression uses an estimated baseline', async () => {
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'test-model',
+        contextWindowSize: 40_000,
+      });
+
+      vi.spyOn(ChatCompressionService.prototype, 'compress')
+        .mockResolvedValueOnce({
+          newHistory: [
+            { role: 'user', parts: [{ text: 'summary' }] },
+            { role: 'model', parts: [{ text: 'ok' }] },
+          ],
+          info: {
+            originalTokenCount: 1000,
+            newTokenCount: 79,
+            compressionStatus: CompressionStatus.COMPRESSED,
+          },
+        })
+        .mockResolvedValueOnce({
+          newHistory: null,
+          info: {
+            originalTokenCount: 79,
+            newTokenCount: 79,
+            compressionStatus: CompressionStatus.NOOP,
+          },
+        });
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        makeStreamResponse('first send after compression'),
+      );
+
+      const chatInstance = new GeminiChat(
+        mockConfig,
+        config,
+        [
+          { role: 'user', parts: [{ text: 'history without usage' }] },
+          { role: 'model', parts: [{ text: 'response' }] },
+        ],
+        undefined,
+        uiTelemetryService,
+      );
+      await chatInstance.tryCompress('prompt-estimated-compression', true);
+      expect(chatInstance.isLastPromptTokenCountEstimated()).toBe(true);
+
+      const stream = await chatInstance.sendMessageStream(
+        'test-model',
+        { message: 'hi' },
+        'prompt-estimated-clamp-pad',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      const requestConfig = vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mock.calls[0][0].config as { maxOutputTokens?: number };
+      expect(requestConfig.maxOutputTokens).toBe(9_919);
+    });
+
+    it('clears estimated provenance when provider usage is received', async () => {
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'test-model',
+        contextWindowSize: 40_000,
+      });
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: null,
+        info: {
+          originalTokenCount: 79,
+          newTokenCount: 79,
+          compressionStatus: CompressionStatus.NOOP,
+        },
+      });
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        makeStreamResponse('usage received', {
+          promptTokenCount: 123,
+          candidatesTokenCount: 7,
+          totalTokenCount: 130,
+        }),
+      );
+
+      const chatInstance = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        undefined,
+        uiTelemetryService,
+      );
+      chatInstance.seedResumeTokenCounts(79, 0, true);
+      expect(chatInstance.isLastPromptTokenCountEstimated()).toBe(true);
+
+      const stream = await chatInstance.sendMessageStream(
+        'test-model',
+        { message: 'hi' },
+        'prompt-provider-usage-clears-estimate',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      expect(chatInstance.getLastPromptTokenCount()).toBe(123);
+      expect(chatInstance.isLastPromptTokenCountEstimated()).toBe(false);
+    });
+
+    it('keeps estimated provenance when provider usage has no usable count', async () => {
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'test-model',
+        contextWindowSize: 40_000,
+      });
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: null,
+        info: {
+          originalTokenCount: 79,
+          newTokenCount: 79,
+          compressionStatus: CompressionStatus.NOOP,
+        },
+      });
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        makeStreamResponse('usage omitted', {
+          promptTokenCount: 0,
+          totalTokenCount: 0,
+        }),
+      );
+
+      const chatInstance = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        undefined,
+        uiTelemetryService,
+      );
+      chatInstance.seedResumeTokenCounts(79, 0, true);
+
+      const stream = await chatInstance.sendMessageStream(
+        'test-model',
+        { message: 'hi' },
+        'prompt-provider-usage-keeps-estimate',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      expect(chatInstance.getLastPromptTokenCount()).toBe(79);
+      expect(chatInstance.isLastPromptTokenCountEstimated()).toBe(true);
+    });
+
+    it('keeps a sane input budget on small custom windows (issue #6144)', async () => {
+      // Custom local model with a 65,536-token window. Under the old
+      // reservation a flat 64K was subtracted from the window, collapsing
+      // the input budget to 1,536 tokens and rejecting a ~6K prompt. With
+      // full-window thresholds the same prompt sends normally, and the
+      // output request is the model's 32,768 output limit (room =
+      // 65,536 − ~6,280 − 10,000 ≈ 49K does not bind).
       vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
         authType: AuthType.USE_GEMINI,
         model: 'qwen3coder-64k',
@@ -4038,24 +5434,24 @@ describe('GeminiChat', async () => {
         undefined,
         uiTelemetryService,
       );
-      // The reporter's prompt size: far above the collapsed 1,536 hard limit
-      // but well below the capped thresholds (auto ≈ 22.9K).
       chatInstance.setLastPromptTokenCount(6_276);
 
       const stream = await chatInstance.sendMessageStream(
         'qwen3coder-64k',
         { message: 'hi' },
-        'prompt-small-window-cap',
+        'prompt-small-window-clamp',
       );
       for await (const _ of stream) {
         /* consume — must not throw the hard-rescue failure */
       }
 
-      // Normal auto-path cheap-gate (force=false), NOT hard-tier rescue, and
-      // the capped reservation is what reaches the compression service.
+      // Normal auto-path cheap-gate (force=false), NOT hard-tier rescue.
       expect(compressSpy).toHaveBeenCalledTimes(1);
       expect(compressSpy.mock.calls[0][1].force).toBe(false);
-      expect(compressSpy.mock.calls[0][1].reservedOutputTokens).toBe(32_768);
+      const requestConfig = vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mock.calls[0][0].config as { maxOutputTokens?: number };
+      expect(requestConfig.maxOutputTokens).toBe(32_768);
     });
   });
 
@@ -4325,6 +5721,35 @@ describe('GeminiChat', async () => {
     });
   });
 
+  describe('getHistoryForForkWindow', () => {
+    it('removes startup context before curating adjacent user turns', () => {
+      const startup: Content = {
+        role: 'user',
+        parts: [
+          {
+            text: '<system-reminder>\nstartup context\n</system-reminder>',
+          },
+        ],
+      };
+      const firstTurn: Content = {
+        role: 'user',
+        parts: [
+          {
+            text: '<system-reminder>\nturn context\n</system-reminder>',
+          },
+          { text: 'first question' },
+        ],
+      };
+      const answer: Content = {
+        role: 'model',
+        parts: [{ text: 'first answer' }],
+      };
+      chat.setHistory([startup, firstTurn, answer]);
+
+      expect(chat.getHistoryForForkWindow()).toEqual([firstTurn, answer]);
+    });
+  });
+
   describe('getHistoryTailShallow', () => {
     it('copies only recent containers without cloning payloads', () => {
       const oldContent: Content = { role: 'user', parts: [{ text: 'old' }] };
@@ -4529,12 +5954,20 @@ describe('GeminiChat', async () => {
         );
         await expectStreamExhaustion(stream);
 
-        // Should be called 3 times (1 initial + 2 transient retries)
+        // Should be called 5 times (1 initial + 4 transient retries)
         expect(
           mockContentGenerator.generateContentStream,
-        ).toHaveBeenCalledTimes(3);
-        expect(mockLogContentRetry).toHaveBeenCalledTimes(2);
+        ).toHaveBeenCalledTimes(5);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(4);
         expect(mockLogContentRetryFailure).toHaveBeenCalledTimes(1);
+        expect(mockLogContentRetryFailure).toHaveBeenCalledWith(
+          mockConfig,
+          expect.objectContaining({
+            total_attempts: 5,
+            final_error_type: 'NO_FINISH_REASON',
+            model: 'test-model',
+          }),
+        );
 
         // History should still contain the user message.
         const history = chat.getHistory();
@@ -4548,9 +5981,281 @@ describe('GeminiChat', async () => {
       }
     });
 
-    it('should retry usage-only empty streams and succeed on a later attempt', async () => {
+    it('should recover after four consecutive invalid streams', async () => {
       vi.useFakeTimers();
       try {
+        let callCount = 0;
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => {
+          callCount++;
+          if (callCount <= 4) {
+            return (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: { parts: [] },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })();
+          }
+
+          return (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: { parts: [{ text: 'Recovered response' }] },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })();
+        });
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-id-four-invalid-streams',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 25_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(5);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(4);
+        for (const [index, retryDelayMs] of [
+          2000, 4000, 6000, 8000,
+        ].entries()) {
+          expect(mockLogContentRetry).toHaveBeenNthCalledWith(
+            index + 1,
+            mockConfig,
+            expect.objectContaining({
+              attempt_number: index,
+              error_type: 'NO_RESPONSE_TEXT',
+              retry_delay_ms: retryDelayMs,
+              model: 'test-model',
+            }),
+          );
+        }
+        expect(mockLogContentRetryFailure).not.toHaveBeenCalled();
+        expect(
+          events.some(
+            (event) =>
+              event.type === StreamEventType.CHUNK &&
+              event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                'Recovered response',
+          ),
+        ).toBe(true);
+        expect(chat.getHistory()).toEqual([
+          { role: 'user', parts: [{ text: 'test' }] },
+          { role: 'model', parts: [{ text: 'Recovered response' }] },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      {
+        name: 'protocol tag leaks',
+        errorType: 'PROTOCOL_TAG_LEAK',
+        delta: {
+          reasoning_content: 'hidden reasoning',
+          content: '</think> leaked visible reasoning',
+        },
+        finishReason: 'stop',
+        retryCount: 2,
+      },
+      {
+        name: 'malformed tool calls',
+        errorType: 'MALFORMED_TOOL_CALL',
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_without_name',
+              type: 'function',
+              function: { arguments: '{}' },
+            },
+          ],
+        },
+        finishReason: 'tool_calls',
+        retryCount: 4,
+      },
+    ] as const)(
+      'should retry $name through the OpenAI pipeline',
+      async (testCase) => {
+        vi.useFakeTimers();
+        try {
+          const create = vi.fn().mockImplementation(async () =>
+            (async function* () {
+              yield {
+                id: 'protocol-tag-leak',
+                created: 1,
+                model: 'test-model',
+                choices: [
+                  {
+                    index: 0,
+                    delta: testCase.delta,
+                    finish_reason: testCase.finishReason,
+                  },
+                ],
+              } as unknown as OpenAI.Chat.ChatCompletionChunk;
+            })(),
+          );
+          const provider = {
+            buildClient: () =>
+              ({ chat: { completions: { create } } }) as unknown as OpenAI,
+            buildRequest: (request: OpenAI.Chat.ChatCompletionCreateParams) =>
+              request,
+            buildHeaders: () => ({}),
+            getDefaultGenerationConfig: () => ({}),
+          } as OpenAICompatibleProvider;
+          const generator = new OpenAIContentGenerator(
+            { model: 'test-model', authType: AuthType.USE_OPENAI },
+            mockConfig,
+            provider,
+          );
+          vi.mocked(mockConfig.getContentGenerator).mockReturnValue(generator);
+          vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+            model: 'test-model',
+            authType: AuthType.USE_OPENAI,
+          });
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            `prompt-id-${testCase.errorType.toLowerCase()}-budget`,
+          );
+          await expectStreamExhaustion(stream);
+
+          expect(create).toHaveBeenCalledTimes(testCase.retryCount + 1);
+          expect(mockLogContentRetry).toHaveBeenCalledTimes(
+            testCase.retryCount,
+          );
+          expect(mockLogContentRetryFailure).toHaveBeenCalledWith(
+            mockConfig,
+            expect.objectContaining({
+              total_attempts: testCase.retryCount + 1,
+              final_error_type: testCase.errorType,
+              model: 'test-model',
+            }),
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it('keeps invalid stream retry budgets independent across error types', async () => {
+      vi.useFakeTimers();
+      try {
+        let callCount = 0;
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => {
+          callCount++;
+          if (callCount <= 2) {
+            return streamResponse(stopResponse([]));
+          }
+          if (callCount === 3) {
+            return streamResponse(
+              stopResponse([
+                {
+                  text: '<analysis>hidden</analysis><summary>leaked</summary>',
+                },
+              ]),
+            );
+          }
+
+          return streamResponse(stopResponse([{ text: 'Recovered response' }]));
+        });
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-id-mixed-invalid-streams',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 15_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(4);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(3);
+        expect(mockLogContentRetry).toHaveBeenLastCalledWith(
+          mockConfig,
+          expect.objectContaining({
+            attempt_number: 0,
+            error_type: 'PROTOCOL_TAG_LEAK',
+            retry_delay_ms: 2000,
+            model: 'test-model',
+          }),
+        );
+        expect(
+          events.some(
+            (event) =>
+              event.type === StreamEventType.CHUNK &&
+              event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                'Recovered response',
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('surfaces an abort fired during the invalid-stream retry delay without retrying again', async () => {
+      vi.useFakeTimers();
+      try {
+        const abortController = new AbortController();
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => streamResponse(stopResponse([])));
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test', config: { abortSignal: abortController.signal } },
+          'prompt-id-invalid-stream-abort-delay',
+        );
+
+        const iterator = stream[Symbol.asyncIterator]();
+        let next = await iterator.next();
+        while (!next.done && next.value.type !== StreamEventType.RETRY) {
+          next = await iterator.next();
+        }
+        if (next.done) {
+          throw new Error('Expected invalid stream retry event.');
+        }
+        expect(next.value.type).toBe(StreamEventType.RETRY);
+
+        const nextPromise = iterator.next();
+        abortController.abort();
+        await expect(nextPromise).rejects.toThrow();
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should retry usage-only empty streams without recording failed attempts', async () => {
+      vi.useFakeTimers();
+      try {
+        const recordAssistantTurn = vi.fn();
+        const chatWithRecording = new GeminiChat(
+          mockConfig,
+          config,
+          [],
+          {
+            recordAssistantTurn,
+            recordChatCompression: vi.fn(),
+          } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+          uiTelemetryService,
+        );
         vi.mocked(mockContentGenerator.generateContentStream)
           .mockImplementationOnce(async () =>
             (async function* () {
@@ -4578,7 +6283,7 @@ describe('GeminiChat', async () => {
             })(),
           );
 
-        const stream = await chat.sendMessageStream(
+        const stream = await chatWithRecording.sendMessageStream(
           'test-model',
           { message: 'test' },
           'prompt-id-empty-usage-retry',
@@ -4589,6 +6294,10 @@ describe('GeminiChat', async () => {
           mockContentGenerator.generateContentStream,
         ).toHaveBeenCalledTimes(2);
         expect(mockLogContentRetry).toHaveBeenCalledTimes(1);
+        expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+        expect(recordAssistantTurn.mock.calls[0]?.[0].message).toEqual([
+          { text: 'Recovered after empty stream' },
+        ]);
         expect(
           events.some(
             (e) =>
@@ -4807,11 +6516,222 @@ describe('GeminiChat', async () => {
       }
     });
 
-    it('tries the next fallback when a fallback fails before emitting output', async () => {
+    it('uses one exact image route across retries and filters history for the next target', async () => {
+      const capacityError = Object.assign(
+        new Error('temporarily unavailable'),
+        {
+          status: 503,
+        },
+      );
+      const routeGenerateContentStream = vi
+        .fn()
+        .mockRejectedValueOnce(capacityError)
+        .mockResolvedValueOnce(
+          (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: { parts: [{ text: 'seen' }] },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })(),
+        );
+      const routeGenerator = {
+        ...mockContentGenerator,
+        generateContentStream: routeGenerateContentStream,
+      } as ContentGenerator;
+      const routeSelector =
+        'openai:vision-agent\0https://vision.example.com/v1';
+      const selector = `${routeSelector}\0`;
+      const resolveForModel = vi.fn().mockResolvedValue({
+        contentGenerator: routeGenerator,
+        contentGeneratorConfig: {
+          model: 'vision-agent',
+          authType: AuthType.USE_OPENAI,
+          maxRetries: 1,
+          modalities: { image: true },
+        },
+        retryAuthType: AuthType.USE_OPENAI,
+        model: 'vision-agent',
+      });
+      vi.mocked(mockConfig.getBaseLlmClient).mockReturnValue({
+        resolveForModel,
+      } as unknown as ReturnType<typeof mockConfig.getBaseLlmClient>);
+      vi.mocked(mockConfig.getEffectiveInputModalities).mockReturnValue({
+        pdf: true,
+      });
+      chat = new GeminiChat(
+        mockConfig,
+        config,
+        [
+          {
+            role: 'user',
+            parts: [
+              { text: 'prior question' },
+              {
+                inlineData: {
+                  mimeType: 'application/pdf',
+                  data: 'prior-pdf',
+                },
+              },
+            ],
+          },
+          { role: 'model', parts: [{ text: 'prior answer' }] },
+        ],
+        undefined,
+        uiTelemetryService,
+      );
+      const tryCompress = vi.spyOn(chat, 'tryCompress');
+      mockRetryWithBackoff.mockImplementation(async (apiCall, options) => {
+        try {
+          return await apiCall();
+        } catch (error) {
+          expect(options?.shouldRetryOnError?.(error)).toBe(true);
+          return apiCall();
+        }
+      });
+
+      const stream = await chat.sendMessageStream(
+        selector,
+        {
+          message: [
+            { text: 'inspect' },
+            {
+              inlineData: {
+                mimeType: 'image/png',
+                data: 'private-image',
+              },
+            },
+          ],
+        },
+        'prompt-exact-route-retry',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      expect(resolveForModel).toHaveBeenCalledOnce();
+      expect(resolveForModel).toHaveBeenCalledWith(routeSelector, {
+        failClosed: true,
+      });
+      expect(tryCompress).not.toHaveBeenCalled();
+      expect(routeGenerateContentStream).toHaveBeenCalledTimes(2);
+      expect(mockContentGenerator.generateContentStream).not.toHaveBeenCalled();
+      const routeRequest = JSON.stringify(
+        routeGenerateContentStream.mock.calls.at(-1)?.[0],
+      );
+      expect(routeRequest).toContain('"model":"vision-agent"');
+      expect(routeRequest).toContain('private-image');
+      expect(routeRequest).toContain('[document: application/pdf]');
+      expect(routeRequest).not.toContain('prior-pdf');
+
+      vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mockResolvedValueOnce(
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: { parts: [{ text: 'primary follow-up' }] },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+      const primaryStream = await chat.sendMessageStream(
+        'test-model',
+        {
+          message: [
+            { text: 'continue on primary' },
+            {
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: 'current-pdf',
+              },
+            },
+          ],
+        },
+        'prompt-after-exact-route',
+      );
+      for await (const _ of primaryStream) {
+        /* consume */
+      }
+
+      const primaryRequest = JSON.stringify(
+        vi.mocked(mockContentGenerator.generateContentStream).mock
+          .calls[0]?.[0],
+      );
+      expect(primaryRequest).toContain('[image: image/png]');
+      expect(primaryRequest).not.toContain('private-image');
+      expect(primaryRequest).toContain('prior-pdf');
+      expect(primaryRequest).toContain('current-pdf');
+      const history = JSON.stringify(chat.getHistory());
+      expect(history).toContain('private-image');
+      expect(history).toContain('prior-pdf');
+      expect(history).toContain('current-pdf');
+    });
+
+    it('fails an exact image route without entering the fallback chain', async () => {
+      const capacityError = Object.assign(new Error('vision unavailable'), {
+        status: 503,
+      });
+      const routeGenerator = {
+        ...mockContentGenerator,
+        generateContentStream: vi.fn().mockRejectedValue(capacityError),
+      } as ContentGenerator;
+      const selector = 'openai:vision-agent\0https://vision.example.com/v1\0';
+      const resolveForModel = vi.fn().mockResolvedValue({
+        contentGenerator: routeGenerator,
+        contentGeneratorConfig: {
+          model: 'vision-agent',
+          authType: AuthType.USE_OPENAI,
+          maxRetries: 0,
+          modalities: { image: true },
+        },
+        retryAuthType: AuthType.USE_OPENAI,
+        model: 'vision-agent',
+      });
+      vi.mocked(mockConfig.getBaseLlmClient).mockReturnValue({
+        resolveForModel,
+      } as unknown as ReturnType<typeof mockConfig.getBaseLlmClient>);
+      vi.mocked(mockConfig.getModelFallbacks).mockReturnValue([
+        'ordinary-fallback',
+      ]);
+
+      const stream = await chat.sendMessageStream(
+        selector,
+        {
+          message: [
+            {
+              inlineData: { mimeType: 'image/png', data: 'private-image' },
+            },
+          ],
+        },
+        'prompt-exact-route-failure',
+      );
+      await expect(
+        (async () => {
+          for await (const _ of stream) {
+            /* consume */
+          }
+        })(),
+      ).rejects.toBe(capacityError);
+
+      expect(resolveForModel).toHaveBeenCalledOnce();
+      expect(mockContentGenerator.generateContentStream).not.toHaveBeenCalled();
+    });
+
+    it('continues fallback after usage and preparation metadata', async () => {
       vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
         authType: AuthType.USE_GEMINI,
         model: 'test-model',
         maxRetries: 0,
+      });
+      vi.mocked(mockConfig.getEffectiveInputModalities).mockReturnValue({
+        image: true,
       });
       vi.mocked(mockConfig.getModelFallbacks).mockReturnValue([
         'fallback-a',
@@ -4835,6 +6755,7 @@ describe('GeminiChat', async () => {
           contentGenerator: makeFallbackGenerator(
             fallbackAGenerateContentStream,
           ),
+          contentGeneratorConfig: { modalities: {} },
           retryAuthType: AuthType.USE_GEMINI,
           retryErrorCodes: undefined,
           model: 'fallback-a',
@@ -4843,6 +6764,7 @@ describe('GeminiChat', async () => {
           contentGenerator: makeFallbackGenerator(
             fallbackBGenerateContentStream,
           ),
+          contentGeneratorConfig: { modalities: { image: true } },
           retryAuthType: AuthType.USE_GEMINI,
           retryErrorCodes: undefined,
           model: 'fallback-b',
@@ -4859,8 +6781,26 @@ describe('GeminiChat', async () => {
       );
       vi.mocked(
         mockContentGenerator.generateContentStream,
-      ).mockRejectedValueOnce(capacityError);
-      fallbackAGenerateContentStream.mockRejectedValueOnce(capacityError);
+      ).mockResolvedValueOnce(
+        (async function* () {
+          yield {
+            usageMetadata: { promptTokenCount: 10, totalTokenCount: 10 },
+          } as GenerateContentResponse;
+          throw capacityError;
+        })(),
+      );
+      const preparationResponse = {
+        candidates: [{ content: { parts: [] } }],
+      } as unknown as GenerateContentResponse;
+      setToolCallPreparations(preparationResponse, [
+        { callId: 'call-fallback-a', toolName: 'read_file' },
+      ]);
+      fallbackAGenerateContentStream.mockResolvedValueOnce(
+        (async function* () {
+          yield preparationResponse;
+          throw capacityError;
+        })(),
+      );
       fallbackBGenerateContentStream.mockResolvedValueOnce(
         (async function* () {
           yield {
@@ -4876,7 +6816,17 @@ describe('GeminiChat', async () => {
 
       const stream = await chat.sendMessageStream(
         'test-model',
-        { message: 'test' },
+        {
+          message: [
+            { text: 'test' },
+            {
+              inlineData: {
+                mimeType: 'image/png',
+                data: 'fallback-image',
+              },
+            },
+          ],
+        },
         'prompt-two-fallbacks',
       );
       const events: StreamEvent[] = [];
@@ -4887,6 +6837,13 @@ describe('GeminiChat', async () => {
       expect(
         events.filter((event) => event.type === StreamEventType.MODEL_FALLBACK),
       ).toHaveLength(2);
+      expect(
+        events.some(
+          (event) =>
+            event.type === StreamEventType.CHUNK &&
+            event.value.usageMetadata?.promptTokenCount === 10,
+        ),
+      ).toBe(true);
       expect(
         events.filter((event) => event.type === StreamEventType.MODEL_FALLBACK),
       ).toEqual([
@@ -4912,6 +6869,12 @@ describe('GeminiChat', async () => {
       expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
         1,
       );
+      expect(
+        JSON.stringify(fallbackAGenerateContentStream.mock.calls[0]?.[0]),
+      ).not.toContain('fallback-image');
+      expect(
+        JSON.stringify(fallbackBGenerateContentStream.mock.calls[0]?.[0]),
+      ).toContain('fallback-image');
       expect(fallbackAGenerateContentStream).toHaveBeenCalledTimes(1);
       expect(fallbackBGenerateContentStream).toHaveBeenCalledTimes(1);
       expect(
@@ -5569,54 +7532,1509 @@ describe('GeminiChat', async () => {
       }
     });
 
-    it('does not retry retryable transport stream errors after yielding a chunk', async () => {
-      const transportError = Object.assign(new TypeError('terminated'), {
-        cause: Object.assign(new Error('other side closed'), {
-          code: 'UND_ERR_SOCKET',
-        }),
+    it('does not replay a transport stream error after yielding a chunk', async () => {
+      // The replay path stays closed once output has reached callers —
+      // re-sending would duplicate it. Recovery goes through the
+      // continuation path instead (see 'transport stream continuation'
+      // below), which is what the second attempt here is.
+      vi.useFakeTimers();
+      try {
+        const transportError = Object.assign(new TypeError('terminated'), {
+          cause: Object.assign(new Error('other side closed'), {
+            code: 'UND_ERR_SOCKET',
+          }),
+        });
+
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Partial response before socket close' }],
+                    },
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+              throw transportError;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: { parts: [{ text: ' …and the rest.' }] },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })(),
+          );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-transport-no-replay-after-chunk',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+        // The second attempt is a continuation, not a replay: its request
+        // carries the delivered text plus a resume instruction rather than
+        // repeating the original contents unchanged.
+        const secondRequest = vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mock.calls[1]![0].contents as Content[];
+        expect(secondRequest.at(-2)).toEqual({
+          role: 'model',
+          parts: [{ text: 'Partial response before socket close' }],
+        });
+        expect(
+          events.filter(
+            (event) =>
+              event.type === StreamEventType.RETRY && !event.isContinuation,
+          ),
+        ).toHaveLength(0);
+        expect(
+          events.some(
+            (event) =>
+              event.type === StreamEventType.CHUNK &&
+              event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                'Partial response before socket close',
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retries a transport stream error after yielding only thinking chunks', async () => {
+      // Thinking models stream thought parts within seconds, then can
+      // spend minutes reasoning — exactly when gateways close long-lived
+      // SSE connections (#7832). Thought parts are ephemeral (never
+      // recorded as the assistant's response in history), so the replay
+      // cannot duplicate user-visible output and must be allowed.
+      vi.useFakeTimers();
+      try {
+        const transportError = Object.assign(new TypeError('terminated'), {
+          cause: Object.assign(new Error('other side closed'), {
+            code: 'UND_ERR_SOCKET',
+          }),
+        });
+
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        { text: 'Let me think about this…', thought: true },
+                      ],
+                    },
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+              throw transportError;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Recovered after thinking-phase retry' }],
+                    },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })(),
+          );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-transport-retry-after-thinking',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(2);
+        expect(
+          events.filter((event) => event.type === StreamEventType.RETRY),
+        ).toHaveLength(1);
+        expect(
+          events.some(
+            (event) =>
+              event.type === StreamEventType.CHUNK &&
+              event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                'Recovered after thinking-phase retry',
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not replay when visible content followed the thinking chunks', async () => {
+      // The content flag must accumulate across the whole attempt: once a
+      // non-thought part has flowed — even after any amount of thinking —
+      // a replay would duplicate visible output and stays blocked. Recovery
+      // goes through the continuation path instead, so the assertion is on
+      // *which* path fired rather than on the request count: a replay resends
+      // the original contents unchanged, a continuation carries the delivered
+      // text and a resume instruction, and only the latter is acceptable here.
+      //
+      // Only the visible text is anchored on. The thought part is excluded
+      // from the continuation prefix as well, so this also covers thoughts not
+      // leaking into the resumed request.
+      vi.useFakeTimers();
+      try {
+        const transportError = Object.assign(new TypeError('terminated'), {
+          cause: Object.assign(new Error('other side closed'), {
+            code: 'UND_ERR_SOCKET',
+          }),
+        });
+
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Reasoning first…', thought: true }],
+                    },
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Visible answer begins' }],
+                    },
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+              throw transportError;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: { parts: [{ text: ' …and ends.' }] },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })(),
+          );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-transport-no-replay-after-thinking-then-content',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+        const secondRequest = vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mock.calls[1]![0].contents as Content[];
+        expect(secondRequest.at(-2)).toEqual({
+          role: 'model',
+          parts: [{ text: 'Visible answer begins' }],
+        });
+        expect(
+          events.filter(
+            (event) =>
+              event.type === StreamEventType.RETRY && !event.isContinuation,
+          ),
+        ).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retries a transport stream error after yielding only tool preparation metadata', async () => {
+      vi.useFakeTimers();
+      try {
+        const transportError = Object.assign(new TypeError('terminated'), {
+          cause: Object.assign(new Error('other side closed'), {
+            code: 'UND_ERR_SOCKET',
+          }),
+        });
+        const preparationResponse = {
+          candidates: [{ content: { parts: [] } }],
+        } as unknown as GenerateContentResponse;
+        setToolCallPreparations(preparationResponse, [
+          { callId: 'call-preparing', toolName: 'read_file' },
+        ]);
+
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield preparationResponse;
+              throw transportError;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Recovered after preparation' }],
+                    },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })(),
+          );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-transport-after-preparation',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(2);
+        expect(
+          events.filter((event) => event.type === StreamEventType.RETRY),
+        ).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    describe('transport stream continuation (#7832)', () => {
+      const socketCut = () =>
+        Object.assign(new TypeError('terminated'), {
+          cause: Object.assign(new Error('other side closed'), {
+            code: 'UND_ERR_SOCKET',
+          }),
+        });
+
+      function textChunk(
+        text: string,
+        finishReason?: string,
+      ): GenerateContentResponse {
+        return {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text }] },
+              ...(finishReason ? { finishReason } : {}),
+            },
+          ],
+        } as unknown as GenerateContentResponse;
+      }
+
+      /** Stream that yields `chunks` and then dies from a socket cut. */
+      function cutAfter(chunks: GenerateContentResponse[]) {
+        return (async function* () {
+          for (const chunk of chunks) yield chunk;
+          throw socketCut();
+        })();
+      }
+
+      function requestContentsOfCall(index: number): Content[] {
+        return vi.mocked(mockContentGenerator.generateContentStream).mock.calls[
+          index
+        ]![0].contents as Content[];
+      }
+
+      it('continues from the delivered text instead of failing the send', async () => {
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('<html><body>')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('</body></html>', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'write a game' },
+            'prompt-transport-continuation',
+          );
+          const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(2);
+
+          // `isContinuation` is what tells the UI to KEEP the text already on
+          // screen. A plain RETRY would make it discard the first half.
+          const retries = events.filter(
+            (event) => event.type === StreamEventType.RETRY,
+          );
+          expect(retries).toHaveLength(1);
+          expect(
+            retries[0]!.type === StreamEventType.RETRY &&
+              retries[0]!.isContinuation,
+          ).toBe(true);
+
+          // The continuation request shows the model its own output and asks
+          // it to resume — it does not re-send the original request alone.
+          const secondRequest = requestContentsOfCall(1);
+          expect(secondRequest.at(-2)).toEqual({
+            role: 'model',
+            parts: [{ text: '<html><body>' }],
+          });
+          const instruction = secondRequest.at(-1)!;
+          expect(instruction.role).toBe('user');
+          expect(instruction.parts?.[0]?.text).toContain(
+            'The connection dropped mid-response',
+          );
+          expect(instruction.parts?.[0]?.text).toContain(
+            '<previous_response_suffix>',
+          );
+
+          // Both halves reach the caller, in order and exactly once.
+          const delivered = events
+            .filter((event) => event.type === StreamEventType.CHUNK)
+            .map(
+              (event) =>
+                (event as { value: GenerateContentResponse }).value
+                  .candidates?.[0]?.content?.parts?.[0]?.text ?? '',
+            )
+            .join('');
+          expect(delivered).toBe('<html><body></body></html>');
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
-      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
-        (async function* () {
-          yield {
+      it('stitches the delivered text into durable history', async () => {
+        // Without the merge, history would keep only the continuation half and
+        // every later turn (plus /compress and --resume) would see an answer
+        // that starts mid-document.
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('first half ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('second half', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-history',
+          );
+          await collectStreamWithFakeTimers(stream, 5_000);
+
+          const history = chat.getHistory();
+          expect(history.at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'first half second half' }],
+          });
+          // The synthetic resume instruction is request-only; it must never
+          // land in history as if the user had typed it.
+          expect(
+            history.some((entry) =>
+              entry.parts?.some((part) =>
+                part.text?.includes('The connection dropped mid-response'),
+              ),
+            ),
+          ).toBe(false);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      /**
+       * The JSONL transcript that `--resume` / `--continue` reads is written
+       * by `recordAssistantTurn`, not by `this.history`. The continuation
+       * attempt's own parts carry only the resumed remainder, so without
+       * merging the delivered prefix back in, the durable transcript starts
+       * the recovered turn mid-sentence.
+       *
+       * `processStreamResponse` folds the prefix into the response parts once,
+       * before it writes either layer, so these tests assert the record and
+       * history agree — not just that the record is merged. Two earlier
+       * shapes failed exactly there: deduping the record against the trimmed
+       * `contentText` while history used the raw part, and merging in the
+       * outer send loop after the record had already been appended.
+       */
+      function chatWithRecorder(recordAssistantTurn: ReturnType<typeof vi.fn>) {
+        return new GeminiChat(
+          mockConfig,
+          config,
+          [],
+          {
+            recordAssistantTurn,
+            recordChatCompression: vi.fn(),
+          } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+          uiTelemetryService,
+        );
+      }
+
+      function recordedText(
+        recordAssistantTurn: ReturnType<typeof vi.fn>,
+        callIndex = 0,
+      ): string | undefined {
+        const message = recordAssistantTurn.mock.calls[callIndex]![0]
+          .message as Array<{ text?: string }>;
+        return message.find((part) => part.text !== undefined)?.text;
+      }
+
+      it('records the delivered prefix with the resumed remainder in one turn', async () => {
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('first half ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('second half', 'STOP');
+              })(),
+            );
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-record',
+          );
+          await collectStreamWithFakeTimers(stream, 5_000);
+
+          // One turn in, one turn on disk.
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          expect(recordedText(recordAssistantTurn)).toBe(
+            'first half second half',
+          );
+          // The durable record and in-memory history must agree.
+          expect(chatWithRecording.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'first half second half' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('merges a whitespace-leading remainder identically in both layers', async () => {
+        // R1-1: the record used to dedupe against `contentText`, which is
+        // trimmed, while history merged the raw part. A cut landing on a token
+        // boundary (before a space) then fused the two words in the transcript
+        // only — "The result is" + " 42." recorded as "The result is42.".
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('The result is')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk(' 42.', 'STOP');
+              })(),
+            );
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-record-boundary',
+          );
+          await collectStreamWithFakeTimers(stream, 5_000);
+
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          expect(recordedText(recordAssistantTurn)).toBe('The result is 42.');
+          expect(chatWithRecording.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'The result is 42.' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('keeps a whitespace-boundary overlap dedup consistent across layers', async () => {
+        // The dedup-divergence half of R1-1: " total" is a 6-byte overlap only
+        // while untrimmed, so trimming the operand lost the dedup entirely and
+        // recorded "The grand totaltotal sum is 9.".
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('The grand total')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk(' total sum is 9.', 'STOP');
+              })(),
+            );
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-record-boundary-overlap',
+          );
+          await collectStreamWithFakeTimers(stream, 5_000);
+
+          const history = chatWithRecording.getHistory().at(-1);
+          const historyText = history?.parts?.find(
+            (part) => part.text !== undefined,
+          )?.text;
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          // Whatever the dedup decides, both layers must decide it the same.
+          expect(recordedText(recordAssistantTurn)).toBe(historyText);
+          expect(recordedText(recordAssistantTurn)).not.toContain('totaltotal');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('agrees across layers when the consumer aborts at the deferred finish chunk', async () => {
+        // R2-2: on a tool-result continuation the finishReason is withheld and
+        // re-emitted as a synthetic chunk AFTER the history push — a
+        // suspension point. `Turn.run` returns at exactly that kind of chunk
+        // when the user hits Esc. While the merge lived in the outer send
+        // loop, abandoning here left a merged record against a remainder-only
+        // history, and the JSONL is append-only so nothing reconciles it.
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('Analysis: the file ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('contains the bug.', 'STOP');
+              })(),
+            );
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            {
+              // A functionResponse turn is what makes this a tool-result
+              // continuation, which is what defers the finishReason.
+              message: [
+                {
+                  functionResponse: {
+                    id: 'call_deferred_window',
+                    name: 'read_file',
+                    response: { output: 'file contents' },
+                  },
+                },
+              ],
+            },
+            'prompt-transport-continuation-record-deferred-abort',
+          );
+
+          const collecting = (async () => {
+            for await (const event of stream) {
+              // The pass-through chunks have their finishReason stripped, so
+              // this fires only on the synthetic deferred chunk.
+              if (
+                event.type === StreamEventType.CHUNK &&
+                event.value.candidates?.[0]?.finishReason
+              ) {
+                break;
+              }
+            }
+          })();
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(5_000);
+          await collecting;
+
+          const historyText = chatWithRecording
+            .getHistory()
+            .at(-1)
+            ?.parts?.find((part) => part.text !== undefined)?.text;
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          expect(recordedText(recordAssistantTurn)).toBe(
+            'Analysis: the file contains the bug.',
+          );
+          // The durable record and in-memory history must not disagree, even
+          // though the send was abandoned before it could finish.
+          expect(historyText).toBe(recordedText(recordAssistantTurn));
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('dedupes replayed overlap in the recorded turn too', async () => {
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(
+              cutAfter([textChunk('The quick brown fox jumps over')]),
+            )
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('jumps over the lazy dog.', 'STOP');
+              })(),
+            );
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-record-overlap',
+          );
+          await collectStreamWithFakeTimers(stream, 5_000);
+
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          expect(recordedText(recordAssistantTurn)).toBe(
+            'The quick brown fox jumps over the lazy dog.',
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('records nothing of a continuation a fresh-restart retry discarded', async () => {
+        // The mirror of the merge: when the continuation is superseded, the
+        // delivered text is dropped from history, so it must stay out of the
+        // transcript too. Recording the prefix when the continuation is
+        // *scheduled* would fix `--resume` for the success case and duplicate
+        // the answer here.
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('doomed fragment ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                throw new InvalidStreamError(
+                  'Model stream ended with empty response text.',
+                  'NO_RESPONSE_TEXT',
+                );
+
+                yield {} as GenerateContentResponse;
+              })(),
+            )
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('a clean answer', 'STOP');
+              })(),
+            );
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-record-superseded',
+          );
+          await collectStreamWithFakeTimers(stream, 10_000);
+
+          // Three attempts proves the continuation really was scheduled and
+          // then superseded, rather than never starting.
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(3);
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          expect(recordedText(recordAssistantTurn)).toBe('a clean answer');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('keeps the record remainder-only when the continuation itself is cut after a tool call', async () => {
+        // The one case where the prefix and a deferred partial record are
+        // live at the same time. A continuation attempt that yields a
+        // functionCall and then dies is excluded from continuing again
+        // (`canContinueAfterTransportCut` requires !streamYieldedFunctionCall),
+        // so the prefix is still set while `pendingPartialAssistantRecord`
+        // stashes the partial turn.
+        //
+        // The attempt did not survive, so the prefix must stay out of BOTH
+        // layers: history keeps the remainder-only partial (the merge at the
+        // success exit never runs) and the flushed record has to match it.
+        // Merging unconditionally instead of on success only would put the
+        // delivered text in the transcript and not in history — the same
+        // desync this fix removes, pointing the other way.
+        vi.useFakeTimers();
+        try {
+          const recordAssistantTurn = vi.fn();
+          const chatWithRecording = chatWithRecorder(recordAssistantTurn);
+          const toolCallChunk = {
             candidates: [
               {
                 content: {
-                  parts: [{ text: 'Partial response before socket close' }],
+                  role: 'model',
+                  parts: [
+                    {
+                      functionCall: {
+                        id: 'call_after_continuation',
+                        name: 'read_file',
+                        args: { path: '/tmp/x.txt' },
+                      },
+                    },
+                  ],
                 },
               },
             ],
           } as unknown as GenerateContentResponse;
-          throw transportError;
+
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('delivered half ')]))
+            .mockResolvedValueOnce(cutAfter([toolCallChunk]));
+
+          const stream = await chatWithRecording.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-record-fc-cut',
+          );
+          // This send rejects, so it cannot use `collectStreamWithFakeTimers`:
+          // that helper returns the collecting promise only after advancing
+          // timers, and the cut lands during the advance — leaving the
+          // rejection momentarily unhandled. Attach the assertion first, like
+          // `expectStreamExhaustion` above.
+          const collecting = (async () => {
+            for await (const _ of stream) {
+              /* consume */
+            }
+          })();
+          const settled = (async () => {
+            await expect(collecting).rejects.toThrow('terminated');
+          })();
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(10_000);
+          await settled;
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(2);
+          expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+          // No text part at all: the attempt yielded only a functionCall.
+          expect(recordedText(recordAssistantTurn)).toBeUndefined();
+
+          // And the durable record still matches what survives in memory.
+          const lastTurn = chatWithRecording.getHistory().at(-1);
+          expect(lastTurn?.role).toBe('model');
+          expect(
+            lastTurn?.parts?.some((part) =>
+              part.text?.includes('delivered half'),
+            ),
+          ).toBe(false);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('drops replayed overlap when the model repeats its own tail', async () => {
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(
+              cutAfter([textChunk('The quick brown fox jumps over')]),
+            )
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('jumps over the lazy dog.', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-overlap',
+          );
+          await collectStreamWithFakeTimers(stream, 5_000);
+
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'The quick brown fox jumps over the lazy dog.' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('survives repeated cuts and accumulates every delivered fragment', async () => {
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('part one ')]))
+            .mockResolvedValueOnce(cutAfter([textChunk('part two ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('part three', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-repeated',
+          );
+          const events = await collectStreamWithFakeTimers(stream, 10_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(3);
+          // The third request carries BOTH earlier fragments, not just the
+          // most recent one.
+          expect(requestContentsOfCall(2).at(-2)).toEqual({
+            role: 'model',
+            parts: [{ text: 'part one part two ' }],
+          });
+          expect(
+            events.filter(
+              (event) =>
+                event.type === StreamEventType.RETRY && event.isContinuation,
+            ),
+          ).toHaveLength(2);
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'part one part two part three' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('drops replayed overlap when an intermediate attempt is cut again', async () => {
+        // The two cases above, combined: a middle attempt both replays the
+        // previous tail *and* is cut before finishing. Dedup at merge time
+        // only compares the final attempt against the accumulated prefix, so
+        // an overlap replayed by an intermediate attempt is baked into that
+        // prefix — it is propagated to every later request and into durable
+        // history, where it corrupts /compress, --resume, and the context of
+        // every following turn.
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('part one ')]))
+            .mockResolvedValueOnce(cutAfter([textChunk('part one part two ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('part three', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-intermediate-replay',
+          );
+          await collectStreamWithFakeTimers(stream, 10_000);
+
+          // The third request must not carry "part one" twice.
+          expect(requestContentsOfCall(2).at(-2)).toEqual({
+            role: 'model',
+            parts: [{ text: 'part one part two ' }],
+          });
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'part one part two part three' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('keeps continuing when a later attempt is cut during thinking', async () => {
+        // `streamYieldedContentChunk` is per-attempt, so an attempt cut while
+        // still in its thinking phase looks identical to a cut that delivered
+        // nothing at all — even though earlier attempts already put text on
+        // the caller's screen. The replay gate is checked first, so without a
+        // guard on the accumulated text it fires here, resets the
+        // continuation state, and emits a plain RETRY that tells the UI to
+        // discard output the user was watching.
+        vi.useFakeTimers();
+        try {
+          const thoughtOnly = {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    { text: 'Now let me check the next part.', thought: true },
+                  ],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('part one ')]))
+            .mockResolvedValueOnce(cutAfter([thoughtOnly]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('part two', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-thought-only-cut',
+          );
+          const events = await collectStreamWithFakeTimers(stream, 10_000);
+
+          // Every RETRY must be a continuation. A plain RETRY here is the UI
+          // being told to throw away "part one ".
+          const retries = events.filter(
+            (event) => event.type === StreamEventType.RETRY,
+          );
+          expect(retries).toHaveLength(2);
+          expect(
+            retries.every(
+              (event) =>
+                (event as { isContinuation?: boolean }).isContinuation === true,
+            ),
+          ).toBe(true);
+
+          // The delivered text must still anchor the third request...
+          expect(requestContentsOfCall(2).at(-2)).toEqual({
+            role: 'model',
+            parts: [{ text: 'part one ' }],
+          });
+          // ...and survive into history rather than being regenerated.
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'part one part two' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('pins the delivered text after a thought part in the merged turn', async () => {
+        // Covers `textIndex > 0`: the continuation turn leads with a thought
+        // part, so the delivered text must merge into the *text* part rather
+        // than being spliced at index 0 ahead of the thinking.
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('part one ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield {
+                  candidates: [
+                    {
+                      content: {
+                        role: 'model',
+                        parts: [
+                          { text: 'still reasoning', thought: true },
+                          { text: 'part two' },
+                        ],
+                      },
+                      finishReason: 'STOP',
+                    },
+                  ],
+                } as unknown as GenerateContentResponse;
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-thought-then-text',
+          );
+          await collectStreamWithFakeTimers(stream, 10_000);
+
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [
+              { text: 'still reasoning', thought: true },
+              { text: 'part one part two' },
+            ],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('inserts the delivered text when the continuation has no text part', async () => {
+        // Covers `textIndex < 0`: a thinking model completes the continuation
+        // with only a thought part. The delivered text has nothing to merge
+        // into, so it is inserted as its own part — and must land *after* the
+        // thought, not ahead of it.
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('part one ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield {
+                  candidates: [
+                    {
+                      content: {
+                        role: 'model',
+                        parts: [{ text: 'only thinking', thought: true }],
+                      },
+                      finishReason: 'STOP',
+                    },
+                  ],
+                } as unknown as GenerateContentResponse;
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-thought-only',
+          );
+          await collectStreamWithFakeTimers(stream, 10_000);
+
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [
+              { text: 'only thinking', thought: true },
+              { text: 'part one ' },
+            ],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('propagates once the continuation budget is exhausted', async () => {
+        vi.useFakeTimers();
+        try {
+          let call = 0;
+          vi.mocked(
+            mockContentGenerator.generateContentStream,
+          ).mockImplementation(() =>
+            Promise.resolve(cutAfter([textChunk(`fragment ${call++} `)])),
+          );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-exhausted',
+          );
+          let caughtError: unknown;
+          const collecting = (async () => {
+            try {
+              for await (const _ of stream) {
+                /* consume */
+              }
+            } catch (error) {
+              caughtError = error;
+            }
+          })();
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(30_000);
+          await collecting;
+
+          expect((caughtError as Error).message).toContain('terminated');
+          // Initial attempt + maxContinuationRetries continuations, then stop.
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(4);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('does not continue a cut that delivered a functionCall', async () => {
+        // Injecting a user turn between a functionCall and its
+        // functionResponse produces a sequence providers reject; the partial
+        // tool-use turn is left for the scheduler's repair path instead.
+        const toolChunk = {
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [
+                  { text: 'Let me read that file. ' },
+                  {
+                    functionCall: {
+                      id: 'call_1',
+                      name: 'read_file',
+                      args: { path: '/tmp/a.txt' },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        } as unknown as GenerateContentResponse;
+
+        vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+          cutAfter([toolChunk]),
+        );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-transport-continuation-functioncall',
+        );
+        await expect(async () => {
+          for await (const _ of stream) {
+            /* consume */
+          }
+        }).rejects.toThrow('terminated');
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(1);
+      });
+
+      it('replays rather than continues when only a thought was delivered', async () => {
+        // The reported failure mode: thinking models emit reasoning within
+        // seconds, so gating replay on "any chunk yielded" made it
+        // unreachable. A thought carries no answer text a replay could
+        // duplicate, so the clean replay is still the right recovery.
+        vi.useFakeTimers();
+        try {
+          const thoughtChunk = {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [{ text: 'Let me plan this out.', thought: true }],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([thoughtChunk]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('the full answer', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-thought-only',
+          );
+          const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(2);
+          // A replay, not a continuation: no resume instruction is injected
+          // and the RETRY tells the UI to discard the failed attempt.
+          const secondRequest = requestContentsOfCall(1);
+          expect(
+            secondRequest.some((entry) =>
+              entry.parts?.some((part) =>
+                part.text?.includes('The connection dropped mid-response'),
+              ),
+            ),
+          ).toBe(false);
+          expect(
+            events.filter(
+              (event) =>
+                event.type === StreamEventType.RETRY && !event.isContinuation,
+            ),
+          ).toHaveLength(1);
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'the full answer' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('replays rather than continues when the delivered text was blank', async () => {
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('   ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('real content', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-blank',
+          );
+          const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(2);
+          expect(
+            events.filter(
+              (event) =>
+                event.type === StreamEventType.RETRY && event.isContinuation,
+            ),
+          ).toHaveLength(0);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('drops a pending continuation when a fresh-restart retry takes over', async () => {
+        // A socket cut starts a continuation; the continuation attempt then
+        // fails with an InvalidStreamError, whose retry re-sends the ORIGINAL
+        // request and emits a plain RETRY (UI discards the delivered text).
+        // The request must drop it too — otherwise the resend keeps asking the
+        // model to continue output the caller no longer has.
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('doomed fragment ')]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                throw new InvalidStreamError(
+                  'Model stream ended with empty response text.',
+                  'NO_RESPONSE_TEXT',
+                );
+
+                yield {} as GenerateContentResponse;
+              })(),
+            )
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('a clean answer', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-superseded',
+          );
+          await collectStreamWithFakeTimers(stream, 10_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(3);
+          const thirdRequest = requestContentsOfCall(2);
+          expect(
+            thirdRequest.some((entry) =>
+              entry.parts?.some((part) =>
+                part.text?.includes('doomed fragment'),
+              ),
+            ),
+          ).toBe(false);
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'a clean answer' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('keeps continuing when a later attempt is cut with nothing yielded', async () => {
+        // A socket cut delivers text and schedules a continuation; the
+        // continuation attempt is then cut again having yielded nothing at
+        // all. The replay branch is checked first and its per-attempt
+        // "nothing delivered" test is satisfied here, so it must also consult
+        // the accumulated buffer — replaying would re-send the original
+        // request under a plain RETRY, telling the UI to discard text the
+        // caller already has and making the model regenerate it.
+        vi.useFakeTimers();
+        try {
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('kept half ')]))
+            .mockResolvedValueOnce(cutAfter([]))
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('a clean answer', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-empty-later-attempt',
+          );
+          const events = await collectStreamWithFakeTimers(stream, 10_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(3);
+          // Both RETRYs keep the UI's buffer; a plain one would drop the text.
+          expect(
+            events
+              .filter((event) => event.type === StreamEventType.RETRY)
+              .every(
+                (event) =>
+                  (event as { isContinuation?: boolean }).isContinuation ===
+                  true,
+              ),
+          ).toBe(true);
+          const thirdRequest = requestContentsOfCall(2);
+          expect(
+            thirdRequest.some((entry) =>
+              entry.parts?.some((part) =>
+                part.text?.includes('The connection dropped mid-response'),
+              ),
+            ),
+          ).toBe(true);
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'kept half a clean answer' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('drops a pending continuation when reactive compression takes over', async () => {
+        // The third branch that emits a plain RETRY alongside
+        // `suppressNextRetryEvent`. This ordering is not far-fetched: a
+        // continuation attempt sends *more* than the original request (the
+        // delivered text plus the resume instruction ride along), so it is
+        // exactly the attempt most likely to overflow the context window.
+        // Compression rebuilds `requestContents` from a compacted history, so a
+        // continuation staged against the old contents is stale twice over.
+        vi.useFakeTimers();
+        try {
+          vi.spyOn(ChatCompressionService.prototype, 'compress')
+            // The pre-send proactive pass; the reactive one is the second call.
+            .mockResolvedValueOnce({
+              newHistory: null,
+              info: {
+                originalTokenCount: 0,
+                newTokenCount: 0,
+                compressionStatus: CompressionStatus.NOOP,
+              },
+            })
+            .mockResolvedValueOnce({
+              newHistory: [
+                { role: 'user', parts: [{ text: 'summary' }] },
+                { role: 'model', parts: [{ text: 'ack' }] },
+                { role: 'user', parts: [{ text: 'test' }] },
+              ],
+              info: {
+                originalTokenCount: 135_000,
+                newTokenCount: 40_000,
+                compressionStatus: CompressionStatus.COMPRESSED,
+              },
+            });
+          vi.mocked(mockContentGenerator.generateContentStream)
+            .mockResolvedValueOnce(cutAfter([textChunk('discarded half ')]))
+            .mockRejectedValueOnce(
+              new Error('prompt is too long: 135000 tokens > 128000 maximum'),
+            )
+            .mockResolvedValueOnce(
+              (async function* () {
+                yield textChunk('a clean answer', 'STOP');
+              })(),
+            );
+
+          const stream = await chat.sendMessageStream(
+            'test-model',
+            { message: 'test' },
+            'prompt-transport-continuation-replaced-by-compression',
+          );
+          await collectStreamWithFakeTimers(stream, 10_000);
+
+          expect(
+            mockContentGenerator.generateContentStream,
+          ).toHaveBeenCalledTimes(3);
+          const thirdRequest = requestContentsOfCall(2);
+          expect(
+            thirdRequest.some((entry) =>
+              entry.parts?.some((part) =>
+                part.text?.includes('discarded half'),
+              ),
+            ),
+          ).toBe(false);
+          expect(
+            thirdRequest.some((entry) =>
+              entry.parts?.some((part) =>
+                part.text?.includes('The connection dropped mid-response'),
+              ),
+            ),
+          ).toBe(false);
+          expect(chat.getHistory().at(-1)).toEqual({
+            role: 'model',
+            parts: [{ text: 'a clean answer' }],
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    it('falls back after yielding only tool preparation metadata', async () => {
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'test-model',
+        maxRetries: 0,
+      });
+      vi.mocked(mockConfig.getModelFallbacks).mockReturnValue([
+        'fallback-model',
+      ]);
+
+      const fallbackGenerateContentStream = vi.fn().mockResolvedValue(
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: { parts: [{ text: 'Recovered with fallback' }] },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+      const resolveForModel = vi.fn().mockResolvedValue({
+        contentGenerator: {
+          generateContent: vi.fn(),
+          generateContentStream: fallbackGenerateContentStream,
+          countTokens: vi.fn(),
+          embedContent: vi.fn(),
+          batchEmbedContents: vi.fn(),
+          useSummarizedThinking: vi.fn().mockReturnValue(false),
+        } as unknown as ContentGenerator,
+        retryAuthType: AuthType.USE_GEMINI,
+        retryErrorCodes: undefined,
+        model: 'fallback-model',
+      });
+      vi.mocked(mockConfig.getBaseLlmClient).mockReturnValue({
+        resolveForModel,
+      } as unknown as ReturnType<typeof mockConfig.getBaseLlmClient>);
+
+      const capacityError = Object.assign(
+        new StreamContentError(
+          '{"error":{"code":"429","message":"Throttling"}}',
+        ),
+        { status: 429 },
+      );
+      const preparationResponse = {
+        candidates: [{ content: { parts: [] } }],
+      } as unknown as GenerateContentResponse;
+      setToolCallPreparations(preparationResponse, [
+        { callId: 'call-fallback', toolName: 'read_file' },
+      ]);
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield preparationResponse;
+          throw capacityError;
         })(),
       );
 
       const stream = await chat.sendMessageStream(
         'test-model',
         { message: 'test' },
-        'prompt-transport-no-retry-after-chunk',
+        'prompt-fallback-after-preparation',
       );
       const events: StreamEvent[] = [];
-      await expect(async () => {
-        for await (const event of stream) {
-          events.push(event);
-        }
-      }).rejects.toThrow('terminated');
+      for await (const event of stream) events.push(event);
 
-      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
-        1,
-      );
+      expect(resolveForModel).toHaveBeenCalledWith('fallback-model', {
+        failClosed: true,
+      });
+      expect(fallbackGenerateContentStream).toHaveBeenCalledOnce();
       expect(
-        events.filter((event) => event.type === StreamEventType.RETRY),
-      ).toHaveLength(0);
-      expect(
-        events.some(
-          (event) =>
-            event.type === StreamEventType.CHUNK &&
-            event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
-              'Partial response before socket close',
-        ),
-      ).toBe(true);
+        events.filter((event) => event.type === StreamEventType.MODEL_FALLBACK),
+      ).toHaveLength(1);
     });
 
     it('classifies every allow-listed stream transport code as retryable transport', () => {
@@ -5694,6 +9112,77 @@ describe('GeminiChat', async () => {
       },
     );
 
+    it('retries an enhanced timeout before the first content chunk', async () => {
+      vi.useFakeTimers();
+      try {
+        // The OpenAI SDK's canonical timeout shape: bare, with no code,
+        // status, or cause (issue #8527).
+        const timeoutError = new APIConnectionTimeoutError();
+        const errorHandler = new EnhancedErrorHandler(() => true);
+        let enhancedTimeout: unknown;
+        try {
+          errorHandler.handle(
+            timeoutError,
+            {
+              model: 'test-model',
+              modalities: {},
+              startTime: Date.now() - 63_000,
+            },
+            { model: 'test-model', contents: [] },
+          );
+        } catch (error) {
+          enhancedTimeout = error;
+        }
+
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockResolvedValueOnce(
+            (async function* () {
+              throw enhancedTimeout;
+
+              yield {} as GenerateContentResponse;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Recovered after enhanced timeout' }],
+                    },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })(),
+          );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-enhanced-timeout-retry',
+        );
+        const events = await collectStreamWithFakeTimers(stream, 5_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(2);
+        expect(
+          events.filter((event) => event.type === StreamEventType.RETRY),
+        ).toHaveLength(1);
+        expect(
+          events.some(
+            (event) =>
+              event.type === StreamEventType.CHUNK &&
+              event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                'Recovered after enhanced timeout',
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('retries a transport error whose code is on the error itself (no cause)', async () => {
       vi.useFakeTimers();
       try {
@@ -5740,6 +9229,68 @@ describe('GeminiChat', async () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('retries an SDK-wrapped transport error whose code sits at cause depth 2', async () => {
+      // The OpenAI SDK wraps a pre-header socket reset as APIConnectionError ->
+      // TypeError('fetch failed') -> cause { code: 'ECONNRESET' }, so the code
+      // is two cause levels down. Drive the real inline shouldRetryOnError
+      // predicate through the retryWithBackoff options and assert it retries.
+      const transportError = Object.assign(new Error('Connection error.'), {
+        cause: Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('read ECONNRESET'), {
+            code: 'ECONNRESET',
+          }),
+        }),
+      });
+
+      mockRetryWithBackoff.mockImplementation(async (apiCall, options) => {
+        try {
+          return await apiCall();
+        } catch (error) {
+          expect(options?.shouldRetryOnError?.(error)).toBe(true);
+          return apiCall();
+        }
+      });
+
+      vi.mocked(mockContentGenerator.generateContentStream)
+        .mockRejectedValueOnce(transportError)
+        .mockResolvedValueOnce(
+          (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: 'Recovered from depth-2 RST' }],
+                  },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })(),
+        );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-transport-sdk-wrapped-depth2',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      expect(
+        events.some(
+          (event) =>
+            event.type === StreamEventType.CHUNK &&
+            event.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+              'Recovered from depth-2 RST',
+        ),
+      ).toBe(true);
     });
 
     it('does not retry a transport error that carries an HTTP 4xx status', async () => {
@@ -5860,17 +9411,6 @@ describe('GeminiChat', async () => {
         vi.useRealTimers();
       }
     });
-
-    // NOTE: no test for the InvalidStreamError content-retry branch
-    // (geminiChat.ts ~line 1399). Verified unreachable for that error
-    // class: `isTransientStreamError` and `isContentError` are the
-    // same predicate (`error instanceof InvalidStreamError`), so the
-    // transient branch above always either `continue`s or `break`s
-    // before control reaches the content branch. The
-    // `popPartialIfPushed()` call there is preserved as
-    // defense-in-depth for a future error class that should diverge
-    // the predicates; see the comment block at that call site for
-    // the full analysis.
 
     it('rolls back the chat-recording entry too when the retry succeeds', async () => {
       // The in-memory rollback test above asserts `this.history` ends
@@ -6125,6 +9665,47 @@ describe('GeminiChat', async () => {
           ),
         ).toBe(true);
         expect(mockLogContentRetry).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('fast-fails a mid-stream quota-exhaustion error instead of scheduling a rate-limit retry', async () => {
+      // A permanent quota-exhaustion 429 can arrive mid-stream as a
+      // StreamContentError while reading, bypassing the retryWithBackoff
+      // fast-fail that only wraps stream establishment. The stream-side
+      // catch must fast-fail it before the rate-limit branch; otherwise
+      // isRateLimitError (code 429) schedules a 1-5 minute delay on an
+      // error that cannot succeed until the reset time.
+      vi.useFakeTimers();
+
+      try {
+        const quotaError = new StreamContentError(
+          '{"error":{"code":"429","message":"Your token-plan 1-week quota has been exhausted. The quota will reset at 07-27 09:25:00 UTC."}}',
+        );
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockResolvedValueOnce(
+          (async function* () {
+            throw quotaError;
+
+            yield {} as GenerateContentResponse;
+          })(),
+        );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-quota-fastfail',
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+
+        // Fast-fail: the first pull rejects with the friendly message. No
+        // RETRY event is yielded and no rate-limit delay is scheduled.
+        await expect(iterator.next()).rejects.toThrow(/Quota exhausted/);
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
       }
@@ -6445,10 +10026,16 @@ describe('GeminiChat', async () => {
       }
     });
 
-    it('should increase delay across repeated streamed rate-limit errors', async () => {
+    it('should use configured delay across repeated streamed rate-limit errors', async () => {
       vi.useFakeTimers();
 
       try {
+        vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+          authType: AuthType.USE_OPENAI,
+          model: 'test-model',
+          retryInitialDelayMs: 3_000,
+          retryMaxDelayMs: 5_000,
+        });
         const firstError = new StreamContentError(
           'id:1\nevent:error\n:HTTP_STATUS/429\ndata:{"request_id":"req-1","code":"Throttling.AllocationQuota","message":"Allocated quota exceeded"}',
         );
@@ -6502,7 +10089,7 @@ describe('GeminiChat', async () => {
         retryInfos.push(first.value.retryInfo!);
 
         let nextPromise = iterator.next();
-        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(3_000);
         await nextPromise;
 
         const second = await iterator.next();
@@ -6510,7 +10097,7 @@ describe('GeminiChat', async () => {
         retryInfos.push(second.value.retryInfo!);
 
         nextPromise = iterator.next();
-        await vi.advanceTimersByTimeAsync(120_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         await nextPromise;
 
         const events: StreamEvent[] = [];
@@ -6520,15 +10107,102 @@ describe('GeminiChat', async () => {
           events.push(next.value);
         }
 
-        expect(retryInfos.map((info) => info.delayMs)).toEqual([
-          60_000, 120_000,
-        ]);
+        expect(retryInfos.map((info) => info.delayMs)).toEqual([3_000, 5_000]);
         expect(
           events.some(
             (e) =>
               e.type === StreamEventType.CHUNK &&
               e.value.candidates?.[0]?.content?.parts?.[0]?.text ===
                 'Recovered after backoff',
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('uses configured stream rate-limit retry delays', async () => {
+      vi.useFakeTimers();
+
+      try {
+        vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+          authType: AuthType.USE_OPENAI,
+          model: 'test-model',
+          maxRetries: 2,
+          retryInitialDelayMs: 3_000,
+          retryMaxDelayMs: 5_000,
+        });
+        const firstError = new StreamContentError(
+          'id:1\nevent:error\n:HTTP_STATUS/429\ndata:{"request_id":"req-1","code":"Throttling.AllocationQuota","message":"Allocated quota exceeded"}',
+        );
+        const secondError = new StreamContentError(
+          'id:2\nevent:error\n:HTTP_STATUS/429\ndata:{"request_id":"req-2","code":"Throttling.AllocationQuota","message":"Allocated quota exceeded"}',
+        );
+
+        vi.mocked(mockContentGenerator.generateContentStream)
+          .mockResolvedValueOnce(
+            (async function* () {
+              throw firstError;
+
+              yield {} as GenerateContentResponse;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              throw secondError;
+
+              yield {} as GenerateContentResponse;
+            })(),
+          )
+          .mockResolvedValueOnce(
+            (async function* () {
+              yield {
+                candidates: [
+                  {
+                    content: { parts: [{ text: 'Recovered' }] },
+                    finishReason: 'STOP',
+                  },
+                ],
+              } as unknown as GenerateContentResponse;
+            })(),
+          );
+
+        const stream = await chat.sendMessageStream(
+          'test-model',
+          { message: 'test' },
+          'prompt-id-configured-rate-limit-delay',
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+
+        const first = await iterator.next();
+        expect(first.value.type).toBe(StreamEventType.RETRY);
+        expect(first.value.retryInfo?.delayMs).toBe(3_000);
+
+        let nextPromise = iterator.next();
+        await vi.advanceTimersByTimeAsync(3_000);
+        await nextPromise;
+
+        const second = await iterator.next();
+        expect(second.value.type).toBe(StreamEventType.RETRY);
+        expect(second.value.retryInfo?.delayMs).toBe(5_000);
+
+        nextPromise = iterator.next();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await nextPromise;
+
+        const events: StreamEvent[] = [];
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) break;
+          events.push(next.value);
+        }
+
+        expect(
+          events.some(
+            (e) =>
+              e.type === StreamEventType.CHUNK &&
+              e.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                'Recovered',
           ),
         ).toBe(true);
       } finally {
@@ -7032,6 +10706,912 @@ describe('GeminiChat', async () => {
     expect(modelTurn!.parts![0]!.text).not.toContain(
       'This valid part should be discarded',
     );
+  });
+
+  it('discards a completed protocol-tagged response and retries before persistence', async () => {
+    const recordAssistantTurn = vi.fn();
+    const chatWithRecording = new GeminiChat(
+      mockConfig,
+      config,
+      [],
+      {
+        recordAssistantTurn,
+        recordChatCompression: vi.fn(),
+      } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+      uiTelemetryService,
+    );
+    vi.mocked(mockContentGenerator.generateContentStream)
+      .mockImplementationOnce(async () =>
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: '<ana' }],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+          yield {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text:
+                        'lysis>failed scratch</analysis>' +
+                        '<summary>FAILED_ATTEMPT_SHOULD_BE_DISCARDED</summary>',
+                    },
+                  ],
+                },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      )
+      .mockImplementationOnce(async () =>
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: 'Successful final response' }],
+                },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+
+    const stream = await chatWithRecording.sendMessageStream(
+      'test-model',
+      { message: 'test' },
+      'prompt-id-protocol-leak',
+    );
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+
+    expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(2);
+    expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+      true,
+    );
+    const emittedText = events
+      .filter((event) => event.type === StreamEventType.CHUNK)
+      .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? '')
+      .join('');
+    expect(emittedText).toBe('Successful final response');
+    expect(chatWithRecording.getLastModelMessageText()).toBe(
+      'Successful final response',
+    );
+    expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(recordAssistantTurn.mock.calls[0]?.[0].message).toEqual([
+      { text: 'Successful final response' },
+    ]);
+  });
+
+  it.each([
+    {
+      name: 'array with a different first argument key',
+      leakedJson: JSON.stringify([
+        {
+          file_path: 'a.ts',
+          prompt: 'Create the node.',
+          name: 'create_node',
+          subagent_type: 'general-purpose',
+          run_in_background: true,
+        },
+        {
+          name: 'read_ref',
+          prompt: 'Read the reference.',
+          subagent_type: 'general-purpose',
+          run_in_background: true,
+        },
+      ]),
+      trailingText: '',
+      finishWithContent: false,
+    },
+    {
+      name: 'single object with trailing prose',
+      leakedJson: JSON.stringify({ command: 'ls', name: 'run_shell_command' }),
+      trailingText: 'Let me continue.',
+      finishWithContent: true,
+    },
+  ])(
+    'retries a JSON tool protocol leak: $name',
+    async ({ leakedJson, trailingText, finishWithContent }) => {
+      const recordAssistantTurn = vi.fn();
+      const chatWithRecording = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        {
+          recordAssistantTurn,
+          recordChatCompression: vi.fn(),
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      const leakedText =
+        leakedJson + '\n</parameter>\n</function>\n' + trailingText;
+      const leakedResponses = [
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { text: '...', thought: true },
+                  { text: leakedText.slice(0, 40) },
+                ],
+              },
+            },
+          ],
+        } as unknown as GenerateContentResponse,
+        {
+          candidates: [
+            {
+              content: { parts: [{ text: leakedText.slice(40) }] },
+              ...(finishWithContent ? { finishReason: 'STOP' as const } : {}),
+            },
+          ],
+        } as unknown as GenerateContentResponse,
+      ];
+      if (!finishWithContent) {
+        leakedResponses.push({
+          candidates: [{ finishReason: 'STOP' }],
+        } as unknown as GenerateContentResponse);
+      }
+      vi.mocked(mockContentGenerator.generateContentStream)
+        .mockResolvedValueOnce(streamResponse(...leakedResponses))
+        .mockResolvedValueOnce(
+          streamResponse(stopResponse([{ text: 'Successful final response' }])),
+        );
+
+      const stream = await chatWithRecording.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-json-tool-protocol-leak',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+        true,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(emittedParts).toEqual([{ text: 'Successful final response' }]);
+      expect(chatWithRecording.getLastModelMessageText()).toBe(
+        'Successful final response',
+      );
+      expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+      expect(recordAssistantTurn.mock.calls[0]?.[0].message).toEqual([
+        { text: 'Successful final response' },
+      ]);
+    },
+  );
+
+  it.each([
+    [JSON.stringify([{ name: 'example', value: 1 }]), 8, 1],
+    ['[1,2,3]', 2, 2],
+  ])(
+    'preserves an ordinary leading JSON array: %s',
+    async (response, splitAt, expectedTextChunks) => {
+      vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mockResolvedValueOnce(
+        streamResponse(
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    { text: 'thinking', thought: true },
+                    { text: response.slice(0, splitAt) },
+                  ],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse,
+          stopResponse([{ text: response.slice(splitAt) }]),
+        ),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-json-array-literal',
+      );
+      const events: StreamEvent[] = [];
+      const streamedTextChunks: string[] = [];
+      for await (const event of stream) {
+        events.push(event);
+        if (event.type === StreamEventType.CHUNK) {
+          const text =
+            event.value.candidates?.[0]?.content?.parts
+              ?.filter((part) => !part.thought)
+              .map((part) => part.text ?? '')
+              .join('') ?? '';
+          if (text) streamedTextChunks.push(text);
+        }
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+        false,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(streamedTextChunks).toHaveLength(expectedTextChunks);
+      expect(emittedParts.find((part) => part.thought)?.text).toBe('thinking');
+      expect(streamedTextChunks.join('')).toBe(response);
+      expect(chat.getLastModelMessageText()).toBe(response);
+    },
+  );
+
+  it('releases buffered JSON through a finish-only chunk without leaked tags', async () => {
+    const response = JSON.stringify([{ name: 'example', value: 1 }]);
+    const splitAt = 12;
+    vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValueOnce(
+      streamResponse(
+        {
+          candidates: [
+            { content: { parts: [{ text: response.slice(0, splitAt) }] } },
+          ],
+        } as unknown as GenerateContentResponse,
+        {
+          candidates: [
+            { content: { parts: [{ text: response.slice(splitAt) }] } },
+          ],
+        } as unknown as GenerateContentResponse,
+        {
+          candidates: [{ finishReason: 'STOP' }],
+        } as unknown as GenerateContentResponse,
+      ),
+    );
+
+    const stream = await chat.sendMessageStream(
+      'test-model',
+      { message: 'test' },
+      'prompt-id-json-finish-only',
+    );
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+
+    expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+      false,
+    );
+    const emittedParts = events
+      .filter((event) => event.type === StreamEventType.CHUNK)
+      .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+    const emittedText = emittedParts
+      .filter((part) => !part.thought)
+      .map((part) => part.text ?? '')
+      .join('');
+    expect(emittedText).toBe(response);
+    expect(chat.getLastModelMessageText()).toBe(response);
+    expect(chat.getHistory().at(-1)?.parts).toEqual(emittedParts);
+  });
+
+  it.each(['preparation', 'function call'] as const)(
+    'retries when a %s interrupts a partial JSON protocol leak',
+    async (middleChunkType) => {
+      const recordAssistantTurn = vi.fn();
+      const chatWithRecording = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        {
+          recordAssistantTurn,
+          recordChatCompression: vi.fn(),
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      const leakedText =
+        JSON.stringify([{ name: 'read_file', file_path: 'a.ts' }]) +
+        '\n</parameter>\n</function>\n';
+      const splitAt = 12;
+      let middleResponse: GenerateContentResponse;
+      if (middleChunkType === 'preparation') {
+        middleResponse = {
+          candidates: [{ content: { parts: [] } }],
+        } as unknown as GenerateContentResponse;
+        setToolCallPreparations(middleResponse, [
+          { callId: 'call-1', toolName: 'read_file' },
+        ]);
+      } else {
+        middleResponse = {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: 'call-1',
+                      name: 'read_file',
+                      args: { file_path: 'a.ts' },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        } as unknown as GenerateContentResponse;
+      }
+      vi.mocked(mockContentGenerator.generateContentStream)
+        .mockResolvedValueOnce(
+          streamResponse(
+            {
+              candidates: [
+                {
+                  content: { parts: [{ text: leakedText.slice(0, splitAt) }] },
+                },
+              ],
+            } as unknown as GenerateContentResponse,
+            middleResponse,
+            stopResponse([{ text: leakedText.slice(splitAt) }]),
+          ),
+        )
+        .mockResolvedValueOnce(
+          streamResponse(stopResponse([{ text: 'Successful final response' }])),
+        );
+
+      const stream = await chatWithRecording.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-interrupted-json-tool-protocol-leak',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+        true,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(emittedParts).toEqual([{ text: 'Successful final response' }]);
+      expect(chatWithRecording.getLastModelMessageText()).toBe(
+        'Successful final response',
+      );
+      expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+      expect(recordAssistantTurn.mock.calls[0]?.[0].message).toEqual([
+        { text: 'Successful final response' },
+      ]);
+    },
+  );
+
+  it.each([true, false])(
+    'preserves leading JSON when a tool call ends without a finish reason (tool call first: %s)',
+    async (toolCallFirst) => {
+      const recordAssistantTurn = vi.fn();
+      const chatWithRecording = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        {
+          recordAssistantTurn,
+          recordChatCompression: vi.fn(),
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      const response = JSON.stringify([{ name: 'example', value: 1 }]);
+      const splitAt = 12;
+      const functionCallPart = {
+        functionCall: {
+          id: 'call-1',
+          name: 'read_file',
+          args: { file_path: 'a.ts' },
+        },
+      };
+      const functionCallResponse = {
+        candidates: [{ content: { parts: [functionCallPart] } }],
+      } as unknown as GenerateContentResponse;
+      const textResponses = [
+        response.slice(0, splitAt),
+        response.slice(splitAt),
+      ].map(
+        (text) =>
+          ({
+            candidates: [{ content: { parts: [{ text }] } }],
+          }) as unknown as GenerateContentResponse,
+      );
+      const responses = toolCallFirst
+        ? [functionCallResponse, ...textResponses]
+        : [textResponses[0]!, functionCallResponse, textResponses[1]!];
+      vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mockResolvedValueOnce(streamResponse(...responses));
+
+      const stream = await chatWithRecording.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        `prompt-id-json-tool-call-no-finish-${toolCallFirst}`,
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+        false,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(chatWithRecording.getHistory().at(-1)?.parts).toEqual(
+        emittedParts,
+      );
+      expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+      const recordedParts = recordAssistantTurn.mock.calls[0]?.[0]
+        .message as Part[];
+      for (const parts of [emittedParts, recordedParts]) {
+        expect(parts.filter((part) => part.functionCall)).toEqual([
+          functionCallPart,
+        ]);
+        expect(
+          parts
+            .filter((part) => part.text)
+            .map((part) => part.text)
+            .join(''),
+        ).toBe(response);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'keeps leading JSON before a later structured tool call (preparation: %s)',
+    async (withPreparation) => {
+      const response = JSON.stringify([{ name: 'example', value: 1 }]);
+      const preparationResponse = {
+        candidates: [{ content: { parts: [] } }],
+      } as unknown as GenerateContentResponse;
+      setToolCallPreparations(preparationResponse, [
+        { callId: 'call-1', toolName: 'read_file' },
+      ]);
+      const usageResponse = {
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2 },
+      } as GenerateContentResponse;
+      const responses = [
+        {
+          candidates: [
+            {
+              content: { parts: [{ text: response }] },
+            },
+          ],
+        } as unknown as GenerateContentResponse,
+        usageResponse,
+      ];
+      if (withPreparation) responses.push(preparationResponse);
+      responses.push(
+        stopResponse([
+          {
+            functionCall: {
+              id: 'call-1',
+              name: 'read_file',
+              args: { file_path: 'a.ts' },
+            },
+          },
+        ]),
+      );
+      vi.mocked(
+        mockContentGenerator.generateContentStream,
+      ).mockResolvedValueOnce(streamResponse(...responses));
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-json-before-tool-call',
+      );
+      const events: StreamEvent[] = [];
+      for await (const event of stream) events.push(event);
+
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      const emittedPreparations = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => getToolCallPreparations(event.value));
+      expect(
+        events.some(
+          (event) =>
+            event.type === StreamEventType.CHUNK &&
+            event.value.usageMetadata?.promptTokenCount === 10 &&
+            event.value.usageMetadata.candidatesTokenCount === 2,
+        ),
+      ).toBe(true);
+      expect(emittedPreparations).toEqual(
+        withPreparation ? [{ callId: 'call-1', toolName: 'read_file' }] : [],
+      );
+      for (const parts of [
+        emittedParts,
+        chat.getHistory().at(-1)?.parts ?? [],
+      ]) {
+        expect(parts.findIndex((part) => part.text === response)).toBe(0);
+        expect(parts.findIndex((part) => part.functionCall)).toBe(1);
+      }
+    },
+  );
+
+  it('does not retry after a structured tool call has already been emitted', async () => {
+    const recordAssistantTurn = vi.fn();
+    const chatWithRecording = new GeminiChat(
+      mockConfig,
+      config,
+      [],
+      {
+        recordAssistantTurn,
+        recordChatCompression: vi.fn(),
+      } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+      uiTelemetryService,
+    );
+    const leakedText =
+      JSON.stringify([{ name: 'read_file', file_path: 'a.ts' }]) +
+      '\n</parameter>\n</function>\n';
+    vi.mocked(mockContentGenerator.generateContentStream)
+      .mockResolvedValueOnce(
+        streamResponse(
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: {
+                        id: 'call-1',
+                        name: 'read_file',
+                        args: { file_path: 'a.ts' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse,
+          stopResponse([{ text: leakedText }]),
+        ),
+      )
+      .mockResolvedValueOnce(
+        streamResponse(stopResponse([{ text: 'Unexpected retry response' }])),
+      );
+
+    const stream = await chatWithRecording.sendMessageStream(
+      'test-model',
+      { message: 'test' },
+      'prompt-id-tool-call-before-json-protocol-leak',
+    );
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+
+    expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(1);
+    expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+      false,
+    );
+    const emittedParts = events
+      .filter((event) => event.type === StreamEventType.CHUNK)
+      .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+    expect(emittedParts).toEqual([
+      {
+        functionCall: {
+          id: 'call-1',
+          name: 'read_file',
+          args: { file_path: 'a.ts' },
+        },
+      },
+    ]);
+    expect(chatWithRecording.getHistory().at(-1)?.parts).toEqual(emittedParts);
+    expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(recordAssistantTurn.mock.calls[0]?.[0].message).toEqual(
+      emittedParts,
+    );
+  });
+
+  it('does not reject normal HTML or protocol tag names in prose', async () => {
+    const response =
+      '<details><summary>Title</summary></details> ' +
+      'Use the literal <analysis> tag in this example.';
+    vi.mocked(
+      mockContentGenerator.generateContentStream,
+    ).mockImplementationOnce(async () =>
+      (async function* () {
+        yield {
+          candidates: [
+            {
+              content: { parts: [{ text: response }] },
+              finishReason: 'STOP',
+            },
+          ],
+        } as unknown as GenerateContentResponse;
+      })(),
+    );
+
+    const stream = await chat.sendMessageStream(
+      'test-model',
+      { message: 'test' },
+      'prompt-id-protocol-literal',
+    );
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+
+    expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+      false,
+    );
+    expect(chat.getLastModelMessageText()).toBe(response);
+  });
+
+  it('does not reject closing protocol tags inside a JSON string', async () => {
+    const response = JSON.stringify({
+      example: '} </parameter></function> text',
+    });
+    vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValueOnce(
+      streamResponse(stopResponse([{ text: response }])),
+    );
+
+    const stream = await chat.sendMessageStream(
+      'test-model',
+      { message: 'test' },
+      'prompt-id-json-protocol-literal',
+    );
+    const events: StreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+
+    expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+      false,
+    );
+    expect(chat.getLastModelMessageText()).toBe(response);
+  });
+
+  it('retries leaked JSON before a structured tool call', async () => {
+    vi.useFakeTimers();
+    try {
+      const leakedText =
+        JSON.stringify([{ name: 'read_file', file_path: 'a.ts' }]) +
+        '\n</parameter>\n</function>\n';
+      vi.mocked(mockContentGenerator.generateContentStream)
+        .mockResolvedValueOnce(
+          streamResponse(
+            {
+              candidates: [{ content: { parts: [{ text: leakedText }] } }],
+            } as unknown as GenerateContentResponse,
+            stopResponse([
+              {
+                functionCall: {
+                  id: 'call-1',
+                  name: 'read_file',
+                  args: { file_path: 'a.ts' },
+                },
+              },
+            ]),
+          ),
+        )
+        .mockResolvedValueOnce(
+          streamResponse(stopResponse([{ text: 'Successful final response' }])),
+        );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-json-leak-before-tool-call',
+      );
+      const events: StreamEvent[] = [];
+      const iterator = stream[Symbol.asyncIterator]();
+      for (;;) {
+        const next = iterator.next();
+        await vi.advanceTimersByTimeAsync(5_000);
+        const result = await next;
+        if (result.done) break;
+        events.push(result.value);
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(emittedParts).toEqual([{ text: 'Successful final response' }]);
+      expect(chat.getHistory().at(-1)?.parts).toEqual(emittedParts);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries leaked JSON without a finish reason via the post-stream leak guard', async () => {
+    vi.useFakeTimers();
+    try {
+      const leakedText =
+        JSON.stringify([{ name: 'read_file', file_path: 'a.ts' }]) +
+        '\n\n</parameter>\n</function>\n';
+      vi.mocked(mockContentGenerator.generateContentStream)
+        .mockResolvedValueOnce(
+          streamResponse(
+            {
+              candidates: [{ content: { parts: [{ text: leakedText }] } }],
+            } as unknown as GenerateContentResponse,
+            {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        functionCall: {
+                          id: 'call-1',
+                          name: 'read_file',
+                          args: { file_path: 'a.ts' },
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            } as unknown as GenerateContentResponse,
+          ),
+        )
+        .mockResolvedValueOnce(
+          streamResponse(stopResponse([{ text: 'Successful final response' }])),
+        );
+
+      const stream = await chat.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-json-leak-no-finish-reason',
+      );
+      const events: StreamEvent[] = [];
+      const iterator = stream[Symbol.asyncIterator]();
+      for (;;) {
+        const next = iterator.next();
+        await vi.advanceTimersByTimeAsync(5_000);
+        const result = await next;
+        if (result.done) break;
+        events.push(result.value);
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(emittedParts).toEqual([{ text: 'Successful final response' }]);
+      expect(chat.getHistory().at(-1)?.parts).toEqual(emittedParts);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries a protocol-tagged turn even when the leaked attempt also contains a tool call', async () => {
+    vi.useFakeTimers();
+    try {
+      const recordAssistantTurn = vi.fn();
+      const chatWithRecording = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        {
+          recordAssistantTurn,
+          recordChatCompression: vi.fn(),
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      chatWithRecording.setHistory([
+        { role: 'user', parts: [{ text: 'earlier user turn' }] },
+        { role: 'model', parts: [{ text: 'earlier model turn' }] },
+      ]);
+
+      vi.mocked(mockContentGenerator.generateContentStream)
+        .mockImplementationOnce(async () =>
+          (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: '<ana' }],
+                  },
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text:
+                          'lysis>failed scratch</analysis>' +
+                          '<summary>FAILED_ATTEMPT_SHOULD_BE_DISCARDED</summary>',
+                      },
+                      {
+                        functionCall: {
+                          id: 'call_protocol_leak_should_retry',
+                          name: 'read_file',
+                          args: { path: '/tmp/leaked.txt' },
+                        },
+                      },
+                    ],
+                  },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })(),
+        )
+        .mockImplementationOnce(async () =>
+          (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: 'Successful final response' }],
+                  },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })(),
+        );
+
+      const stream = await chatWithRecording.sendMessageStream(
+        'test-model',
+        { message: 'test' },
+        'prompt-id-protocol-leak-tool-call',
+      );
+      const events: StreamEvent[] = [];
+      const iterator = stream[Symbol.asyncIterator]();
+      for (;;) {
+        const next = iterator.next();
+        await vi.advanceTimersByTimeAsync(5_000);
+        const result = await next;
+        if (result.done) break;
+        events.push(result.value);
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      expect(events.some((event) => event.type === StreamEventType.RETRY)).toBe(
+        true,
+      );
+      const emittedParts = events
+        .filter((event) => event.type === StreamEventType.CHUNK)
+        .flatMap((event) => event.value.candidates?.[0]?.content?.parts ?? []);
+      expect(emittedParts.some((part) => part.functionCall)).toBe(false);
+      const emittedText = emittedParts.map((part) => part.text ?? '').join('');
+      expect(emittedText).toBe('Successful final response');
+      expect(chatWithRecording.getLastModelMessageText()).toBe(
+        'Successful final response',
+      );
+
+      const history = chatWithRecording.getHistory();
+      expect(history).toEqual([
+        { role: 'user', parts: [{ text: 'earlier user turn' }] },
+        { role: 'model', parts: [{ text: 'earlier model turn' }] },
+        { role: 'user', parts: [{ text: 'test' }] },
+        { role: 'model', parts: [{ text: 'Successful final response' }] },
+      ]);
+      expect(
+        history.some((turn) => turn.parts?.some((part) => part.functionCall)),
+      ).toBe(false);
+
+      expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+      expect(recordAssistantTurn.mock.calls[0]?.[0].message).toEqual([
+        { text: 'Successful final response' },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe('stripThoughtsFromHistory', () => {
@@ -8018,6 +12598,181 @@ describe('GeminiChat', async () => {
       })();
     }
 
+    function invalidStream(
+      type: InvalidStreamError['type'],
+    ): AsyncGenerator<GenerateContentResponse> {
+      return {
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+        async next() {
+          throw new InvalidStreamError('Invalid continuation stream.', type);
+        },
+        async return() {
+          return { done: true, value: undefined };
+        },
+        async throw(error?: unknown) {
+          throw error;
+        },
+      } as AsyncGenerator<GenerateContentResponse>;
+    }
+
+    it('re-clamps maxOutputTokens on each recovery send as the prompt grows (window invariant)', async () => {
+      // The #5950 shape at recovery time: 131,072 window, 71,349 prompt,
+      // 64K-ceiling model. Initial clamp grants 49,722. The response
+      // truncates at MAX_TOKENS, the 49,722-token partial lands in history,
+      // and the recovery resend's prompt is now ~121K — reusing the stale
+      // 49,722 would overflow the window by ~40K. The recovery loop must
+      // re-clamp per iteration (here down to the 4,000 floor).
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'claude-sonnet-4-6',
+        contextWindowSize: 131_072,
+      });
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: null,
+        info: {
+          originalTokenCount: 71_349,
+          newTokenCount: 71_349,
+          compressionStatus: CompressionStatus.NOOP,
+        },
+      });
+
+      const truncatedWithUsage = {
+        candidates: [
+          {
+            content: { role: 'model', parts: [{ text: 'partial essay…' }] },
+            finishReason: 'MAX_TOKENS',
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 71_349,
+          totalTokenCount: 121_071, // output = 49,722 (the full grant)
+        },
+      } as unknown as GenerateContentResponse;
+      const streams = [
+        makeStream([truncatedWithUsage]),
+        makeStream([makeChunk([{ text: ' …and done.' }], 'STOP')]),
+      ];
+      let callIndex = 0;
+      vi.mocked(mockContentGenerator.generateContentStream).mockImplementation(
+        async () => streams[callIndex++]!,
+      );
+
+      chat.setLastPromptTokenCount(71_349);
+      const stream = await chat.sendMessageStream(
+        'claude-sonnet-4-6',
+        { message: 'hi' },
+        'prompt-recovery-reclamp',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      // Escalation is a no-op (the room already bound below the 64K
+      // ceiling), so exactly 2 calls: initial + recovery.
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        2,
+      );
+      const calls = vi.mocked(mockContentGenerator.generateContentStream).mock
+        .calls;
+      const initialConfig = calls[0]![0].config as { maxOutputTokens?: number };
+      const recoveryConfig = calls[1]![0].config as {
+        maxOutputTokens?: number;
+      };
+      // Initial: char/4("hi")=1 token, inflated by the conservative safety
+      // factor (1.5x, ceil'd) to 2, room = 131072 − 71351 − 10000 = 49721
+      // (below the 64K ceiling).
+      expect(initialConfig.maxOutputTokens).toBe(49_721);
+      // Recovery: prompt grew to ~121K → re-clamped to the 4,000 floor, NOT
+      // the stale 49,721 (which would overflow the window by ~40K).
+      expect(recoveryConfig.maxOutputTokens).toBe(4_000);
+    });
+
+    it('re-clamps recovery sends even when an intermediate response omits usage metadata', async () => {
+      // Codex round-4 scenario: multi-iteration recovery where the FIRST
+      // truncated response reports usage but the SECOND omits it. The
+      // count-based estimate freezes at iteration-1 values while history
+      // keeps growing by ~64K per iteration; the padded fresh-walk estimate
+      // must overrule it so iteration 2 does not re-grant the full ceiling.
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+        model: 'claude-sonnet-4-6',
+        contextWindowSize: 180_000,
+      });
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: null,
+        info: {
+          originalTokenCount: 5_000,
+          newTokenCount: 5_000,
+          compressionStatus: CompressionStatus.NOOP,
+        },
+      });
+
+      // ~64K estimated tokens of partial output per truncated response, so
+      // the history walk actually sees the growth.
+      const truncatedWithUsage = {
+        candidates: [
+          {
+            content: { role: 'model', parts: [{ text: 'y'.repeat(256_000) }] },
+            finishReason: 'MAX_TOKENS',
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 5_000,
+          totalTokenCount: 69_000, // output = 64,000 (the full grant)
+        },
+      } as unknown as GenerateContentResponse;
+      const truncatedNoUsage = {
+        candidates: [
+          {
+            content: { role: 'model', parts: [{ text: 'z'.repeat(256_000) }] },
+            finishReason: 'MAX_TOKENS',
+          },
+        ],
+        // usageMetadata deliberately absent — provider omitted it.
+      } as unknown as GenerateContentResponse;
+      const streams = [
+        makeStream([truncatedWithUsage]),
+        makeStream([truncatedNoUsage]),
+        makeStream([makeChunk([{ text: ' fin.' }], 'STOP')]),
+      ];
+      let callIndex = 0;
+      vi.mocked(mockContentGenerator.generateContentStream).mockImplementation(
+        async () => streams[callIndex++]!,
+      );
+
+      chat.setLastPromptTokenCount(5_000);
+      const stream = await chat.sendMessageStream(
+        'claude-sonnet-4-6',
+        { message: 'hi' },
+        'prompt-recovery-stale-usage',
+      );
+      for await (const _ of stream) {
+        /* consume */
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledTimes(
+        3,
+      );
+      const calls = vi.mocked(mockContentGenerator.generateContentStream).mock
+        .calls;
+      const recovery1Config = calls[1]![0].config as {
+        maxOutputTokens?: number;
+      };
+      const recovery2Config = calls[2]![0].config as {
+        maxOutputTokens?: number;
+      };
+      // Iteration 1: plenty of room, ceiling binds.
+      expect(recovery1Config.maxOutputTokens).toBe(64_000);
+      // Iteration 2: the stale count-based estimate (frozen at ~69K) would
+      // re-grant the full 64,000; the padded walk (~148K: two 64K partials
+      // + pad) must win, shrinking the grant to roughly
+      // 180,000 − ~148K − 10,000 ≈ 22K.
+      expect(recovery2Config.maxOutputTokens).toBeLessThan(30_000);
+      expect(recovery2Config.maxOutputTokens).toBeGreaterThanOrEqual(4_000);
+    });
+
     it('should enter recovery loop when escalated response is also truncated', async () => {
       // Three streams: initial (MAX_TOKENS) → escalated (MAX_TOKENS) →
       // recovery (STOP).
@@ -8059,11 +12814,81 @@ describe('GeminiChat', async () => {
       );
     });
 
+    it('retries protocol-tag leaks during max-tokens escalation', async () => {
+      vi.useFakeTimers();
+      try {
+        const streams = [
+          makeStream([makeChunk([{ text: 'Hello' }], 'MAX_TOKENS')]),
+          (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: '<ana' }],
+                  },
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text:
+                          'lysis>discard escalated attempt</analysis>' +
+                          '<summary>DISCARD_ESCALATED_ATTEMPT</summary>',
+                      },
+                    ],
+                  },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })(),
+          makeStream([makeChunk([{ text: 'Hello world' }], 'STOP')]),
+        ];
+        let callIndex = 0;
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => streams[callIndex++]!);
+
+        const stream = await chat.sendMessageStream(
+          'gemini-pro',
+          { message: 'write a long essay' },
+          'prompt-escalation-protocol-retry',
+        );
+        const events: StreamEvent[] = [];
+        const iterator = stream[Symbol.asyncIterator]();
+        for (;;) {
+          const next = iterator.next();
+          await vi.advanceTimersByTimeAsync(5_000);
+          const result = await next;
+          if (result.done) break;
+          events.push(result.value);
+        }
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(3);
+        expect(
+          events.filter((event) => event.type === StreamEventType.RETRY).length,
+        ).toBe(2);
+        expect(chat.getLastModelMessageText()).toBe('Hello world');
+        expect(
+          JSON.stringify(chat.getHistory()).includes(
+            'DISCARD_ESCALATED_ATTEMPT',
+          ),
+        ).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('preserves current user image bytes during output recovery', async () => {
       vi.mocked(mockConfig.getChatCompression).mockReturnValue({
         maxRecentImagesToRetain: 0,
         imagePayloadThreshold: 1,
-
       });
       const streams = [
         makeStream([makeChunk([{ text: 'initial' }], 'MAX_TOKENS')]),
@@ -8140,6 +12965,81 @@ describe('GeminiChat', async () => {
       expect(text).toBe('Hello ending.');
     });
 
+    it('retries protocol-tag leaks during direct output recovery', async () => {
+      vi.useFakeTimers();
+      try {
+        const streams = [
+          makeStream([makeChunk([{ text: 'Hello' }], 'MAX_TOKENS')]),
+          (async function* () {
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: '<ana' }],
+                  },
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+            yield {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text:
+                          'lysis>discard recovery attempt</analysis>' +
+                          '<summary>DISCARD_RECOVERY_ATTEMPT</summary>',
+                      },
+                    ],
+                  },
+                  finishReason: 'STOP',
+                },
+              ],
+            } as unknown as GenerateContentResponse;
+          })(),
+          makeStream([makeChunk([{ text: ' world' }], 'STOP')]),
+        ];
+        let callIndex = 0;
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => streams[callIndex++]!);
+
+        const stream = await chat.sendMessageStream(
+          'gemini-3-pro',
+          { message: 'write a long essay' },
+          'prompt-direct-recovery-protocol-retry',
+        );
+        const events: StreamEvent[] = [];
+        const iterator = stream[Symbol.asyncIterator]();
+        for (;;) {
+          const next = iterator.next();
+          await vi.advanceTimersByTimeAsync(5_000);
+          const result = await next;
+          if (result.done) break;
+          events.push(result.value);
+        }
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(3);
+        const retries = events.filter(
+          (event) => event.type === StreamEventType.RETRY,
+        );
+        expect(retries).toHaveLength(2);
+        expect(
+          retries.map(
+            (event) => (event as { isContinuation?: boolean }).isContinuation,
+          ),
+        ).toEqual([true, true]);
+        expect(chat.getLastModelMessageText()).toBe('Hello world');
+        expect(chat.getHistory()).toEqual([
+          { role: 'user', parts: [{ text: 'write a long essay' }] },
+          { role: 'model', parts: [{ text: 'Hello world' }] },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
     it('should coalesce overlapping recovery continuation text', async () => {
       const streams = [
@@ -9004,6 +13904,94 @@ describe('GeminiChat', async () => {
       ).toBe(true);
     });
 
+    it('keeps protocol tag leak budget during output continuation', async () => {
+      vi.useFakeTimers();
+      try {
+        const streams = [
+          makeStream([makeChunk([{ text: 'initial' }], 'MAX_TOKENS')]),
+          makeStream([makeChunk([{ text: 'escalated' }], 'MAX_TOKENS')]),
+          invalidStream('PROTOCOL_TAG_LEAK'),
+          invalidStream('PROTOCOL_TAG_LEAK'),
+          invalidStream('PROTOCOL_TAG_LEAK'),
+        ];
+        let callIndex = 0;
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => streams[callIndex++]!);
+
+        const stream = await chat.sendMessageStream(
+          'gemini-pro',
+          { message: 'essay' },
+          'prompt-recovery-protocol-leak-budget',
+        );
+
+        await collectStreamWithFakeTimers(stream, 35_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(5);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(2);
+        expect(mockLogContentRetry).toHaveBeenLastCalledWith(
+          mockConfig,
+          expect.objectContaining({
+            attempt_number: 1,
+            error_type: 'PROTOCOL_TAG_LEAK',
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps continuation retry budgets independent across error types', async () => {
+      vi.useFakeTimers();
+      try {
+        const streams = [
+          makeStream([makeChunk([{ text: 'initial' }], 'MAX_TOKENS')]),
+          makeStream([makeChunk([{ text: 'escalated' }], 'MAX_TOKENS')]),
+          invalidStream('NO_FINISH_REASON'),
+          invalidStream('NO_FINISH_REASON'),
+          invalidStream('PROTOCOL_TAG_LEAK'),
+          makeStream([makeChunk([{ text: ' recovered' }], 'STOP')]),
+        ];
+        let callIndex = 0;
+        vi.mocked(
+          mockContentGenerator.generateContentStream,
+        ).mockImplementation(async () => streams[callIndex++]!);
+
+        const stream = await chat.sendMessageStream(
+          'gemini-pro',
+          { message: 'essay' },
+          'prompt-recovery-mixed-invalid-streams',
+        );
+
+        const events = await collectStreamWithFakeTimers(stream, 15_000);
+
+        expect(
+          mockContentGenerator.generateContentStream,
+        ).toHaveBeenCalledTimes(6);
+        expect(mockLogContentRetry).toHaveBeenCalledTimes(3);
+        expect(mockLogContentRetry).toHaveBeenLastCalledWith(
+          mockConfig,
+          expect.objectContaining({
+            attempt_number: 0,
+            error_type: 'PROTOCOL_TAG_LEAK',
+            retry_delay_ms: 2000,
+          }),
+        );
+        expect(
+          events.some(
+            (e) =>
+              e.type === StreamEventType.CHUNK &&
+              e.value.candidates?.[0]?.content?.parts?.[0]?.text ===
+                ' recovered',
+          ),
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('should cap recovery attempts at MAX_OUTPUT_RECOVERY_ATTEMPTS (3)', async () => {
       // Every stream returns MAX_TOKENS with text (no functionCall).
       vi.mocked(mockContentGenerator.generateContentStream).mockImplementation(
@@ -9271,26 +14259,11 @@ describe('GeminiChat', async () => {
       expect(mergedText).toBe('BCD');
     });
 
-    it('flushes the JSONL record when escalated stream throws mid-tool_use', async () => {
-      // Critical regression for the max-tokens escalation path:
-      // 1) initial stream succeeds with text + MAX_TOKENS → triggers
-      //    escalation, no partial set, deferred record clean.
-      // 2) escalated stream throws AFTER yielding a functionCall chunk
-      //    → processStreamResponse pushes a partial model[fc] into
-      //    `this.history` and stashes a NEW `pendingPartialAssistantRecord`.
-      // 3) The throw escapes through the for-await on the escalated
-      //    stream, propagates past the (now-passed) retry loop, and
-      //    lands in the outer `finally` block.
-      //
-      // BEFORE the fix: the flush only ran BEFORE the escalation block,
-      // so the new record set in step 2 was never appended to JSONL —
-      // live history disagreed with disk; `--resume` rehydrated a
-      // truncated transcript and `repairOrphanedToolUseTurnsInHistory`
-      // had nothing to repair, leaving the React scheduler's late real
-      // result as a permanent orphan.
-      //
-      // AFTER the fix: the flush is in `finally`, so the record lands
-      // on disk regardless of which stream raised.
+    it('rolls back an escalated partial tool call when the stream fails', async () => {
+      // The escalated attempt pushes a partial model[functionCall] and
+      // stages its recording before the stream failure surfaces. Both must
+      // be rolled back so later sends and resumed sessions do not repair an
+      // incomplete call with a synthetic result.
       const recordAssistantTurn = vi.fn();
       const chatWithRecording = new GeminiChat(
         mockConfig,
@@ -9350,20 +14323,10 @@ describe('GeminiChat', async () => {
         })(),
       ).rejects.toThrow(/synthetic mid-tool_use cut/);
 
-      // In-memory: the partial functionCall pushed by the escalated
-      // processStreamResponse must be in history.
-      const history = chatWithRecording.getHistory();
-      const partialModel = history.findLast((h) => h.role === 'model');
-      expect(
-        partialModel?.parts?.some(
-          (p) => p.functionCall?.id === 'call_escalation_throw',
-        ),
-      ).toBe(true);
+      expect(chatWithRecording.getHistory()).toEqual([
+        { role: 'user', parts: [{ text: 'kick off' }] },
+      ]);
 
-      // JSONL: at least one record must mention the partial functionCall
-      // (the escalation throw flushed it). Without the finally-block
-      // flush, this assertion would fail and the durable transcript
-      // would silently lose a tool_use that's still live in memory.
       const recordedHasPartial = recordAssistantTurn.mock.calls.some((call) => {
         const message = (
           call[0] as {
@@ -9374,7 +14337,325 @@ describe('GeminiChat', async () => {
           (p) => p.functionCall?.id === 'call_escalation_throw',
         );
       });
-      expect(recordedHasPartial).toBe(true);
+      expect(recordedHasPartial).toBe(false);
+    });
+  });
+
+  describe('redactApprovedPlanFromHistory', () => {
+    // After an approved exit_plan_mode the full plan text would otherwise
+    // stay in history as the model's own tool-call argument and get
+    // regurgitated into later responses (#6237). These tests pin the
+    // targeted history rewrite the tool scheduler performs post-approval.
+
+    const REPLACEMENT = '[Plan approved and saved to /tmp/p.md]';
+
+    function chatWith(history: Content[]): GeminiChat {
+      return new GeminiChat({} as unknown as Config, {}, history);
+    }
+
+    it('rewrites only the plan arg of the matching exit_plan_mode call', () => {
+      const chat = chatWith([
+        { role: 'user', parts: [{ text: 'plan it' }] },
+        {
+          role: 'model',
+          parts: [
+            { text: 'My plan follows.' },
+            {
+              functionCall: {
+                id: 'call-plan',
+                name: 'exit_plan_mode',
+                args: { plan: 'SECRET BIG PLAN', originalRequest: 'plan it' },
+              },
+            },
+          ],
+        },
+      ]);
+
+      expect(chat.redactApprovedPlanFromHistory('call-plan', REPLACEMENT)).toBe(
+        true,
+      );
+
+      const entry = chat.getHistory()[1]!;
+      const fnCall = entry.parts![1]!.functionCall!;
+      expect(fnCall.args!['plan']).toBe(REPLACEMENT);
+      expect(fnCall.args!['originalRequest']).toBe('plan it');
+      expect(fnCall.id).toBe('call-plan');
+      expect(entry.parts![0]).toEqual({ text: 'My plan follows.' });
+      expect(JSON.stringify(chat.getHistory())).not.toContain(
+        'SECRET BIG PLAN',
+      );
+    });
+
+    it('returns false when no matching call id or tool name exists', () => {
+      const chat = chatWith([
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call-other',
+                name: 'write_file',
+                args: { plan: 'not a plan tool' },
+              },
+            },
+          ],
+        },
+      ]);
+      expect(chat.redactApprovedPlanFromHistory('call-plan', REPLACEMENT)).toBe(
+        false,
+      );
+      expect(
+        chat.redactApprovedPlanFromHistory('call-other', REPLACEMENT),
+      ).toBe(false);
+      expect(chat.getHistory()[0]!.parts![0]!.functionCall!.args!['plan']).toBe(
+        'not a plan tool',
+      );
+    });
+
+    it('returns false when expectedPlan differs from the in-history plan', () => {
+      const chat = chatWith([
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call-plan',
+                name: 'exit_plan_mode',
+                args: { plan: 'SECRET BIG PLAN' },
+              },
+            },
+          ],
+        },
+      ]);
+      // Never-lie invariant: a stale/different on-disk plan blocks the
+      // rewrite entirely.
+      expect(
+        chat.redactApprovedPlanFromHistory(
+          'call-plan',
+          REPLACEMENT,
+          'a different plan',
+        ),
+      ).toBe(false);
+      expect(chat.getHistory()[0]!.parts![0]!.functionCall!.args!['plan']).toBe(
+        'SECRET BIG PLAN',
+      );
+      // Matching expectedPlan still rewrites.
+      expect(
+        chat.redactApprovedPlanFromHistory(
+          'call-plan',
+          REPLACEMENT,
+          'SECRET BIG PLAN',
+        ),
+      ).toBe(true);
+    });
+
+    it('returns false when the matching call has no string plan arg', () => {
+      const chat = chatWith([
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call-plan',
+                name: 'exit_plan_mode',
+                args: {},
+              },
+            },
+          ],
+        },
+      ]);
+      expect(chat.redactApprovedPlanFromHistory('call-plan', REPLACEMENT)).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('redactApprovedPlansInHistory (load-side, #6237)', () => {
+    // The chat-recording JSONL captures the assistant turn with the full
+    // plan argument before the tool runs, so --resume re-feeds the text the
+    // in-session redaction removed. These tests pin the history-wide pass
+    // applied on every wholesale history load.
+    const PLAN = '## Plan\n\nresume leak fixture';
+    const PLAN_PATH = '/plans/session.md';
+
+    const approvedHistory = (): Content[] => [
+      { role: 'user', parts: [{ text: 'plan it' }] },
+      {
+        role: 'model',
+        parts: [
+          {
+            functionCall: {
+              id: 'call-a',
+              name: 'exit_plan_mode',
+              args: { plan: PLAN, originalRequest: 'plan it' },
+            },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: 'call-a',
+              name: 'exit_plan_mode',
+              response: {
+                output:
+                  'User approved. You can now start coding. Start with updating your todo list if applicable.',
+              },
+            },
+          },
+        ],
+      },
+    ];
+
+    it('rewrites approved calls whose plan matches the on-disk file', () => {
+      const out = redactApprovedPlansInHistory(
+        approvedHistory(),
+        PLAN,
+        PLAN_PATH,
+      );
+      expect(out).not.toBeNull();
+      const fnCall = out![1]!.parts![0]!.functionCall!;
+      expect(fnCall.args!['plan']).toBe(approvedPlanRedactionText(PLAN_PATH));
+      expect(fnCall.args!['originalRequest']).toBe('plan it');
+      expect(JSON.stringify(out)).not.toContain('resume leak fixture');
+    });
+
+    it('redacts only the approved call when a rejected call shares the plan text', () => {
+      const history: Content[] = [
+        { role: 'user', parts: [{ text: 'plan it' }] },
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call-rejected',
+                name: 'exit_plan_mode',
+                args: { plan: PLAN },
+              },
+            },
+          ],
+        },
+        {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                id: 'call-rejected',
+                name: 'exit_plan_mode',
+                response: {
+                  output:
+                    'Plan execution was not approved. Remaining in plan mode.',
+                },
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: {
+                id: 'call-approved',
+                name: 'exit_plan_mode',
+                args: { plan: PLAN },
+              },
+            },
+          ],
+        },
+        {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                id: 'call-approved',
+                name: 'exit_plan_mode',
+                response: {
+                  output: 'User approved. You can now start coding.',
+                },
+              },
+            },
+          ],
+        },
+      ];
+
+      const out = redactApprovedPlansInHistory(history, PLAN, PLAN_PATH);
+      expect(out).not.toBeNull();
+      // The rejected call keeps its plan text (the model needs it for
+      // revision); only the approved call is rewritten.
+      expect(out![1]!.parts![0]!.functionCall!.args!['plan']).toBe(PLAN);
+      expect(out![3]!.parts![0]!.functionCall!.args!['plan']).toBe(
+        approvedPlanRedactionText(PLAN_PATH),
+      );
+    });
+
+    it('returns null when the response was not an approval', () => {
+      const history = approvedHistory();
+      (
+        history[2]!.parts![0]!.functionResponse!.response as {
+          output: string;
+        }
+      ).output = 'Plan execution was not approved. Remaining in plan mode.';
+      expect(redactApprovedPlansInHistory(history, PLAN, PLAN_PATH)).toBeNull();
+    });
+
+    it('returns null when the on-disk plan differs (stale file)', () => {
+      expect(
+        redactApprovedPlansInHistory(
+          approvedHistory(),
+          'a different, later plan',
+          PLAN_PATH,
+        ),
+      ).toBeNull();
+    });
+
+    it('is applied by setHistory when the plan file exists', () => {
+      // The module-level node:fs mock backs readFileSync with
+      // mockFileSystem, so "writing" the plan file is a Map insert.
+      const planFile = '/plans/wired-session.md';
+      mockFileSystem.set(planFile, PLAN);
+      try {
+        const chat = new GeminiChat(
+          { getPlanFilePath: () => planFile } as unknown as Config,
+          {},
+          [],
+        );
+        chat.setHistory(approvedHistory());
+        const fnCall = chat.getHistory()[1]!.parts![0]!.functionCall!;
+        expect(fnCall.args!['plan']).toBe(approvedPlanRedactionText(planFile));
+      } finally {
+        mockFileSystem.delete(planFile);
+      }
+    });
+
+    it('is applied by the constructor for rehydrated history', () => {
+      const planFile = '/plans/ctor-session.md';
+      mockFileSystem.set(planFile, PLAN);
+      try {
+        const chat = new GeminiChat(
+          { getPlanFilePath: () => planFile } as unknown as Config,
+          {},
+          approvedHistory(),
+        );
+        const fnCall = chat.getHistory()[1]!.parts![0]!.functionCall!;
+        expect(fnCall.args!['plan']).toBe(approvedPlanRedactionText(planFile));
+      } finally {
+        mockFileSystem.delete(planFile);
+      }
+    });
+
+    it('setHistory leaves history alone when no plan file exists', () => {
+      const chat = new GeminiChat(
+        {
+          getPlanFilePath: () => '/plans/never-written.md',
+        } as unknown as Config,
+        {},
+        [],
+      );
+      chat.setHistory(approvedHistory());
+      const fnCall = chat.getHistory()[1]!.parts![0]!.functionCall!;
+      expect(fnCall.args!['plan']).toBe(PLAN);
     });
   });
 
@@ -9480,6 +14761,7 @@ describe('GeminiChat', async () => {
           info: {
             originalTokenCount: 1000,
             newTokenCount: 200,
+            newTokenCountIsEstimated: true,
             compressionStatus: CompressionStatus.COMPRESSED,
           },
         });
@@ -9510,7 +14792,7 @@ describe('GeminiChat', async () => {
       mockCompressionService('compressed');
       chat.setHistory([userMsg('a'), modelMsg('b'), userMsg('c')]);
 
-      const info = await chat.tryCompress('p1', 'm1');
+      const info = await chat.tryCompress('p1');
 
       expect(info.compressionStatus).toBe(CompressionStatus.COMPRESSED);
       expect(chat.getHistory()).toHaveLength(3);
@@ -9521,7 +14803,7 @@ describe('GeminiChat', async () => {
     it('mirrors lastPromptTokenCount to the global telemetry only when wired', async () => {
       mockCompressionService('compressed');
       // chat under test was constructed with telemetryService=uiTelemetryService.
-      await chat.tryCompress('p2', 'm1');
+      await chat.tryCompress('p2');
       expect(uiTelemetryService.setLastPromptTokenCount).toHaveBeenCalledWith(
         200,
       );
@@ -9532,7 +14814,7 @@ describe('GeminiChat', async () => {
       const subagentChat = new GeminiChat(mockConfig, config, []);
       vi.mocked(uiTelemetryService.setLastPromptTokenCount).mockClear();
       mockCompressionService('compressed');
-      const info = await subagentChat.tryCompress('p3', 'm1');
+      const info = await subagentChat.tryCompress('p3');
       expect(info.compressionStatus).toBe(CompressionStatus.COMPRESSED);
       expect(subagentChat.getLastPromptTokenCount()).toBe(200);
       expect(uiTelemetryService.setLastPromptTokenCount).not.toHaveBeenCalled();
@@ -9541,7 +14823,7 @@ describe('GeminiChat', async () => {
     it('increments consecutiveFailures and forwards it to subsequent unforced auto-compactions', async () => {
       const compressSpy = mockCompressionService('failed-inflated');
 
-      const first = await chat.tryCompress('p1', 'm1');
+      const first = await chat.tryCompress('p1');
       expect(first.compressionStatus).toBe(
         CompressionStatus.COMPRESSION_FAILED_INFLATED_TOKEN_COUNT,
       );
@@ -9561,7 +14843,7 @@ describe('GeminiChat', async () => {
           compressionStatus: CompressionStatus.NOOP,
         },
       });
-      await chat.tryCompress('p2', 'm1');
+      await chat.tryCompress('p2');
       expect(compressSpy).toHaveBeenCalledTimes(1);
       expect(compressSpy.mock.calls[0][1].consecutiveFailures).toBe(1);
     });
@@ -9569,8 +14851,125 @@ describe('GeminiChat', async () => {
     it('forwards force=true to the compression service', async () => {
       const compressSpy = mockCompressionService('compressed');
 
-      await chat.tryCompress('p1', 'm1', true);
+      await chat.tryCompress('p1', true);
       expect(compressSpy.mock.calls[0][1].force).toBe(true);
+    });
+
+    it('derives a compression baseline when no API token count is available', async () => {
+      const compressSpy = mockCompressionService('compressed');
+      chat.setHistory([userMsg('x'.repeat(4000)), modelMsg('acknowledged')]);
+
+      await chat.tryCompress('p-zero-baseline', true);
+
+      expect(compressSpy.mock.calls[0][1].originalTokenCount).toBeGreaterThan(
+        0,
+      );
+      expect(chat.isLastPromptTokenCountEstimated()).toBe(true);
+    });
+
+    it('retains estimated provenance across repeated compression', async () => {
+      const compressSpy = mockCompressionService('compressed');
+
+      await chat.tryCompress('p-estimated-first', true);
+      expect(chat.isLastPromptTokenCountEstimated()).toBe(true);
+
+      await chat.tryCompress('p-estimated-second', true);
+
+      expect(compressSpy).toHaveBeenCalledTimes(2);
+      expect(chat.isLastPromptTokenCountEstimated()).toBe(true);
+    });
+
+    it('persists estimated provenance in a compression checkpoint', async () => {
+      const recordChatCompression = vi.fn();
+      const recordingChat = new GeminiChat(
+        mockConfig,
+        config,
+        [userMsg('history without usage'), modelMsg('response')],
+        {
+          recordChatCompression,
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      mockCompressionService('compressed');
+
+      await recordingChat.tryCompress('p-estimated-checkpoint', true);
+
+      expect(recordChatCompression).toHaveBeenCalledWith(
+        expect.objectContaining({
+          info: expect.objectContaining({ newTokenCountIsEstimated: true }),
+        }),
+      );
+    });
+
+    it('preserves an authoritative compression count from the service', async () => {
+      const recordChatCompression = vi.fn();
+      const recordingChat = new GeminiChat(
+        mockConfig,
+        config,
+        [userMsg('history'), modelMsg('response')],
+        {
+          recordChatCompression,
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      vi.spyOn(ChatCompressionService.prototype, 'compress').mockResolvedValue({
+        newHistory: [userMsg('summary'), modelMsg('ok')],
+        info: {
+          originalTokenCount: 1000,
+          newTokenCount: 200,
+          newTokenCountIsEstimated: false,
+          compressionStatus: CompressionStatus.COMPRESSED,
+        },
+      });
+
+      const info = await recordingChat.tryCompress('p-authoritative', true);
+
+      expect(info.newTokenCountIsEstimated).toBe(false);
+      expect(recordingChat.isLastPromptTokenCountEstimated()).toBe(false);
+      expect(recordChatCompression).toHaveBeenCalledWith(
+        expect.objectContaining({
+          info: expect.objectContaining({ newTokenCountIsEstimated: false }),
+        }),
+      );
+    });
+
+    it('marks and records the locally adjusted fast-compression count as estimated', () => {
+      const recordChatCompression = vi.fn();
+      vi.mocked(mockConfig.getClearContextOnIdle).mockReturnValue({
+        toolResultsThresholdMinutes: 30,
+        toolResultsNumToKeep: 1,
+      });
+      const recordingChat = new GeminiChat(
+        mockConfig,
+        config,
+        [
+          userMsg('question'),
+          {
+            role: 'model',
+            parts: [
+              { text: 'reasoning '.repeat(100), thought: true },
+              { text: 'answer' },
+            ],
+          },
+        ],
+        {
+          recordChatCompression,
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      recordingChat.seedResumeTokenCounts(1000, 0, false);
+
+      const result = recordingChat.compressFast();
+
+      expect(result.info.compressionStatus).toBe(CompressionStatus.COMPRESSED);
+      expect(result.info.newTokenCount).toBeGreaterThan(0);
+      expect(result.info.newTokenCount).toBeLessThan(1000);
+      expect(recordingChat.isLastPromptTokenCountEstimated()).toBe(true);
+      expect(recordChatCompression).toHaveBeenCalledWith(
+        expect.objectContaining({
+          info: expect.objectContaining({ newTokenCountIsEstimated: true }),
+        }),
+      );
     });
   });
 
@@ -9611,7 +15010,7 @@ describe('GeminiChat', async () => {
       chat.setHistory([userMsg('a'), modelMsg('b'), userMsg('c')]);
 
       for (let i = 0; i < MAX_CONSECUTIVE_FAILURES; i++) {
-        await chat.tryCompress(`p${i}`, 'm1');
+        await chat.tryCompress(`p${i}`);
         // The i-th call sees consecutiveFailures = i (counter pre-increment).
         expect(compressSpy.mock.calls[i][1].consecutiveFailures).toBe(i);
       }
@@ -9619,7 +15018,7 @@ describe('GeminiChat', async () => {
       // The next call will still be made by GeminiChat (it does not
       // short-circuit on its side), but the service's cheap-gate will NOOP.
       expect(compressSpy).toHaveBeenCalledTimes(MAX_CONSECUTIVE_FAILURES);
-      await chat.tryCompress('p-last', 'm1');
+      await chat.tryCompress('p-last');
       expect(
         compressSpy.mock.calls[MAX_CONSECUTIVE_FAILURES][1].consecutiveFailures,
       ).toBe(MAX_CONSECUTIVE_FAILURES);
@@ -9642,7 +15041,7 @@ describe('GeminiChat', async () => {
         },
       });
       for (let i = 0; i < 5; i++) {
-        await chat.tryCompress(`p-force-${i}`, 'm1', true);
+        await chat.tryCompress(`p-force-${i}`, true);
       }
       // After 5 forced failures, an unforced call must still see counter=0.
       compressSpy.mockResolvedValueOnce({
@@ -9653,7 +15052,7 @@ describe('GeminiChat', async () => {
           compressionStatus: CompressionStatus.NOOP,
         },
       });
-      await chat.tryCompress('p-unforced', 'm1');
+      await chat.tryCompress('p-unforced');
       const lastCall = compressSpy.mock.calls.at(-1);
       expect(lastCall![1].consecutiveFailures).toBe(0);
     });
@@ -9702,17 +15101,445 @@ describe('GeminiChat', async () => {
         });
 
       // Two failures → counter is 2.
-      await chat.tryCompress('p1', 'm1');
-      await chat.tryCompress('p2', 'm1');
+      await chat.tryCompress('p1');
+      await chat.tryCompress('p2');
       expect(compressSpy.mock.calls[1][1].consecutiveFailures).toBe(1);
 
       // Forced successful compress → counter resets to 0.
-      await chat.tryCompress('p-force', 'm1', true);
+      await chat.tryCompress('p-force', true);
       expect(compressSpy.mock.calls[2][1].consecutiveFailures).toBe(2);
 
       // Next unforced call: counter is back to 0.
-      await chat.tryCompress('p3', 'm1');
+      await chat.tryCompress('p3');
       expect(compressSpy.mock.calls[3][1].consecutiveFailures).toBe(0);
+    });
+  });
+  describe('XML tool call fallback integration', () => {
+    function xmlChunk(
+      text: string,
+      finishReason?: string,
+    ): GenerateContentResponse {
+      return {
+        candidates: [
+          {
+            content: { role: 'model', parts: [{ text }] },
+            ...(finishReason ? { finishReason } : {}),
+          },
+        ],
+      } as unknown as GenerateContentResponse;
+    }
+
+    it('recovers XML tool calls from plain text content and updates history', async () => {
+      const xml =
+        '<invoke name="read_file"><parameter name="file_path">a.ts</parameter></invoke>';
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield xmlChunk(xml, 'STOP');
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        { message: 'read the file' },
+        'prompt-xml-fallback',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+
+      // The synthetic chunk with functionCall parts must be yielded.
+      const syntheticChunk = chunks.find((c) =>
+        c.candidates?.[0]?.content?.parts?.some((p) => p.functionCall),
+      );
+      expect(syntheticChunk).toBeDefined();
+      expect(syntheticChunk!.functionCalls).toHaveLength(1);
+      const fc =
+        syntheticChunk!.candidates![0]!.content!.parts![0]!.functionCall!;
+      expect(fc.name).toBe('read_file');
+      expect(fc.args).toEqual({ file_path: 'a.ts' });
+
+      // History must contain the recovered functionCall parts, not raw XML.
+      const history = chat.getHistory();
+      const lastEntry = history[history.length - 1]!;
+      const hasFunctionCall = lastEntry.parts?.some((p) => p.functionCall);
+      expect(hasFunctionCall).toBe(true);
+      const hasRawXml = lastEntry.parts?.some(
+        (p) => p.text && p.text.includes('<invoke'),
+      );
+      expect(hasRawXml).toBe(false);
+    });
+
+    it('retains a short text prefix in history when recovering XML tool calls', async () => {
+      const xml =
+        '<invoke name="read_file"><parameter name="file_path">a.ts</parameter></invoke>';
+      const text = 'Sure.\n' + xml;
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield xmlChunk(text, 'STOP');
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        { message: 'read the file' },
+        'prompt-xml-fallback-prefix',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+
+      // The recovered tool call is still executed despite the prefix.
+      const syntheticChunk = chunks.find((c) =>
+        c.candidates?.[0]?.content?.parts?.some((p) => p.functionCall),
+      );
+      expect(syntheticChunk).toBeDefined();
+
+      // History keeps the short prefix as a text part ahead of the recovered
+      // functionCall and drops the raw XML (--resume fidelity).
+      const history = chat.getHistory();
+      const lastEntry = history[history.length - 1]!;
+      const parts = lastEntry.parts ?? [];
+      const textIndex = parts.findIndex((p) => p.text === 'Sure.');
+      const callIndex = parts.findIndex((p) => p.functionCall);
+      expect(textIndex).toBeGreaterThanOrEqual(0);
+      expect(callIndex).toBeGreaterThan(textIndex);
+      expect(parts.some((p) => p.text && p.text.includes('<invoke'))).toBe(
+        false,
+      );
+    });
+
+    it('does not recover when a structured tool call is already present', async () => {
+      const xml =
+        '<invoke name="read_file"><parameter name="file_path">a.ts</parameter></invoke>';
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    {
+                      functionCall: {
+                        name: 'list_dir',
+                        args: { path: '.' },
+                      },
+                    },
+                    { text: xml },
+                  ],
+                },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        { message: 'list and read' },
+        'prompt-xml-guard-toolcall',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+
+      // A structured tool call must short-circuit the fallback (no double execution).
+      const recoveredChunk = chunks.find((c) =>
+        c.candidates?.[0]?.content?.parts?.some((p) =>
+          p.functionCall?.id?.startsWith('xml-recovered-'),
+        ),
+      );
+      expect(recoveredChunk).toBeUndefined();
+
+      // History retains the raw XML text (not stripped by recovery).
+      const history = chat.getHistory();
+      const lastEntry = history[history.length - 1]!;
+      expect(
+        lastEntry.parts?.some((p) => p.text && p.text.includes('<invoke')),
+      ).toBe(true);
+    });
+
+    it('does not recover documentation prose containing invoke examples', async () => {
+      const prose =
+        'Here is how you use the tool. First you open the file, then you read it. ' +
+        'The invoke block below shows the format. Remember to always check the path. ' +
+        'This is a documentation example for the read_file tool call format. ' +
+        'You should never execute these examples directly. They are for illustration ' +
+        'purposes only. The actual tool calls are made through the structured API.';
+      const text =
+        prose +
+        '\n<invoke name="read_file"><parameter name="file_path">a.ts</parameter></invoke>';
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield xmlChunk(text, 'STOP');
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        { message: 'explain the tool' },
+        'prompt-xml-guard-prose',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+
+      // The prose guard must veto recovery: no synthetic chunk is yielded.
+      const recoveredChunk = chunks.find((c) =>
+        c.candidates?.[0]?.content?.parts?.some((p) =>
+          p.functionCall?.id?.startsWith('xml-recovered-'),
+        ),
+      );
+      expect(recoveredChunk).toBeUndefined();
+
+      // History retains the original prose + XML text unchanged.
+      const history = chat.getHistory();
+      const lastEntry = history[history.length - 1]!;
+      expect(
+        lastEntry.parts?.some((p) => p.text && p.text.includes('<invoke')),
+      ).toBe(true);
+    });
+
+    it('records the recovered functionCall in the JSONL turn (--resume fidelity)', async () => {
+      const recordAssistantTurn = vi.fn();
+      const chatWithRecording = new GeminiChat(
+        mockConfig,
+        config,
+        [],
+        {
+          recordAssistantTurn,
+          recordChatCompression: vi.fn(),
+        } as unknown as ConstructorParameters<typeof GeminiChat>[3],
+        uiTelemetryService,
+      );
+      const xml =
+        '<invoke name="read_file"><parameter name="file_path">a.ts</parameter>' +
+        '</invoke>';
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield xmlChunk(xml, 'STOP');
+        })(),
+      );
+
+      const stream = await chatWithRecording.sendMessageStream(
+        'gemini-pro',
+        { message: 'read the file' },
+        'prompt-xml-fallback-recording',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+      expect(chunks.length).toBeGreaterThan(0);
+
+      expect(recordAssistantTurn).toHaveBeenCalledTimes(1);
+      const recorded = recordAssistantTurn.mock.calls[0][0] as {
+        message: Array<{ text?: string; functionCall?: { name?: string } }>;
+      };
+      // The recovered tool call must be persisted, not the raw XML text.
+      expect(
+        recorded.message.some((p) => p.functionCall?.name === 'read_file'),
+      ).toBe(true);
+      expect(recorded.message.some((p) => p.text?.includes('<invoke'))).toBe(
+        false,
+      );
+    });
+
+    it('does not duplicate earlier text or drop non-text parts when recovering', async () => {
+      const xml =
+        '<invoke name="read_file"><parameter name="file_path">a.ts</parameter></invoke>';
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    { text: 'I will read it.' },
+                    {
+                      inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' },
+                    },
+                    { text: xml },
+                  ],
+                },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        { message: 'read the file' },
+        'prompt-xml-fallback-multipart',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+
+      expect(
+        chunks.some((c) =>
+          c.candidates?.[0]?.content?.parts?.some((p) => p.functionCall),
+        ),
+      ).toBe(true);
+
+      const history = chat.getHistory();
+      const parts = history[history.length - 1]!.parts ?? [];
+      expect(parts.some((p) => p.functionCall?.name === 'read_file')).toBe(
+        true,
+      );
+      expect(parts.some((p) => p.text && p.text.includes('<invoke'))).toBe(
+        false,
+      );
+      // The earlier prose appears exactly once (no duplication from the join).
+      expect(parts.filter((p) => p.text === 'I will read it.')).toHaveLength(1);
+      // The interleaved non-text part is preserved.
+      expect(parts.some((p) => p.inlineData)).toBe(true);
+      // Order fidelity: text before the image stays before it after recovery.
+      const textIdx = parts.findIndex((p) => p.text === 'I will read it.');
+      const imageIdx = parts.findIndex((p) => p.inlineData);
+      const callIdx = parts.findIndex((p) => p.functionCall);
+      expect(textIdx).toBeLessThan(imageIdx);
+      expect(imageIdx).toBeLessThan(callIdx);
+    });
+
+    it('preserves non-text parts when the XML spans multiple text parts', async () => {
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        (async function* () {
+          yield {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    {
+                      text: '<invoke name="read_file"><parameter name="file_path">',
+                    },
+                    {
+                      inlineData: { mimeType: 'image/png', data: 'aW1hZ2U=' },
+                    },
+                  ],
+                },
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+          yield {
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [{ text: 'a.ts</parameter></invoke>' }],
+                },
+                finishReason: 'STOP',
+              },
+            ],
+          } as unknown as GenerateContentResponse;
+        })(),
+      );
+
+      const stream = await chat.sendMessageStream(
+        'gemini-pro',
+        { message: 'read the file' },
+        'prompt-xml-fallback-split',
+      );
+
+      const chunks: GenerateContentResponse[] = [];
+      for await (const event of stream) {
+        if (event.type === StreamEventType.CHUNK) {
+          chunks.push(event.value);
+        }
+      }
+
+      const synthetic = chunks.find((c) =>
+        c.candidates?.[0]?.content?.parts?.some((p) =>
+          p.functionCall?.id?.startsWith('xml-recovered-'),
+        ),
+      );
+      expect(synthetic).toBeDefined();
+
+      const history = chat.getHistory();
+      const parts = history[history.length - 1]!.parts ?? [];
+      expect(parts.some((p) => p.functionCall?.name === 'read_file')).toBe(
+        true,
+      );
+      expect(parts.some((p) => p.text && p.text.includes('<invoke'))).toBe(
+        false,
+      );
+      // The non-text part that split the XML must survive the rebuild.
+      expect(parts.some((p) => p.inlineData)).toBe(true);
+    });
+
+    it('does not recover XML tool calls when the stream lacks a finish reason', async () => {
+      vi.useFakeTimers();
+      try {
+        const xml =
+          '<invoke name="read_file"><parameter name="file_path">a.ts</parameter></invoke>';
+        vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+          (async function* () {
+            yield xmlChunk(xml); // no finishReason
+          })(),
+        );
+
+        const stream = await chat.sendMessageStream(
+          'gemini-pro',
+          { message: 'read the file' },
+          'prompt-xml-fallback-no-finish',
+        );
+
+        // Without a finish reason the recovery gate must not fire; the
+        // stream-validation block throws NO_FINISH_REASON so the retry
+        // path handles the truncated stream.
+        const chunks: GenerateContentResponse[] = [];
+        const collecting = (async () => {
+          for await (const event of stream) {
+            if (event.type === StreamEventType.CHUNK) {
+              chunks.push(event.value);
+            }
+          }
+        })();
+        const resultPromise = (async () => {
+          await expect(collecting).rejects.toThrow('finish reason');
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(35_000);
+        await resultPromise;
+
+        // No synthetic tool-call chunk may be dispatched.
+        const recoveredChunk = chunks.find((c) =>
+          c.candidates?.[0]?.content?.parts?.some((p) =>
+            p.functionCall?.id?.startsWith('xml-recovered-'),
+          ),
+        );
+        expect(recoveredChunk).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

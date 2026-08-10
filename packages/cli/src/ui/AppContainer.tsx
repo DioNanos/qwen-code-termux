@@ -12,12 +12,14 @@ import {
   useRef,
   useLayoutEffect,
   type Dispatch,
+  type RefObject,
   type SetStateAction,
 } from 'react';
 import { type DOMElement, measureElement } from 'ink';
 import { App } from './App.js';
 import { AppContext } from './contexts/AppContext.js';
 import { UIStateContext, type UIState } from './contexts/UIStateContext.js';
+import { VirtualViewportContext } from './contexts/VirtualViewportContext.js';
 import {
   UIActionsContext,
   type UIActions,
@@ -63,11 +65,13 @@ import {
   ToolConfirmationOutcome,
   type WaitingToolCall,
   ToolNames,
+  SendMessageType,
   clearWorktreeSession,
   restoreWorktreeContext,
   GitWorktreeService,
   readWorktreeSessionMarker,
   isSessionRuntimeActive,
+  type GoalTurnHost,
 } from '@qwen-code/qwen-code-core';
 import {
   applyCollapsePolicyAndSummary,
@@ -77,7 +81,7 @@ import {
 import { loadLowlight } from './utils/lowlightLoader.js';
 import {
   getStickyTodos,
-  getStickyTodoMaxVisibleItems,
+  getStickyTodoMaxVisibleItemsForMode,
   getStickyTodosLayoutKey,
   getStickyTodosRenderKey,
 } from './utils/todoSnapshot.js';
@@ -113,13 +117,17 @@ const MCP_BATCH_FLUSH_MS = 16;
 const STARTUP_PROFILE_FINALIZE_CAP_MS = 35_000;
 import { useHistory } from './hooks/useHistoryManager.js';
 import { useMemoryMonitor } from './hooks/useMemoryMonitor.js';
-import { useResizeSettleRepaint } from './hooks/useResizeSettleRepaint.js';
+import { useWakeRepaint } from './hooks/use-wake-repaint.js';
 import { useThemeCommand } from './hooks/useThemeCommand.js';
 import { useFeedbackDialog } from './hooks/useFeedbackDialog.js';
 import { useAuthCommand } from './auth/useAuth.js';
 import { useEditorSettings } from './hooks/useEditorSettings.js';
 import { usePreferredEditor } from './hooks/usePreferredEditor.js';
 import { useSettingsCommand } from './hooks/useSettingsCommand.js';
+import {
+  isInteractiveTerminal,
+  shouldUseVirtualViewport,
+} from './utils/terminal-buffer.js';
 import { useModelCommand } from './hooks/useModelCommand.js';
 import { useArenaCommand } from './hooks/useArenaCommand.js';
 import { useApprovalModeCommand } from './hooks/useApprovalModeCommand.js';
@@ -133,12 +141,11 @@ import {
   computeApiTruncationIndex,
   isRealUserTurn,
 } from './utils/historyMapping.js';
-import { restoreGoalFromHistory } from './utils/restoreGoal.js';
+import { waitForGoalRuntime } from './utils/goal-runtime.js';
 import {
   useVimModeState,
   useVimModeActions,
 } from './contexts/VimModeContext.js';
-import { CompactModeProvider } from './contexts/CompactModeContext.js';
 import { ThoughtExpandedProvider } from './contexts/ThoughtExpandedContext.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { calculatePromptWidths } from './components/InputPrompt.js';
@@ -164,6 +171,7 @@ import {
   detectWorkflowKeyword,
   buildWorkflowSteeringNotice,
 } from './utils/workflow-keyword.js';
+import { parseSlashCommand } from '../utils/commands.js';
 import { type LoadedSettings, SettingScope } from '../config/settings.js';
 import { type InitializationResult } from '../core/initializer.js';
 import { ExtensionRefreshState } from '../config/extension-refresh-state.js';
@@ -185,7 +193,11 @@ import { sendNotification } from '../services/notificationService.js';
 import { type UpdateObject } from './utils/updateCheck.js';
 import { setUpdateHandler } from '../utils/handleAutoUpdate.js';
 import { registerCleanup, runExitCleanup } from '../utils/cleanup.js';
-import { useMessageQueue } from './hooks/useMessageQueue.js';
+import {
+  useMessageQueue,
+  type QueuedUserSubmission,
+  type UseMessageQueueReturn,
+} from './hooks/useMessageQueue.js';
 import { useAutoAcceptIndicator } from './hooks/useAutoAcceptIndicator.js';
 import { useSessionStats } from './contexts/SessionContext.js';
 import { useGitBranchName } from './hooks/useGitBranchName.js';
@@ -211,6 +223,8 @@ import {
 } from './contexts/BackgroundTaskViewContext.js';
 import { getLiveAgentPanelLayoutKey } from './components/background-view/liveAgentPanelVisibility.js';
 import { t } from '../i18n/index.js';
+import { TUI_CHAT_RECORDING_FAILURE_MESSAGE } from '../utils/chat-recording-failure.js';
+import { buildPermissionSuggestions } from '../utils/permission-suggestions.js';
 import { useWelcomeBack } from './hooks/useWelcomeBack.js';
 import { useDialogClose } from './hooks/useDialogClose.js';
 import { useInitializationAuthError } from './hooks/useInitializationAuthError.js';
@@ -226,17 +240,18 @@ import { useAttentionNotifications } from './hooks/useAttentionNotifications.js'
 import { buildTerminalNotification } from './hooks/useTerminalNotification.js';
 import { useContextualTips } from './hooks/useContextualTips.js';
 import { getTipHistory } from '../services/tips/index.js';
+import { restorePromptStash } from '../services/prompt-stash.js';
 import { useRemoteInput } from '../remoteInput/RemoteInputContext.js';
 import { useDualOutput } from '../dualOutput/DualOutputContext.js';
 import {
   requestConsentInteractive,
   requestConsentOrFail,
 } from '../commands/extensions/consent.js';
-import { compactToggleHasVisualEffect } from './utils/mergeCompactToolGroups.js';
 import {
   findLastUserItemIndex,
   isSyntheticHistoryItem,
   itemsAfterAreOnlySynthetic,
+  realUserPromptTexts,
 } from './utils/historyUtils.js';
 import { MAIN_CONTENT_HEIGHT_RESERVATION } from './utils/layoutUtils.js';
 
@@ -323,6 +338,193 @@ export function shouldDrainMessageQueue({
     !dialogsVisible &&
     messageQueueLength > 0
   );
+}
+
+export function useQueuedSubmissionDrain({
+  config,
+  isConfigInitialized,
+  streamingState,
+  isProcessing,
+  dialogsVisible,
+  pendingSubmissionCount,
+  getPendingSubmissionCount,
+  popNextSubmission,
+  enqueueGoalTurn,
+  restoreMessages,
+  submitQuery,
+  submissionInFlightRef,
+  submissionSettledRevision,
+}: {
+  config: Config;
+  isConfigInitialized: boolean;
+  streamingState: StreamingState;
+  isProcessing: boolean;
+  dialogsVisible: boolean;
+  pendingSubmissionCount: number;
+  getPendingSubmissionCount: UseMessageQueueReturn['getPendingSubmissionCount'];
+  popNextSubmission: UseMessageQueueReturn['popNextSubmission'];
+  enqueueGoalTurn: UseMessageQueueReturn['enqueueGoalTurn'];
+  restoreMessages: UseMessageQueueReturn['restoreMessages'];
+  submitQuery: ReturnType<typeof useGeminiStream>['submitQuery'];
+  submissionInFlightRef: RefObject<boolean>;
+  submissionSettledRevision: number;
+}) {
+  const goalRuntimeSessionId = config.getSessionId();
+  const [goalQueueRevision, setGoalQueueRevision] = useState(0);
+  useEffect(() => {
+    try {
+      return config.getGoalRuntime().subscribe(() => {
+        setGoalQueueRevision((revision) => revision + 1);
+      });
+    } catch {
+      return undefined;
+    }
+  }, [config, goalRuntimeSessionId]);
+
+  const queueDrainingRef = useRef(false);
+  const admissionFailureRef = useRef<{
+    pendingSubmissionCount: number;
+    goalQueueRevision: number;
+    streamingState: StreamingState;
+    isProcessing: boolean;
+  } | null>(null);
+  const [queueDrainNonce, setQueueDrainNonce] = useState(0);
+  useEffect(() => {
+    if (queueDrainingRef.current || submissionInFlightRef.current) return;
+    const admissionFailure = admissionFailureRef.current;
+    if (admissionFailure) {
+      if (pendingSubmissionCount === 0) {
+        admissionFailureRef.current = null;
+      } else if (
+        pendingSubmissionCount <= admissionFailure.pendingSubmissionCount &&
+        goalQueueRevision === admissionFailure.goalQueueRevision &&
+        streamingState === admissionFailure.streamingState &&
+        isProcessing === admissionFailure.isProcessing
+      ) {
+        return;
+      } else {
+        admissionFailureRef.current = null;
+      }
+    }
+    if (
+      !shouldDrainMessageQueue({
+        isConfigInitialized,
+        streamingState,
+        isProcessing,
+        dialogsVisible,
+        messageQueueLength: pendingSubmissionCount,
+      })
+    ) {
+      return;
+    }
+
+    let goalControlMode: Parameters<typeof popNextSubmission>[0] = 'normal';
+    try {
+      const status = config.getGoalRuntime().getSnapshot().goal?.status;
+      // Only an actively-running Goal holds ordinary input: while a Goal turn
+      // is in flight the message can't be delivered, so it queues (criterion
+      // #2). In paused/blocked/usage_limited nothing is running, so the queue
+      // drains normally — holding input there stranded it until /goal clear.
+      if (status === 'active') {
+        goalControlMode = 'priority';
+      }
+    } catch {
+      // Goal persistence can be disabled for this session.
+    }
+    const submission = popNextSubmission(goalControlMode);
+    if (submission === null) return;
+
+    queueDrainingRef.current = true;
+    let admissionFailed = false;
+    const markAdmissionFailed = () => {
+      admissionFailed = true;
+      admissionFailureRef.current = {
+        pendingSubmissionCount: getPendingSubmissionCount(),
+        goalQueueRevision,
+        streamingState,
+        isProcessing,
+      };
+    };
+    const request =
+      submission.kind === 'goal'
+        ? submitQuery(
+            submission.continuationContext,
+            SendMessageType.Goal,
+            undefined,
+            {
+              goal: submission,
+              onAdmissionFailed: () => {
+                enqueueGoalTurn(submission);
+                markAdmissionFailed();
+              },
+            },
+          )
+        : submitQuery(
+            submission.modelText,
+            SendMessageType.UserQuery,
+            undefined,
+            {
+              userAdmission: { turnKey: submission.turnKey },
+              ...(submission.submittedPrompt === undefined
+                ? {}
+                : { submittedPrompt: submission.submittedPrompt }),
+              onAdmissionFailed: () => {
+                restoreMessages(
+                  [submission.modelText],
+                  submission.submittedPrompt,
+                );
+                markAdmissionFailed();
+              },
+            },
+          );
+    void Promise.resolve(request)
+      .catch((error) => {
+        debugLogger.warn('Queued submission failed during admission', error);
+      })
+      .finally(() => {
+        queueDrainingRef.current = false;
+        if (!admissionFailed) {
+          setQueueDrainNonce((nonce) => nonce + 1);
+        }
+      });
+  }, [
+    config,
+    dialogsVisible,
+    enqueueGoalTurn,
+    goalQueueRevision,
+    getPendingSubmissionCount,
+    isConfigInitialized,
+    isProcessing,
+    pendingSubmissionCount,
+    popNextSubmission,
+    queueDrainNonce,
+    restoreMessages,
+    streamingState,
+    submissionInFlightRef,
+    submissionSettledRevision,
+    submitQuery,
+  ]);
+}
+
+export function getSpeculativeToolResult(response: unknown): {
+  text: string;
+  status: ToolCallStatus;
+} {
+  const responseRecord =
+    typeof response === 'object' && response
+      ? (response as Record<string, unknown>)
+      : undefined;
+  const hasError =
+    responseRecord !== undefined &&
+    Object.prototype.hasOwnProperty.call(responseRecord, 'error');
+  const result = responseRecord
+    ? (responseRecord[hasError ? 'error' : 'output'] ??
+      JSON.stringify(responseRecord))
+    : String(response ?? '');
+  return {
+    text: String(result),
+    status: hasError ? ToolCallStatus.Error : ToolCallStatus.Success,
+  };
 }
 
 function getResponseCandidateTokens(
@@ -420,6 +622,7 @@ interface AppContainerProps {
   startupWarnings?: string[];
   version: string;
   initializationResult: InitializationResult;
+  initialUseVirtualViewport?: boolean;
   extensionRefreshState?: ExtensionRefreshState;
 }
 
@@ -436,7 +639,8 @@ const SHELL_WIDTH_FRACTION = 0.89;
 const SHELL_HEIGHT_PADDING = 10;
 
 export const AppContainer = (props: AppContainerProps) => {
-  const { settings, config, initializationResult } = props;
+  const { settings, config, initializationResult, initialUseVirtualViewport } =
+    props;
   const extensionRefreshState = useMemo(
     () => props.extensionRefreshState ?? new ExtensionRefreshState(),
     [props.extensionRefreshState],
@@ -560,7 +764,7 @@ export const AppContainer = (props: AppContainerProps) => {
 
   const [userMessages, setUserMessages] = useState<string[]>([]);
 
-  // Alt+T inline expansion toggle for thinking blocks (expands all at once).
+  // Ctrl+O / Alt+T inline expansion toggle for thinking blocks (expands all at once).
   const [thoughtExpanded, setThoughtExpanded] = useState(false);
   // Per-thought inline expansion: head ids the user expanded by clicking the
   // collapsed thinking line (VP mode). Replaces the old full-screen viewer —
@@ -606,8 +810,10 @@ export const AppContainer = (props: AppContainerProps) => {
     seedPromptCount,
   } = useSessionStats();
   const logger = useLogger(config.storage, sessionStats.sessionId);
-  const branchName = useGitBranchName(config.getTargetDir());
   const worktreeSession = useWorktreeSession(config);
+  const branchName = useGitBranchName(
+    worktreeSession?.worktreePath ?? config.getTargetDir(),
+  );
   const [showWorktreeExitDialog, setShowWorktreeExitDialog] = useState(false);
   // P7-trigger: true while the current turn was steered toward the Workflow
   // tool by the `workflow` keyword (drives the Footer indicator). Set in
@@ -681,6 +887,7 @@ export const AppContainer = (props: AppContainerProps) => {
       // handled by the global catch.
       profileCheckpoint('config_initialize_start');
       await config.initialize();
+      await waitForGoalRuntime(config);
       setStartupWarnings((currentWarnings) =>
         mergeStartupWarnings(currentWarnings, config.getWarnings()),
       );
@@ -729,17 +936,13 @@ export const AppContainer = (props: AppContainerProps) => {
         // Seed the prompt counter from the resumed conversation so new
         // promptIds don't collide with restored file history snapshots.
         const userTurnCount = resumedSessionData.conversation.messages.filter(
-          (m) => m.type === 'user' && m.subtype !== 'mid_turn_user_message',
+          (m) =>
+            m.type === 'user' &&
+            m.subtype !== 'mid_turn_user_message' &&
+            m.subtype !== 'realtime_message',
         ).length;
         if (userTurnCount > 0) {
           seedPromptCount(userTurnCount);
-        }
-
-        // Re-arm any `/goal` that was active when the prior session ended.
-        try {
-          restoreGoalFromHistory(historyItems, config, historyManager.addItem);
-        } catch {
-          // Restore is best-effort — never block resume on it.
         }
 
         const recovered = await config.loadPausedBackgroundAgents(
@@ -1001,6 +1204,38 @@ export const AppContainer = (props: AppContainerProps) => {
   }, []);
 
   const preferredEditor = usePreferredEditor();
+  const restoredSubmissionRef = useRef<Pick<
+    QueuedUserSubmission,
+    'modelText' | 'submittedPrompt'
+  > | null>(null);
+  const submittedPromptProvenanceUnavailableRef = useRef(false);
+  const setBufferTextRef = useRef<
+    ReturnType<typeof useTextBuffer>['setText'] | null
+  >(null);
+  const invalidateSubmittedPromptProvenance = useCallback(() => {
+    restoredSubmissionRef.current = null;
+    submittedPromptProvenanceUnavailableRef.current = true;
+  }, []);
+  const handleBufferChange = useCallback((text: string) => {
+    if (text.length === 0) {
+      if (
+        restoredSubmissionRef.current !== null ||
+        submittedPromptProvenanceUnavailableRef.current
+      ) {
+        setBufferTextRef.current?.('', { clearUndoHistory: true });
+      }
+      restoredSubmissionRef.current = null;
+      submittedPromptProvenanceUnavailableRef.current = false;
+      return;
+    }
+    if (
+      restoredSubmissionRef.current !== null &&
+      restoredSubmissionRef.current.modelText !== text
+    ) {
+      restoredSubmissionRef.current = null;
+      submittedPromptProvenanceUnavailableRef.current = true;
+    }
+  }, []);
 
   const buffer = useTextBuffer({
     initialText: '',
@@ -1010,20 +1245,30 @@ export const AppContainer = (props: AppContainerProps) => {
     isValidPath,
     shellModeActive,
     preferredEditor,
+    onChange: handleBufferChange,
   });
+  const setBufferText = buffer.setText;
+  setBufferTextRef.current = setBufferText;
+  const restoredPromptStashTargetsRef = useRef(new Set<string>());
+  const promptStashTargetDir = config.getTargetDir();
+  useEffect(() => {
+    if (restoredPromptStashTargetsRef.current.has(promptStashTargetDir)) {
+      return;
+    }
+    restoredPromptStashTargetsRef.current.add(promptStashTargetDir);
+    restorePromptStash(promptStashTargetDir, buffer.text, (text) => {
+      restoredSubmissionRef.current = null;
+      submittedPromptProvenanceUnavailableRef.current = true;
+      buffer.setText(text);
+    });
+  }, [buffer, promptStashTargetDir]);
 
   useEffect(() => {
     const fetchUserMessages = async () => {
       const pastMessagesRaw = (await logger?.getPreviousUserMessages()) || [];
-      const currentSessionUserMessages = historyManager.history
-        .filter(
-          (item): item is HistoryItem & { type: 'user'; text: string } =>
-            item.type === 'user' &&
-            typeof item.text === 'string' &&
-            item.text.trim() !== '',
-        )
-        .map((item) => item.text)
-        .reverse();
+      const currentSessionUserMessages = realUserPromptTexts(
+        historyManager.history,
+      ).reverse();
       // Current-session messages are already newest-first; combining with past
       // messages gives a newest-first list. dedupeNewestFirst keeps the first
       // (newest) occurrence so resubmitting an old prompt promotes it to
@@ -1046,12 +1291,20 @@ export const AppContainer = (props: AppContainerProps) => {
   // cursorTo+eraseDown would be a wasted flash and would also corrupt the
   // in-app scroll position. The remount-key bump is also a near-no-op for
   // VP: nothing in the VP render path is keyed by historyRemountKey, so
-  // the only reason to bump it is to keep the legacy `<Static>` branch in
-  // sync if the user toggles `useTerminalBuffer` off mid-session. The
-  // visible refresh in VP mode comes for free from the React tree
+  // keeping the bump is harmless because the startup-scoped VP decision
+  // is intentionally restart-only to match Ink's alternateScreen lifetime.
+  // The visible refresh in VP mode comes for free from the React tree
   // re-reading `mergedHistory` / `allVirtualItems` on whatever state
   // change triggered refreshStatic (Ctrl+O, model change, etc.).
-  const useTerminalBuffer = settings.merged.ui?.useTerminalBuffer ?? false;
+  const [useTerminalBuffer] = useState(
+    () =>
+      initialUseVirtualViewport ??
+      shouldUseVirtualViewport(
+        settings.merged.ui?.useTerminalBuffer,
+        config.getScreenReader(),
+        isInteractiveTerminal(),
+      ),
+  );
   const showScrollbar = settings.merged.ui?.showScrollbar ?? true;
   const refreshStatic = useCallback(() => {
     if (!useTerminalBuffer) {
@@ -1197,6 +1450,8 @@ export const AppContainer = (props: AppContainerProps) => {
     isFastModelMode,
     isVoiceModelMode,
     isVisionModelMode,
+    isCompactionModelMode,
+    isImageModelMode,
     modelDialogPersistScope,
     openModelDialog,
     closeModelDialog,
@@ -1213,16 +1468,40 @@ export const AppContainer = (props: AppContainerProps) => {
 
     // Chain with existing callback (e.g., Session's ACP notification)
     const existingCallback = chatRecordingService.getTitleRecordedCallback();
-    chatRecordingService.setTitleRecordedCallback((customTitle, source) => {
-      existingCallback?.(customTitle, source);
-      setSessionName(customTitle);
-    });
+    chatRecordingService.setTitleRecordedCallback(
+      (customTitle, source, sessionId) => {
+        existingCallback?.(customTitle, source, sessionId);
+        if (sessionId === config.getSessionId()) {
+          setSessionName(customTitle);
+        }
+      },
+    );
 
     return () => {
       // Restore original callback on unmount
       chatRecordingService.setTitleRecordedCallback(existingCallback);
     };
   }, [config]);
+
+  const addHistoryItem = historyManager.addItem;
+  useEffect(() => {
+    if (typeof config.onChatRecordingFailure !== 'function') return;
+    return config.onChatRecordingFailure(() => {
+      addHistoryItem(
+        {
+          type: MessageType.WARNING,
+          text: t(TUI_CHAT_RECORDING_FAILURE_MESSAGE),
+        },
+        Date.now(),
+      );
+    });
+  }, [addHistoryItem, config]);
+
+  const clearPendingStateRef = useRef<() => void>(() => {});
+  const clearPendingStateFromRef = useCallback(
+    () => clearPendingStateRef.current(),
+    [],
+  );
 
   const {
     isResumeDialogOpen,
@@ -1235,6 +1514,7 @@ export const AppContainer = (props: AppContainerProps) => {
     settings,
     historyManager,
     startNewSession,
+    clearPendingState: clearPendingStateFromRef,
     setSessionName,
     remount: refreshStatic,
   });
@@ -1244,6 +1524,7 @@ export const AppContainer = (props: AppContainerProps) => {
     settings,
     historyManager,
     startNewSession,
+    clearPendingState: clearPendingStateFromRef,
     setSessionName,
     remount: refreshStatic,
   });
@@ -1268,6 +1549,14 @@ export const AppContainer = (props: AppContainerProps) => {
 
   const { vimEnabled, vimMode } = useVimModeState();
   const { toggleVimEnabled } = useVimModeActions();
+
+  useLayoutEffect(() => {
+    if (vimEnabled && buffer.text.length > 0) {
+      // Vim registers outlive buffer clears, so provenance cannot be recovered
+      // by pasting register contents and then disabling Vim.
+      invalidateSubmittedPromptProvenance();
+    }
+  }, [buffer.text, invalidateSubmittedPromptProvenance, vimEnabled]);
 
   const {
     isSubagentCreateDialogOpen,
@@ -1295,11 +1584,11 @@ export const AppContainer = (props: AppContainerProps) => {
   const { isStatsDialogOpen, openStatsDialog, closeStatsDialog } =
     useStatsDialog();
 
-  // Ref bridge: the guarded openRewindSelector callback is defined later
-  // (after useDoublePress), but slashCommandActions needs it now. The ref
-  // lets the useMemo capture a stable function pointer whose implementation
-  // is swapped in once the real callback exists.
+  // Ref bridges: these callbacks are defined later, but slashCommandActions
+  // needs them now. The refs let the useMemo capture stable function pointers
+  // whose implementations are swapped in once the real callbacks exist.
   const openRewindSelectorRef = useRef<() => void>(() => {});
+  const cancelOngoingRequestRef = useRef<() => void>(() => {});
 
   // /diff opens a per-turn diff dialog. Unlike rewind, no double-press or
   // history-bound guard is needed, so the open/close handlers can live here
@@ -1422,6 +1711,11 @@ export const AppContainer = (props: AppContainerProps) => {
       openApprovalModeDialog,
       openEffortDialog,
       quit: (messages: HistoryItem[]) => {
+        try {
+          cancelOngoingRequestRef.current();
+        } catch (error) {
+          debugLogger.debug('Failed to cancel request while quitting:', error);
+        }
         setQuittingMessages(messages);
         // Signal the client to skip background memory tasks (extract, dream,
         // skill review) so the process can exit without spawning new agent
@@ -1449,6 +1743,7 @@ export const AppContainer = (props: AppContainerProps) => {
       handleBranch,
       openDeleteDialog,
       openHelpDialog,
+      clearPendingState: () => clearPendingStateRef.current(),
     }),
     [
       openAuthDialog,
@@ -1723,15 +2018,45 @@ export const AppContainer = (props: AppContainerProps) => {
   }, [config, historyManager, settings.merged]);
 
   const cancelHandlerRef = useRef<(info?: CancelSubmitInfo) => void>(() => {});
-  const midTurnDrainRef = useRef<(() => string[]) | null>(null);
+  const midTurnDrainRef = useRef<UseMessageQueueReturn['drainQueue'] | null>(
+    null,
+  );
+  const midTurnRestoreRef = useRef<((messages: string[]) => void) | null>(null);
+  const goalQueueRef = useRef<
+    | (Pick<
+        UseMessageQueueReturn,
+        | 'peekNextUserBatchKey'
+        | 'claimDirectUserAdmission'
+        | 'claimGoalTurn'
+        | 'hasQueuedUserMessages'
+        | 'getPendingSubmissionCount'
+      > & {
+        waitForReservationSettlement: () => Promise<void>;
+        submissionInFlightRef: RefObject<boolean>;
+        onSubmissionSettled: () => void;
+      })
+    | null
+  >(null);
+  const goalReservationSettlementRef = useRef<Promise<void>>(Promise.resolve());
+  const submissionInFlightRef = useRef(false);
+  const [submissionSettledRevision, setSubmissionSettledRevision] = useState(0);
+  const onSubmissionSettled = useCallback(() => {
+    setSubmissionSettledRevision((revision) => revision + 1);
+  }, []);
+  const waitForReservationSettlement = useCallback(
+    () => goalReservationSettlementRef.current,
+    [],
+  );
 
   const {
     streamingState,
     submitQuery,
     initError,
     pendingHistoryItems: pendingGeminiHistoryItems,
+    clearPendingState,
     thought,
     cancelOngoingRequest,
+    preemptGoalTurn,
     retryLastPrompt,
     handleApprovalModeChange,
     activePtyId,
@@ -1763,7 +2088,11 @@ export const AppContainer = (props: AppContainerProps) => {
     logger,
     availableTerminalHeightRef,
     terminalWidthRef,
+    midTurnRestoreRef,
+    goalQueueRef,
   );
+  cancelOngoingRequestRef.current = cancelOngoingRequest;
+  clearPendingStateRef.current = clearPendingState;
 
   // Now that streamingState is available, keep isIdleRef in sync and
   // flush any deferred update notifications when the model finishes responding.
@@ -1871,25 +2200,90 @@ export const AppContainer = (props: AppContainerProps) => {
 
   const {
     messageQueue,
+    pendingSubmissionCount,
     addMessage,
+    enqueueGoalTurn,
+    peekNextUserBatchKey,
+    hasQueuedUserMessages,
+    getPendingSubmissionCount,
+    claimGoalTurn,
+    claimDirectUserAdmission,
+    removeGoalTurns,
+    popNextSubmission,
     popAllMessages,
+    restoreMessages,
     drainQueue,
-    popNextSegment,
   } = useMessageQueue();
 
-  // Bridge message queue to mid-turn drain via ref.
-  // drainQueue reads the synchronous queueRef inside the hook, so it
-  // stays consistent with popNextSegment even before React re-renders.
   midTurnDrainRef.current = drainQueue;
+  midTurnRestoreRef.current = restoreMessages;
+  goalQueueRef.current = {
+    peekNextUserBatchKey,
+    claimDirectUserAdmission,
+    claimGoalTurn,
+    hasQueuedUserMessages,
+    getPendingSubmissionCount,
+    waitForReservationSettlement,
+    submissionInFlightRef,
+    onSubmissionSettled,
+  };
 
-  // Connect remote input watcher to submitQuery for bidirectional sync.
-  // When an external process writes a command to the input-file,
-  // the watcher calls submitQuery as if the user typed it in the TUI.
+  const releaseQueuedGoalReservations = useCallback(
+    (turnKeys: string[]) => {
+      let runtime;
+      try {
+        runtime = config.getGoalRuntime();
+      } catch {
+        return;
+      }
+      const previousSettlement = goalReservationSettlementRef.current;
+      const settlement = previousSettlement.then(async () => {
+        await Promise.all(
+          turnKeys.map((turnKey) => runtime.releaseTurn(turnKey)),
+        );
+      });
+      goalReservationSettlementRef.current = settlement.catch((error) => {
+        debugLogger.warn(
+          `Failed to release queued Goal turns: ${getErrorMessage(error)}`,
+        );
+      });
+    },
+    [config],
+  );
+
+  const popAllQueuedMessages = useCallback((): string | null => {
+    const goalTurnKeys = removeGoalTurns();
+    if (goalTurnKeys.length > 0) {
+      releaseQueuedGoalReservations(goalTurnKeys);
+    }
+    const submission = popAllMessages();
+    if (submission === null) return null;
+    restoredSubmissionRef.current = submission;
+    submittedPromptProvenanceUnavailableRef.current = false;
+    return submission.modelText;
+  }, [popAllMessages, releaseQueuedGoalReservations, removeGoalTurns]);
+
+  useEffect(() => {
+    const host: GoalTurnHost = {
+      startGoalTurn: async (input) => {
+        enqueueGoalTurn(input);
+      },
+      preemptGoalTurn: (reason) => {
+        removeGoalTurns();
+        preemptGoalTurn(reason);
+      },
+    };
+    return config.bindGoalTurnHost(host);
+  }, [config, enqueueGoalTurn, preemptGoalTurn, removeGoalTurns]);
+
   const remoteInput = useRemoteInput();
   useEffect(() => {
     if (!remoteInput) return;
-    remoteInput.setSubmitFn((text: string) => submitQuery(text));
-  }, [remoteInput, submitQuery]);
+    remoteInput.setSubmitFn((text: string) => {
+      addMessage(text);
+      return true;
+    });
+  }, [addMessage, remoteInput]);
 
   // Notify remote input watcher when TUI becomes idle so it can
   // retry queued commands that were deferred while TUI was busy.
@@ -1929,6 +2323,8 @@ export const AppContainer = (props: AppContainerProps) => {
           tc.request.name,
           tc.request.callId,
           tc.request.args,
+          null,
+          buildPermissionSuggestions(tc.confirmationDetails),
         );
       }
     }
@@ -2010,7 +2406,40 @@ export const AppContainer = (props: AppContainerProps) => {
 
   // Callback for handling final submit (must be after addMessage from useMessageQueue)
   const handleFinalSubmit = useCallback(
-    (submittedValue: string) => {
+    (
+      submittedValue: string,
+      options?: {
+        deferUntilIdle?: boolean;
+        submittedPrompt?: string;
+      },
+    ) => {
+      const consumesComposerState = options !== undefined;
+      const restoredSubmission = consumesComposerState
+        ? restoredSubmissionRef.current
+        : null;
+      const submittedPromptProvenanceUnavailable =
+        consumesComposerState &&
+        submittedPromptProvenanceUnavailableRef.current;
+      if (consumesComposerState) {
+        restoredSubmissionRef.current = null;
+        submittedPromptProvenanceUnavailableRef.current = false;
+      }
+      const submittedPromptCandidate = options?.submittedPrompt;
+      const provenanceEnabled =
+        !vimEnabled && submittedPromptCandidate !== undefined;
+      const trimmedSubmittedPrompt = submittedPromptCandidate?.trim();
+      const submittedPrompt =
+        submittedPromptProvenanceUnavailable || !provenanceEnabled
+          ? undefined
+          : restoredSubmission === null
+            ? trimmedSubmittedPrompt || undefined
+            : restoredSubmission.modelText === submittedValue
+              ? restoredSubmission.submittedPrompt
+              : undefined;
+      if (restoredSubmission !== null || submittedPromptProvenanceUnavailable) {
+        setBufferText('', { clearUndoHistory: true });
+      }
+
       // Route to active in-process agent if viewing a sub-agent tab.
       if (agentViewState.activeView !== 'main') {
         const agent = agentViewState.agents.get(agentViewState.activeView);
@@ -2022,6 +2451,25 @@ export const AppContainer = (props: AppContainerProps) => {
       // The user's raw text, captured before any `<system-reminder>` prefix is
       // prepended below (so keyword detection sees only what the user typed).
       const userPromptText = submittedValue;
+      // Quit must bypass reminders and the message queue so it can stop an
+      // active stream without consuming one-shot session state.
+      if (
+        ['/quit', '/exit', 'exit', 'quit', ':q', ':q!', ':wq', ':wq!'].includes(
+          userPromptText.trim(),
+        )
+      ) {
+        void handleSlashCommand('/quit');
+        return;
+      }
+      const recoveredAgentsNotice =
+        !isSlashCommand(userPromptText) && !isBtwCommand(userPromptText)
+          ? config.consumePendingRecoveredAgentsNotice()
+          : null;
+      if (recoveredAgentsNotice) {
+        submittedValue =
+          `<system-reminder>\n${recoveredAgentsNotice}\n</system-reminder>\n\n` +
+          submittedValue;
+      }
       // Phase C: one-shot worktree restore reminder. Set during --resume
       // when the persisted sidecar names a live worktree. We only inject
       // on top-level user prompts (not btw-during-response, not slash
@@ -2058,21 +2506,33 @@ export const AppContainer = (props: AppContainerProps) => {
           `<system-reminder>\n${buildWorkflowSteeringNotice()}\n</system-reminder>\n\n` +
           submittedValue;
       }
+      if (options?.deferUntilIdle) {
+        addMessage(submittedValue, true, submittedPrompt);
+        return;
+      }
+      if (
+        streamingState === StreamingState.Responding &&
+        isSlashCommand(userPromptText) &&
+        parseSlashCommand(userPromptText, slashCommands).commandToExecute
+          ?.canRunDuringStreaming
+      ) {
+        void handleSlashCommand(userPromptText);
+        return;
+      }
       if (
         streamingState === StreamingState.Responding &&
         isBtwCommand(submittedValue)
       ) {
-        void submitQuery(submittedValue);
-        return;
-      }
-
-      // Handle bare exit/quit commands (without the / prefix)
-      if (
-        ['exit', 'quit', ':q', ':q!', ':wq', ':wq!'].includes(
-          submittedValue.trim(),
-        )
-      ) {
-        void handleSlashCommand('/quit');
+        void Promise.resolve(
+          submitQuery(
+            submittedValue,
+            SendMessageType.UserQuery,
+            undefined,
+            submittedPrompt === undefined ? undefined : { submittedPrompt },
+          ),
+        ).catch((error) => {
+          debugLogger.warn('Failed to admit /btw submission', error);
+        });
         return;
       }
 
@@ -2149,11 +2609,7 @@ export const AppContainer = (props: AppContainerProps) => {
                       const name = tc.functionCall?.name ?? 'unknown';
                       const args = tc.functionCall?.args ?? {};
                       const resp = toolResults[i]?.functionResponse?.response;
-                      const resultText =
-                        typeof resp === 'object' && resp
-                          ? ((resp as Record<string, unknown>)['output'] ??
-                            JSON.stringify(resp))
-                          : String(resp ?? '');
+                      const speculativeResult = getSpeculativeToolResult(resp);
                       return {
                         callId: `spec-${name}-${i}`,
                         name,
@@ -2161,8 +2617,8 @@ export const AppContainer = (props: AppContainerProps) => {
                           Object.entries(args)
                             .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
                             .join(', ') || name,
-                        resultDisplay: String(resultText).slice(0, 500),
-                        status: ToolCallStatus.Success,
+                        resultDisplay: speculativeResult.text.slice(0, 500),
+                        status: speculativeResult.status,
                         confirmationDetails: undefined,
                       };
                     });
@@ -2182,7 +2638,7 @@ export const AppContainer = (props: AppContainerProps) => {
           })
           .catch(() => {
             // Fallback: submit normally
-            addMessage(submittedValue);
+            addMessage(submittedValue, false, submittedPrompt);
           });
         speculationRef.current = IDLE_SPECULATION;
         return;
@@ -2199,11 +2655,20 @@ export const AppContainer = (props: AppContainerProps) => {
         !isProcessing &&
         isSlashCommand(submittedValue)
       ) {
-        void submitQuery(submittedValue);
+        void Promise.resolve(
+          submitQuery(
+            submittedValue,
+            SendMessageType.UserQuery,
+            undefined,
+            submittedPrompt === undefined ? undefined : { submittedPrompt },
+          ),
+        ).catch((error) => {
+          debugLogger.warn('Failed to admit slash command', error);
+        });
         return;
       }
 
-      addMessage(submittedValue);
+      addMessage(submittedValue, false, submittedPrompt);
     },
     [
       addMessage,
@@ -2212,10 +2677,13 @@ export const AppContainer = (props: AppContainerProps) => {
       isProcessing,
       submitQuery,
       handleSlashCommand,
+      slashCommands,
       config,
       geminiClient,
       historyManager,
       settings.merged.ui?.disableWorkflowKeywordTrigger,
+      setBufferText,
+      vimEnabled,
     ],
   );
 
@@ -2272,17 +2740,38 @@ export const AppContainer = (props: AppContainerProps) => {
       // Always drain the queue back into the buffer (claude-code parity:
       // popAllEditable preserves queued text on every cancel path, including
       // tool-execution cancels — never silently drop the user's queued work).
+      const goalTurnKeys = removeGoalTurns();
+      if (goalTurnKeys.length > 0) {
+        releaseQueuedGoalReservations(goalTurnKeys);
+      }
       const popped = popAllMessages();
       if (popped) {
+        restoredSubmissionRef.current = popped;
+        submittedPromptProvenanceUnavailableRef.current = false;
         const currentText = buffer.text;
-        buffer.setText(currentText ? `${popped}\n${currentText}` : popped);
+        buffer.setText(
+          currentText
+            ? `${popped.modelText}\n${currentText}`
+            : popped.modelText,
+        );
       }
 
-      // Auto-restore-on-cancel: if the user hit ESC immediately after submit
-      // (nothing meaningful was produced), pull the just-submitted prompt back
-      // into the input box and rewind the transcript so it doesn't show a
-      // stranded "user prompt + Request cancelled." pair. Mirrors claude-code
-      // (REPL.tsx auto-restore branch).
+      // A cancelled Goal continuation turn appended its synthetic prompt to
+      // the chat history but has no UI user item (lastTurnUserItem is null),
+      // so the auto-restore branch below bails out before its orphan strip
+      // runs. Strip the orphaned prompt here; otherwise appendCuratedContent
+      // merges the user's NEXT real message into the "no new real user input"
+      // preamble. Safe even if the turn already produced a model response:
+      // the strip only pops trailing user entries, and a responded prompt is
+      // not trailing.
+      if (info?.wasGoalTurn) {
+        geminiClient?.stripOrphanedUserEntriesFromHistory?.();
+      }
+
+      // Restore-on-cancel: pull the just-submitted prompt back into the input
+      // box when it is safe to do so. If nothing meaningful was produced,
+      // also rewind the stranded "user prompt + Request cancelled." pair. If
+      // output exists, keep the transcript and restore only the editable text.
       //
       // Guards (all required):
       //   - Buffer was empty before the queue drain (don't clobber typed-during-
@@ -2312,12 +2801,35 @@ export const AppContainer = (props: AppContainerProps) => {
         );
         return;
       }
-      if (pendingHistoryItems.some((item) => !isSyntheticHistoryItem(item))) {
+
+      // The cancelled turn must have added a `user` history item itself —
+      // Cron / Notification / slash submit_prompt / Retry paths submit
+      // without pushing a user item, so they have no prompt to restore.
+      const cancelledTurnUserItem = info?.lastTurnUserItem;
+      if (cancelledTurnUserItem == null) {
         debugLogger.debug(
-          'auto-restore bail: pending stream item has meaningful content',
+          'auto-restore bail: cancelled turn did not add a user history item',
         );
         return;
       }
+      const restoreCancelledPrompt = () => {
+        restoredSubmissionRef.current = {
+          modelText: cancelledTurnUserItem.text,
+          ...(cancelledTurnUserItem.submittedPrompt === undefined
+            ? {}
+            : { submittedPrompt: cancelledTurnUserItem.submittedPrompt }),
+        };
+        submittedPromptProvenanceUnavailableRef.current = false;
+        buffer.setText(cancelledTurnUserItem.text);
+      };
+
+      if (pendingHistoryItems.some((item) => item.type === 'tool_group')) {
+        debugLogger.debug(
+          'auto-restore bail: tool execution is pending or committed',
+        );
+        return;
+      }
+
       // Synchronous "did the turn produce any content event" flag from
       // useGeminiStream. Catches the race where the pre-cancel flush
       // committed gemini_content via addItem and a later thought event
@@ -2327,20 +2839,14 @@ export const AppContainer = (props: AppContainerProps) => {
       // otherwise pass and we'd wrongly truncate the committed content.
       if (info?.turnProducedMeaningfulContent) {
         debugLogger.debug(
-          'auto-restore bail: turn produced meaningful content during stream/flush',
+          'auto-restore: preserving streamed output and restoring prompt text',
         );
+        restoreCancelledPrompt();
         return;
       }
-
-      // The cancelled turn must have added a `user` history item itself —
-      // Cron / Notification / slash submit_prompt / Retry paths submit
-      // without pushing a user item, so an older user item that happens
-      // to be followed only by synthetic content must NOT be wrongly
-      // auto-restored on top of those turns.
-      const cancelledTurnUserItem = info?.lastTurnUserItem;
-      if (cancelledTurnUserItem == null) {
+      if (pendingHistoryItems.some((item) => !isSyntheticHistoryItem(item))) {
         debugLogger.debug(
-          'auto-restore bail: cancelled turn did not add a user history item',
+          'auto-restore bail: pending stream item has meaningful content',
         );
         return;
       }
@@ -2353,8 +2859,9 @@ export const AppContainer = (props: AppContainerProps) => {
       }
       if (!itemsAfterAreOnlySynthetic(history, lastUserIdx)) {
         debugLogger.debug(
-          'auto-restore bail: meaningful content committed after last user item',
+          'auto-restore: preserving committed output and restoring prompt text',
         );
+        restoreCancelledPrompt();
         return;
       }
 
@@ -2395,7 +2902,7 @@ export const AppContainer = (props: AppContainerProps) => {
       // cancelled prompt twice — once in scrollback and once pre-filled
       // in the input buffer.
       refreshStatic();
-      buffer.setText(lastUserItem.text);
+      restoreCancelledPrompt();
       // Third cleanup leg: the in-memory chat history. `GeminiChat`
       // appends the user content before the stream generator runs, and
       // the abort path doesn't pop it. Without this strip, the NEXT
@@ -2413,13 +2920,17 @@ export const AppContainer = (props: AppContainerProps) => {
       // errors and returns false, but attach a .catch as defence so a
       // future code path that throws doesn't surface as an
       // UnhandledPromiseRejection.
-      void logger?.removeLastUserMessage().catch((err: unknown) => {
-        debugLogger.debug('Failed to undo cancelled prompt from log:', err);
-      });
+      if (info?.canUndoLastLoggedUserMessage) {
+        void logger?.removeLastUserMessage().catch((err: unknown) => {
+          debugLogger.debug('Failed to undo cancelled prompt from log:', err);
+        });
+      }
     },
     [
       buffer,
       popAllMessages,
+      releaseQueuedGoalReservations,
+      removeGoalTurns,
       historyManager,
       logger,
       geminiClient,
@@ -2430,6 +2941,7 @@ export const AppContainer = (props: AppContainerProps) => {
   );
 
   const handleClearScreen = useCallback(() => {
+    clearPendingStateRef.current();
     historyManager.clearItems();
     clearScreen();
     remountStaticHistory();
@@ -2663,12 +3175,6 @@ export const AppContainer = (props: AppContainerProps) => {
   const [showToolDescriptions, setShowToolDescriptions] =
     useState<boolean>(false);
 
-  const [compactMode, setCompactMode] = useState<boolean>(
-    settings.merged.ui?.compactMode ?? false,
-  );
-  const [compactInline] = useState<boolean>(
-    settings.merged.ui?.compactInline ?? false,
-  );
   const configuredRenderMode = settings.merged.ui?.renderMode;
   const [renderMode, setRenderMode] = useState<RenderMode>(
     configuredRenderMode === 'raw' ? 'raw' : 'render',
@@ -2777,14 +3283,17 @@ export const AppContainer = (props: AppContainerProps) => {
     showWorktreeExitDialog ||
     !!(settings.corruptedPath && !settings.corruptionDialogDismissed);
   dialogsVisibleRef.current = dialogsVisible;
+
   const shouldShowStickyTodos =
     stickyTodos !== null &&
     !dialogsVisible &&
     !isFeedbackDialogOpen &&
-    streamingState !== StreamingState.WaitingForConfirmation;
+    streamingState === StreamingState.Responding;
   const stickyTodoWidth = Math.min(mainAreaWidth, 64);
-  const stickyTodoMaxVisibleItems =
-    getStickyTodoMaxVisibleItems(terminalHeight);
+  const stickyTodoMaxVisibleItems = getStickyTodoMaxVisibleItemsForMode(
+    terminalHeight,
+    useTerminalBuffer,
+  );
   const stickyTodosLayoutKey = shouldShowStickyTodos
     ? getStickyTodosLayoutKey(
         stickyTodos,
@@ -2825,6 +3334,16 @@ export const AppContainer = (props: AppContainerProps) => {
     dialogsVisible,
     stickyTodosLayoutKey,
     liveAgentPanelLayoutKey,
+    // Composer and update notification height also shift with these; without
+    // them the footer isn't re-measured during a streaming turn and the VP
+    // viewport bottom clips.
+    // (elapsedTime/currentLoadingPhrase excluded: they tick without changing rows.)
+    streamingState,
+    updateInfo,
+    agentViewState.activeView,
+    embeddedShellFocused,
+    messageQueue.length,
+    isInputActive,
   ]);
 
   // agentViewState is declared earlier (before handleFinalSubmit) so it
@@ -2872,8 +3391,18 @@ export const AppContainer = (props: AppContainerProps) => {
     }
   }, [terminalWidth, availableTerminalHeight, activePtyId]);
 
-  // Repaint static history on the trailing edge of a resize burst (#4891).
-  useResizeSettleRepaint(terminalWidth, refreshStatic);
+  // Resize no longer repaints static history (#8004). The old settle →
+  // refreshStatic path wrote clearTerminal (destroying scrollback) and remounted
+  // <Static>, re-emitting all history in 50-item chunks — a scroll storm when
+  // the terminal's resize animation exceeded the debounce window (e.g. Ghostty
+  // panel toggle). Ink's dynamic region already re-renders on width changes via
+  // useTerminalSize; modern terminals reflow scrollback natively.
+
+  // Repaint after the process resumes from OS sleep / suspend (lid close,
+  // display sleep, Ctrl+Z → fg).  The terminal's screen buffer is stale but
+  // Ink's frame-diff state still reflects the pre-sleep output, so the next
+  // render strands border characters on screen.
+  useWakeRepaint(refreshStatic);
 
   useEffect(() => {
     if (ideNeedsRestart) {
@@ -3060,11 +3589,14 @@ export const AppContainer = (props: AppContainerProps) => {
           const truncatedUi = expandCollapsedHistory(
             originalHistory.filter((h) => h.id < userItem.id),
           );
+          clearPendingStateRef.current();
           historyManager.loadHistory(truncatedUi);
 
           refreshStatic();
 
           if (userItem.type === 'user' && userItem.text) {
+            restoredSubmissionRef.current = null;
+            submittedPromptProvenanceUnavailableRef.current = true;
             buffer.setText(userItem.text);
           }
 
@@ -3417,7 +3949,7 @@ export const AppContainer = (props: AppContainerProps) => {
         debugLogger.debug('[DEBUG] Keystroke:', JSON.stringify(key));
       }
 
-      // Alt+T: toggle inline expansion of thinking blocks.
+      // Ctrl+O / Alt+T: toggle inline expansion of thinking blocks.
       if (keyMatchers[Command.TOGGLE_THINKING_EXPANDED](key)) {
         setThoughtExpanded((prev) => !prev);
         refreshStatic();
@@ -3570,25 +4102,13 @@ export const AppContainer = (props: AppContainerProps) => {
         handleSlashCommand('/ide status');
       } else if (
         keyMatchers[Command.SHOW_MORE_LINES](key) &&
+        buffer.text.length === 0 &&
         !enteringConstrainHeightMode
       ) {
         setConstrainHeight(false);
       } else if (keyMatchers[Command.TOGGLE_SHELL_INPUT_FOCUS](key)) {
         if (activePtyId || embeddedShellFocused) {
           setEmbeddedShellFocused((prev) => !prev);
-        }
-      } else if (keyMatchers[Command.TOGGLE_COMPACT_MODE](key)) {
-        const newValue = !compactMode;
-        setCompactMode(newValue);
-        void settings.setValue(SettingScope.User, 'ui.compactMode', newValue);
-        // Skip the expensive clearTerminal + Static remount when no past
-        // item would render differently (no tool_group / gemini_thought*).
-        // Future items pick up the new mode naturally because Static is
-        // append-only. Issue #3899: this unfreezes Ctrl+O for plain-chat
-        // long sessions; tool/thinking-bearing sessions still go through
-        // the (now chunked) full path in MainContent.
-        if (compactToggleHasVisualEffect(historyRef.current)) {
-          refreshStatic();
         }
       } else if (keyMatchers[Command.PROMOTE_SHELL_TO_BACKGROUND](key)) {
         // Ctrl+B: promote a running foreground shell command to a
@@ -3683,8 +4203,6 @@ export const AppContainer = (props: AppContainerProps) => {
       // debugKeystrokeLogging is read at call time, so no stale closure risk.
       settings,
       isAuthenticating,
-      compactMode,
-      setCompactMode,
       setRenderMode,
       refreshStatic,
       handleDoubleEscRewind,
@@ -3736,46 +4254,21 @@ export const AppContainer = (props: AppContainerProps) => {
     config,
   ]);
 
-  // Drain queued messages when idle. `queueDrainNonce` re-fires the effect
-  // after each submission settles so multi-step queues drain end-to-end.
-  const queueDrainingRef = useRef(false);
-  const [queueDrainNonce, setQueueDrainNonce] = useState(0);
-  useEffect(() => {
-    if (queueDrainingRef.current) return;
-    if (
-      !shouldDrainMessageQueue({
-        isConfigInitialized,
-        streamingState,
-        isProcessing,
-        dialogsVisible,
-        messageQueueLength: messageQueue.length,
-      })
-    ) {
-      return;
-    }
-
-    // Two-phase: batch plain prompts as one turn, else pop next slash command.
-    const plainPrompts = drainQueue();
-    const submission =
-      plainPrompts.length > 0 ? plainPrompts.join('\n\n') : popNextSegment();
-    if (submission === null) return;
-
-    queueDrainingRef.current = true;
-    Promise.resolve(submitQuery(submission)).finally(() => {
-      queueDrainingRef.current = false;
-      setQueueDrainNonce((n) => n + 1);
-    });
-  }, [
+  useQueuedSubmissionDrain({
+    config,
     isConfigInitialized,
     streamingState,
     isProcessing,
     dialogsVisible,
-    messageQueue,
-    drainQueue,
-    popNextSegment,
+    pendingSubmissionCount,
+    getPendingSubmissionCount,
+    popNextSubmission,
+    enqueueGoalTurn,
+    restoreMessages,
     submitQuery,
-    queueDrainNonce,
-  ]);
+    submissionInFlightRef,
+    submissionSettledRevision,
+  });
 
   const nightly = props.version.includes('nightly');
 
@@ -3802,6 +4295,8 @@ export const AppContainer = (props: AppContainerProps) => {
       isFastModelMode,
       isVoiceModelMode,
       isVisionModelMode,
+      isCompactionModelMode,
+      isImageModelMode,
       modelDialogPersistScope,
       isTrustDialogOpen,
       activeArenaDialog,
@@ -3945,6 +4440,8 @@ export const AppContainer = (props: AppContainerProps) => {
       isFastModelMode,
       isVoiceModelMode,
       isVisionModelMode,
+      isCompactionModelMode,
+      isImageModelMode,
       modelDialogPersistScope,
       isTrustDialogOpen,
       activeArenaDialog,
@@ -4112,7 +4609,8 @@ export const AppContainer = (props: AppContainerProps) => {
       handleFinalSubmit,
       handleRetryLastPrompt: retryLastPrompt,
       handleClearScreen,
-      popAllQueuedMessages: popAllMessages,
+      popAllQueuedMessages,
+      invalidateSubmittedPromptProvenance,
       // Welcome back dialog
       handleWelcomeBackSelection,
       handleWelcomeBackClose,
@@ -4202,7 +4700,8 @@ export const AppContainer = (props: AppContainerProps) => {
       handleFinalSubmit,
       retryLastPrompt,
       handleClearScreen,
-      popAllMessages,
+      popAllQueuedMessages,
+      invalidateSubmittedPromptProvenance,
       handleWelcomeBackSelection,
       handleWelcomeBackClose,
       handleWorktreeExit,
@@ -4253,10 +4752,6 @@ export const AppContainer = (props: AppContainerProps) => {
     ],
   );
 
-  const compactModeValue = useMemo(
-    () => ({ compactMode, compactInline, setCompactMode }),
-    [compactMode, compactInline, setCompactMode],
-  );
   const renderModeValue = useMemo(
     () => ({ renderMode, setRenderMode }),
     [renderMode, setRenderMode],
@@ -4272,16 +4767,16 @@ export const AppContainer = (props: AppContainerProps) => {
   );
 
   return (
-    <UIStateContext.Provider value={uiState}>
-      <UIActionsContext.Provider value={uiActions}>
-        <ConfigContext.Provider value={config}>
-          <AppContext.Provider
-            value={{
-              version: props.version,
-              startupWarnings,
-            }}
-          >
-            <CompactModeProvider value={compactModeValue}>
+    <VirtualViewportContext.Provider value={useTerminalBuffer}>
+      <UIStateContext.Provider value={uiState}>
+        <UIActionsContext.Provider value={uiActions}>
+          <ConfigContext.Provider value={config}>
+            <AppContext.Provider
+              value={{
+                version: props.version,
+                startupWarnings,
+              }}
+            >
               <ThoughtExpandedProvider value={thoughtExpandedValue}>
                 <RenderModeProvider value={renderModeValue}>
                   <TerminalOutputProvider value={writeRaw}>
@@ -4291,10 +4786,10 @@ export const AppContainer = (props: AppContainerProps) => {
                   </TerminalOutputProvider>
                 </RenderModeProvider>
               </ThoughtExpandedProvider>
-            </CompactModeProvider>
-          </AppContext.Provider>
-        </ConfigContext.Provider>
-      </UIActionsContext.Provider>
-    </UIStateContext.Provider>
+            </AppContext.Provider>
+          </ConfigContext.Provider>
+        </UIActionsContext.Provider>
+      </UIStateContext.Provider>
+    </VirtualViewportContext.Provider>
   );
 };

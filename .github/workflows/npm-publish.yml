@@ -24,6 +24,9 @@ jobs:
   publish:
     name: Publish npm package
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      QWEN_SKIP_PREPARE: '1'
 
     steps:
       - name: Checkout
@@ -32,7 +35,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22.x
           registry-url: https://registry.npmjs.org
           cache: npm
 
@@ -42,27 +45,70 @@ jobs:
       - name: Verify Termux patches
         run: bash scripts/check-termux-patches.sh
 
+      - name: Lint
+        run: npm run lint:ci
+
       - name: Build
         run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test:ci
 
       - name: Bundle
         run: npm run bundle
 
+      - name: No-credential integration
+        env:
+          HOME: ${{ runner.temp }}/qwen-no-ak-home
+          USERPROFILE: ${{ runner.temp }}/qwen-no-ak-home
+          QWEN_HOME: ${{ runner.temp }}/qwen-no-ak-home/.qwen
+        run: npm run test:integration:no-ak:sandbox:none
+
+      - name: Audit runtime dependencies
+        run: npm run audit:runtime:critical
+
       - name: Prepare npm package
         run: npm run prepare:package
 
-      - name: Smoke version
-        run: node dist/cli.js --version
-
-      - name: Pack dry-run
+      - name: Pack exact artifact
+        id: pack
         working-directory: dist
-        run: npm pack --dry-run
+        run: |
+          pack_json="$(npm pack --json)"
+          printf '%s\n' "${pack_json}"
+          filename="$(node -e 'process.stdout.write(JSON.parse(process.argv[1])[0].filename)' "${pack_json}")"
+          tarball="${PWD}/${filename}"
+          sha256="$(sha256sum "${tarball}" | cut -d' ' -f1)"
+          printf 'filename=%s\n' "${filename}" >> "${GITHUB_OUTPUT}"
+          printf 'tarball=%s\n' "${tarball}" >> "${GITHUB_OUTPUT}"
+          printf 'sha256=%s\n' "${sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke installed package
+        run: |
+          set -euo pipefail
+          smoke_prefix="${RUNNER_TEMP}/qwen-global"
+          install_log="${RUNNER_TEMP}/qwen-npm12-install.log"
+          # npm 12 cannot match allowScripts to a local tarball (npm/cli#9738).
+          # This isolated smoke executes the exact artifact built above; users
+          # install the registry package with the narrow README allowlist.
+          npx --yes npm@12.0.2 install --global \
+            --prefix "${smoke_prefix}" \
+            --foreground-scripts \
+            --dangerously-allow-all-scripts \
+            "${{ steps.pack.outputs.tarball }}" 2>&1 | tee "${install_log}"
+          ! grep -Fq 'had install scripts blocked' "${install_log}"
+          expected="$(node -p "require('./dist/package.json').version")"
+          actual="$("${smoke_prefix}/bin/qwen" --version)"
+          test "${actual}" = "${expected}"
+          "${smoke_prefix}/bin/qwen" --help >/dev/null
 
       - name: Publish to npm
-        working-directory: dist
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --tag "${{ inputs.tag }}" --access public
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --tag "${{ inputs.tag }}" --access public
 
       - name: Create GitHub release
         if: ${{ inputs.create_release }}
@@ -75,12 +121,16 @@ jobs:
           notes=$(printf '%s\n' \
             "Qwen Code Termux ${version}" \
             "" \
-            "Fork release based on upstream Qwen Code 0.18.0." \
+            "Fork release based on upstream Qwen Code 0.21.8." \
+            "" \
+            "Repairs an orphaned upstream standalone wrapper that can shadow the npm launcher on Termux." \
             "" \
             "Install:" \
             "" \
             '```bash' \
             "npm install -g @mmmbuto/qwen-code-termux@${DIST_TAG}" \
             '```')
-          gh release create "${tag}" --title "${tag}" --notes "${notes}" || \
+          gh release create "${tag}" "${{ steps.pack.outputs.tarball }}" --title "${tag}" --notes "${notes}" || {
             gh release edit "${tag}" --title "${tag}" --notes "${notes}"
+            gh release upload "${tag}" "${{ steps.pack.outputs.tarball }}" --clobber
+          }

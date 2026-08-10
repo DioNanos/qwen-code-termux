@@ -8,12 +8,13 @@ import { loadSettings } from '../../config/settings.js';
 import { SUPPORTED_LANGUAGES } from '../../i18n/index.js';
 import { hasConfiguredBatchVoiceTranscriptionModel } from '../../services/voice-service.js';
 import { writeStderrLine } from '../../utils/stdioHelpers.js';
+import { resolveAcpHttpEnabled } from '../acp-http-enabled.js';
 import { getAdvertisedServeFeatures } from '../capabilities.js';
 import { isBrowserAutomationMcpAvailable } from '../cdp-mcp-command.js';
 import type { ServeOptions } from '../types.js';
 
 // Keep in sync with acp-bridge bridge.ts and SDK DaemonClient.ts.
-const DEFAULT_MAX_SESSIONS = 20;
+const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_MAX_PENDING_PROMPTS_PER_SESSION = 5;
 
 export const SERVE_LANGUAGE_CODES = [
@@ -42,10 +43,24 @@ interface CreateServeFeaturesDeps {
   boundWorkspace: string;
   persistSettingAvailable: boolean;
   sessionArtifactsPersistenceAvailable: boolean;
+  sessionGenerationAvailable: () => boolean;
+  workspaceGenerationAvailable: () => boolean;
   reloadAvailable: boolean;
-  channelReloadAvailable: boolean;
+  channelReloadAvailable: () => boolean;
+  channelControlAvailable: boolean;
+  channelManagementAvailable: boolean;
   sessionShellCommandEnabled: boolean;
-  multiWorkspaceSessionsEnabled: boolean;
+  multiWorkspaceSessionsEnabled: () => boolean;
+  dynamicWorkspaceRegistrationAvailable: boolean;
+  persistentWorkspaceRegistrationAvailable: boolean;
+  scratchWorkspaceRegistrationAvailable: () => boolean;
+  realtimeVoiceEnabled: () => boolean;
+  acpHttpEnabled?: boolean;
+  workspaceRuntimeRemovalAvailable?: boolean;
+  workspaceTrustHotReloadAvailable?: boolean;
+  isPrimaryWorkspaceTrusted?: () => boolean;
+  env?: Readonly<Record<string, string | undefined>>;
+  getEnv?: () => Readonly<Record<string, string | undefined>>;
 }
 
 export interface ServeFeaturesRuntime {
@@ -62,26 +77,46 @@ export function createServeFeatures(
     boundWorkspace,
     persistSettingAvailable,
     sessionArtifactsPersistenceAvailable,
+    sessionGenerationAvailable,
+    workspaceGenerationAvailable,
     reloadAvailable,
     channelReloadAvailable,
+    channelControlAvailable,
+    channelManagementAvailable,
     sessionShellCommandEnabled,
     multiWorkspaceSessionsEnabled,
+    dynamicWorkspaceRegistrationAvailable,
+    persistentWorkspaceRegistrationAvailable,
+    scratchWorkspaceRegistrationAvailable,
+    realtimeVoiceEnabled,
+    acpHttpEnabled,
+    workspaceRuntimeRemovalAvailable,
+    workspaceTrustHotReloadAvailable,
   } = deps;
+  const getEnv = deps.getEnv ?? (() => deps.env ?? process.env);
   let cachedVoiceTranscriptionAvailable: boolean | undefined;
   const invalidateServeFeaturesCache = () => {
     cachedVoiceTranscriptionAvailable = undefined;
   };
   const getCachedVoiceTranscriptionAvailable = () => {
     cachedVoiceTranscriptionAvailable ??=
-      isWorkspaceVoiceTranscriptionAvailable(boundWorkspace);
+      isWorkspaceVoiceTranscriptionAvailable(
+        boundWorkspace,
+        getEnv(),
+        deps.env !== undefined || deps.getEnv !== undefined,
+        deps.isPrimaryWorkspaceTrusted?.() ?? true,
+      );
     return cachedVoiceTranscriptionAvailable;
   };
 
   return {
     languageCodes: SERVE_LANGUAGE_CODES,
     invalidateServeFeaturesCache,
-    currentServeFeatures: () =>
-      getAdvertisedServeFeatures(undefined, {
+    currentServeFeatures: () => {
+      const env = getEnv();
+      const currentAcpHttpEnabled =
+        acpHttpEnabled ?? resolveAcpHttpEnabled(env as NodeJS.ProcessEnv);
+      return getAdvertisedServeFeatures(undefined, {
         requireAuth: opts.requireAuth === true,
         mcpPoolActive: opts.mcpPoolActive !== false,
         allowOriginActive:
@@ -95,32 +130,53 @@ export function createServeFeatures(
         persistSettingAvailable,
         sessionShellCommandEnabled,
         sessionArtifactsPersistenceAvailable,
+        sessionGenerationAvailable: sessionGenerationAvailable(),
+        workspaceGenerationAvailable: workspaceGenerationAvailable(),
         rateLimit: opts.rateLimit === true,
         reloadAvailable,
-        channelReloadAvailable,
-        multiWorkspaceSessionsEnabled,
+        channelReloadAvailable: channelReloadAvailable(),
+        channelControlAvailable,
+        channelManagementAvailable,
+        multiWorkspaceSessionsEnabled: multiWorkspaceSessionsEnabled(),
+        dynamicWorkspaceRegistrationAvailable,
+        persistentWorkspaceRegistrationAvailable,
+        scratchWorkspaceRegistrationAvailable:
+          scratchWorkspaceRegistrationAvailable(),
+        workspaceRuntimeRemovalAvailable,
+        workspaceTrustHotReloadAvailable,
+        acpHttpEnabled: currentAcpHttpEnabled,
+        realtimeVoiceEnabled: realtimeVoiceEnabled(),
         clientMcpOverWsEnabled: opts.clientMcpOverWs === true,
         cdpTunnelOverWsEnabled: opts.cdpTunnelOverWs === true,
         browserAutomationMcpAvailable: isBrowserAutomationMcpAvailable(
           opts,
-          process.env,
+          env,
         ),
         voiceTranscriptionAvailable: getCachedVoiceTranscriptionAvailable(),
         // Advertised whenever the `/voice/stream` WS endpoint exists (ACP HTTP
         // on). A configured token no longer suppresses it — the browser carries
         // the bearer token via the WS subprotocol, which the upgrade listener
         // verifies (acp-http/index.ts).
-        voiceWsAvailable: process.env['QWEN_SERVE_ACP_HTTP'] !== '0',
-      }),
+        voiceWsAvailable: currentAcpHttpEnabled,
+      });
+    },
   };
 }
 
 function isWorkspaceVoiceTranscriptionAvailable(
   boundWorkspace: string,
+  env: Readonly<Record<string, string | undefined>>,
+  skipLoadEnvironment: boolean,
+  workspaceTrusted: boolean,
 ): boolean {
   try {
     return hasConfiguredBatchVoiceTranscriptionModel(
-      loadSettings(boundWorkspace),
+      loadSettings(boundWorkspace, {
+        skipLoadEnvironment: skipLoadEnvironment || !workspaceTrusted,
+        skipWorkspaceSettings: !workspaceTrusted,
+        workspaceTrusted,
+      }),
+      { env },
     );
   } catch (err) {
     writeStderrLine(

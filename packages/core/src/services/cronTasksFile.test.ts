@@ -145,6 +145,51 @@ describe('cronTasksFile', () => {
       expect(result).toEqual([task]);
     });
 
+    it('round-trips optional channel delivery metadata', async () => {
+      const task = makeTask({
+        delivery: {
+          kind: 'channel',
+          target: {
+            channelName: 'dingtalk',
+            type: 'user',
+            id: 'user-1',
+          },
+        },
+      });
+
+      await writeCronTasks(tmpDir, [task]);
+
+      expect(await readCronTasks(tmpDir)).toEqual([task]);
+    });
+
+    it.each([
+      {
+        kind: 'channel',
+        channelName: 'dingtalk',
+        target: { type: 'user', id: 'user-1' },
+      },
+      {
+        kind: 'channel',
+        target: { channelName: 'dingtalk', type: 'topic', id: 'topic-1' },
+      },
+      {
+        kind: 'channel',
+        target: {
+          channelName: 'dingtalk',
+          type: 'user',
+          id: 'user-1',
+          threadId: 'thread-1',
+        },
+      },
+    ])('rejects malformed delivery metadata %#', async (delivery) => {
+      await seedTasksFile(
+        tmpDir,
+        JSON.stringify([{ ...makeTask(), delivery }]),
+      );
+
+      await expect(readCronTasks(tmpDir)).rejects.toThrow(/Invalid task entry/);
+    });
+
     it('accepts legacy tasks with no name/enabled fields', async () => {
       // A task written before the fields existed must still read back.
       const legacy = makeTask();
@@ -166,31 +211,6 @@ describe('cronTasksFile', () => {
       await seedTasksFile(
         tmpDir,
         JSON.stringify([{ ...makeTask(), enabled: 'yes' }]),
-      );
-      await expect(readCronTasks(tmpDir)).rejects.toThrow(/Invalid task entry/);
-    });
-
-    it('round-trips the optional runMode field', async () => {
-      const isolated = makeTask({ id: 'iso', runMode: 'isolated' });
-      const shared = makeTask({ id: 'sh', runMode: 'shared' });
-      await writeCronTasks(tmpDir, [isolated, shared]);
-      const result = await readCronTasks(tmpDir);
-      expect(result).toEqual([isolated, shared]);
-    });
-
-    it('accepts legacy tasks with no runMode field', async () => {
-      const legacy = makeTask();
-      await seedTasksFile(tmpDir, JSON.stringify([legacy]));
-      const result = await readCronTasks(tmpDir);
-      expect(result[0]!.runMode).toBeUndefined();
-    });
-
-    it('rejects a task whose runMode is an unknown string', async () => {
-      // A typo must route through fix-or-delete rather than being silently
-      // treated as 'shared' — otherwise per-run isolation would quietly turn off.
-      await seedTasksFile(
-        tmpDir,
-        JSON.stringify([{ ...makeTask(), runMode: 'per-run' }]),
       );
       await expect(readCronTasks(tmpDir)).rejects.toThrow(/Invalid task entry/);
     });
@@ -244,6 +264,25 @@ describe('cronTasksFile', () => {
         tmpDir,
         JSON.stringify([
           { ...makeTask(), runs: [{ at: 1718000240000, kind: 7 }] },
+        ]),
+      );
+      await expect(readCronTasks(tmpDir)).rejects.toThrow(/Invalid task entry/);
+    });
+
+    it('round-trips a run entry with the legacy withheld marker', async () => {
+      const task = makeTask({
+        lastFiredAt: 1718000300000,
+        runs: [{ at: 1718000300000, kind: 'scheduled', withheld: true }],
+      });
+      await writeCronTasks(tmpDir, [task]);
+      expect(await readCronTasks(tmpDir)).toEqual([task]);
+    });
+
+    it('rejects a run entry whose withheld is not a boolean', async () => {
+      await seedTasksFile(
+        tmpDir,
+        JSON.stringify([
+          { ...makeTask(), runs: [{ at: 1718000240000, withheld: 'yes' }] },
         ]),
       );
       await expect(readCronTasks(tmpDir)).rejects.toThrow(/Invalid task entry/);
@@ -402,6 +441,26 @@ describe('cronTasksFile', () => {
 
       const stat = await fs.stat(filePath);
       expect(stat.mtimeMs).toBeLessThan(Date.now() - 30_000);
+    });
+
+    it('checks the caller guard at the commit boundary', async () => {
+      await writeCronTasks(tmpDir, [makeTask({ id: 'existing' })]);
+      const assertCanCommit = vi.fn(() => {
+        throw new Error('generation closed');
+      });
+
+      await expect(
+        updateCronTasks(
+          tmpDir,
+          (tasks) => [...tasks, makeTask({ id: 'stale' })],
+          { assertCanCommit },
+        ),
+      ).rejects.toThrow('generation closed');
+
+      expect(assertCanCommit).toHaveBeenCalledOnce();
+      expect((await readCronTasks(tmpDir)).map((task) => task.id)).toEqual([
+        'existing',
+      ]);
     });
 
     it('steals a stale update lock left by a crashed holder', async () => {

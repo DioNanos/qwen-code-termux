@@ -1,15 +1,19 @@
 import {
   createContext,
   memo,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { useTheme } from '../../themeContext';
-import ReactMarkdown from 'react-markdown';
-import type { Components } from 'react-markdown';
+import { useTranscriptRenderMode } from '../../transcriptRenderMode';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import type { Components, Options } from 'react-markdown';
+import { isMarkdownFenceClosed } from '@datafe-open/markdown-chart';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -27,6 +31,11 @@ import {
 } from '../../customization';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { EnhancedMarkdownTable } from './EnhancedMarkdownTable';
+import {
+  DEFAULT_WEB_SHELL_MARKDOWN_CHART,
+  WebShellMarkdownChartProvider,
+  createWebShellMarkdownChartPre,
+} from './MarkdownChartRenderer';
 import styles from './Markdown.module.css';
 
 interface MarkdownProps {
@@ -174,7 +183,86 @@ function MermaidBlock({ code }: { code: string }) {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'diagram' | 'code'>('diagram');
   const [copied, setCopied] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
   const mermaidTheme = appTheme === 'light' ? 'default' : 'dark';
+
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 3;
+  const ZOOM_STEP = 0.25;
+
+  const handleZoomIn = () => {
+    setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100));
+  };
+  const handleZoomOut = () => {
+    setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100));
+  };
+  const resetZoomAndPan = useCallback(() => {
+    dragRef.current = null;
+    setIsDragging(false);
+    setZoom(1);
+    setOffset({ x: 0, y: 0 });
+  }, []);
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsDragging(true);
+      dragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        origX: offset.x,
+        origY: offset.y,
+      };
+    },
+    [offset],
+  );
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragRef.current) return;
+      const dx = e.clientX - dragRef.current.startX;
+      const dy = e.clientY - dragRef.current.startY;
+      // Clamp Y to prevent dragging into overflow-y: hidden clipped area.
+      // X is unclamped — overflow-x: auto provides native horizontal scroll.
+      const PAN_LIMIT = 1500;
+      setOffset({
+        x: dragRef.current.origX + dx,
+        y: Math.max(
+          -PAN_LIMIT,
+          Math.min(PAN_LIMIT, dragRef.current.origY + dy),
+        ),
+      });
+    };
+
+    const onMouseUp = () => {
+      dragRef.current = null;
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('blur', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('blur', onMouseUp);
+    };
+  }, [isDragging]);
+
+  useEffect(() => {
+    setZoom(1);
+    setOffset({ x: 0, y: 0 });
+  }, [code]);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,6 +278,10 @@ function MermaidBlock({ code }: { code: string }) {
             theme: mermaidTheme,
             securityLevel: 'strict',
             suppressErrorRendering: true,
+            flowchart: {
+              wrappingWidth: 300,
+              useMaxWidth: false,
+            },
           });
           lastMermaidTheme = mermaidTheme;
         }
@@ -246,6 +338,34 @@ function MermaidBlock({ code }: { code: string }) {
       <div className={styles.codeBlockHeader}>
         <span className={styles.codeBlockLang}>{t('mermaid.label')}</span>
         <span className={styles.mermaidActions}>
+          {viewMode === 'diagram' && (
+            <>
+              <button
+                className={styles.codeBlockCopy}
+                onClick={handleZoomOut}
+                title={t('mermaid.zoomOut')}
+                disabled={zoom <= ZOOM_MIN}
+              >
+                {t('mermaid.zoomOut')}
+              </button>
+              <button
+                className={styles.codeBlockCopy}
+                onClick={resetZoomAndPan}
+                title={t('mermaid.zoomReset')}
+                disabled={zoom === 1 && offset.x === 0 && offset.y === 0}
+              >
+                {t('mermaid.zoomReset')}
+              </button>
+              <button
+                className={styles.codeBlockCopy}
+                onClick={handleZoomIn}
+                title={t('mermaid.zoomIn')}
+                disabled={zoom >= ZOOM_MAX}
+              >
+                {t('mermaid.zoomIn')}
+              </button>
+            </>
+          )}
           <button
             className={styles.codeBlockCopy}
             onClick={() =>
@@ -273,9 +393,19 @@ function MermaidBlock({ code }: { code: string }) {
         </div>
       ) : (
         <div
-          className={`${styles.mermaidBlock} ${styles.mermaidInline}`}
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
+          className={`${styles.mermaidZoomWrapper} ${isDragging ? styles.mermaidDragging : ''}`}
+          onMouseDown={handleMouseDown}
+          onDoubleClick={resetZoomAndPan}
+        >
+          <div
+            className={`${styles.mermaidBlock} ${styles.mermaidInline}`}
+            style={{
+              transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
+              transformOrigin: 'top center',
+            }}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        </div>
       )}
     </div>
   );
@@ -303,9 +433,11 @@ function CodeBlock({
     appTheme === 'light' ? 'github-light-default' : 'github-dark-default';
 
   useEffect(() => {
-    // Don't highlight unsupported languages or blocks too large to tokenize
-    // without freezing the main thread — render them as plain text.
+    // Stream code as plain text. Highlighting a growing fence on every chunk
+    // repeatedly tokenizes its entire contents and can dominate rendering for
+    // long responses; the settled render below highlights the final text once.
     if (
+      isStreaming ||
       lang === 'mermaid' ||
       resolvedLang === 'text' ||
       isTooLargeToHighlight(code)
@@ -322,21 +454,7 @@ function CodeBlock({
       return;
     }
 
-    // Re-highlight synchronously on every code change. With the Oniguruma
-    // engine a normal-sized block tokenizes in ~1–7ms, so there's no need to
-    // throttle or keep a stale snapshot around: `html` always matches the
-    // current `code`, so no streamed text is ever hidden and there's no flicker.
-    // `isTooLargeToHighlight` above bounds the worst-case per-chunk cost.
-    //
-    // Don't persist streaming intermediates: the growing block produces a new
-    // cache key every chunk and would otherwise evict other blocks from the LRU.
-    const persist = !isStreaming;
-    const warmHtml = highlightToHtmlSync(
-      code,
-      resolvedLang,
-      shikiTheme,
-      persist,
-    );
+    const warmHtml = highlightToHtmlSync(code, resolvedLang, shikiTheme, true);
     if (warmHtml !== null) {
       setHtml(warmHtml);
       return;
@@ -347,19 +465,13 @@ function CodeBlock({
     // not-yet-loaded language on regeneration) so we render the current code as
     // plain text — not the prior block's stale highlight — until the load
     // resolves. Then re-check cancellation *before* the synchronous tokenization
-    // so superseded streaming snapshots that queued behind the same load don't
-    // each run codeToHtml.
+    // so a superseded settled block does not run codeToHtml.
     setHtml(null);
     let cancelled = false;
     getCodeHighlighter(resolvedLang)
       .then(() => {
         if (cancelled) return;
-        const cold = highlightToHtmlSync(
-          code,
-          resolvedLang,
-          shikiTheme,
-          persist,
-        );
+        const cold = highlightToHtmlSync(code, resolvedLang, shikiTheme, true);
         if (cold !== null) setHtml(cold);
       })
       .catch((err) => {
@@ -391,9 +503,6 @@ function CodeBlock({
     return <MermaidBlock code={code} />;
   }
 
-  // `html` is always the highlight of the *current* `code` (re-highlighted
-  // synchronously per chunk), so it can be rendered directly — no prefix gate
-  // is needed to guard against showing a stale/previous block's HTML.
   return (
     <div className={styles.codeBlock}>
       <div className={styles.codeBlockHeader}>
@@ -402,7 +511,7 @@ function CodeBlock({
           {copied ? t('code.copied') : t('code.copy')}
         </button>
       </div>
-      {html !== null ? (
+      {!isStreaming && html !== null ? (
         <div
           className={styles.codeBlockContent}
           dangerouslySetInnerHTML={{ __html: html }}
@@ -446,22 +555,52 @@ const IsStreamingContext = createContext(false);
 const MarkdownSourceContext = createContext<MarkdownContentSource | undefined>(
   undefined,
 );
+const MarkdownDocumentContext = createContext<string | undefined>(undefined);
+
+interface PositionedCodeNode {
+  readonly position?: {
+    readonly start: { readonly offset?: number };
+    readonly end: { readonly offset?: number };
+  };
+}
+
+function isIncompleteTailFence(
+  document: string | undefined,
+  node: PositionedCodeNode | undefined,
+  isStreaming: boolean,
+): boolean {
+  if (!isStreaming || document === undefined) return false;
+  const start = node?.position?.start.offset;
+  const end = node?.position?.end.offset;
+  if (start === undefined || end === undefined) return false;
+  return (
+    !isMarkdownFenceClosed(document.slice(start, end)) &&
+    document.slice(end).trim().length === 0
+  );
+}
 
 function MarkdownCode({
   className,
   children,
+  node,
 }: {
   className?: string;
   children?: ReactNode;
+  node?: PositionedCodeNode;
 }) {
   const isStreaming = useContext(IsStreamingContext);
+  const document = useContext(MarkdownDocumentContext);
   const isBlock =
     className?.startsWith('language-') ||
     (typeof children === 'string' && children.includes('\n'));
 
   if (isBlock) {
     return (
-      <MarkdownFencedCode className={className} isStreaming={isStreaming}>
+      <MarkdownFencedCode
+        className={className}
+        isStreaming={isStreaming}
+        isIncomplete={isIncompleteTailFence(document, node, isStreaming)}
+      >
         {children}
       </MarkdownFencedCode>
     );
@@ -473,10 +612,12 @@ function MarkdownFencedCode({
   className,
   children,
   isStreaming,
+  isIncomplete,
 }: {
   className?: string;
   children?: ReactNode;
   isStreaming?: boolean;
+  isIncomplete?: boolean;
 }) {
   const source = useContext(MarkdownSourceContext);
   const appTheme = useTheme();
@@ -500,6 +641,7 @@ function MarkdownFencedCode({
         className,
         code,
         isStreaming: !!isStreaming,
+        isIncomplete: !!isIncomplete,
         source,
         theme: appTheme,
       });
@@ -513,6 +655,7 @@ function MarkdownFencedCode({
               source,
               appTheme,
               isStreaming ? 'streaming' : 'settled',
+              isIncomplete ? 'incomplete' : 'complete',
               code,
             ]}
           >
@@ -541,6 +684,22 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
  * the markdown renderer needing to know about session management. */
 const QWEN_SESSION_SCHEME = /^qwen-session:\/\//i;
 
+/**
+ * react-markdown sanitizes every href through `defaultUrlTransform`, which
+ * allows only `http(s)`, `irc(s)`, `mailto` and `xmpp` and rewrites everything
+ * else to `''`. Without this, `qwen-session://<id>` never reaches
+ * {@link MarkdownLink} with its scheme intact, the interception below is dead
+ * code, and the link renders as an inert anchor.
+ *
+ * Letting the scheme through is safe: `MarkdownLink` never puts it in the DOM.
+ * It renders `href="#"` and dispatches the id as an event, so nothing navigates
+ * to a `qwen-session:` URL — and an unknown scheme is inert in a browser anyway.
+ * Every other href keeps the default sanitizer.
+ */
+export function markdownUrlTransform(url: string): string {
+  return QWEN_SESSION_SCHEME.test(url.trim()) ? url : defaultUrlTransform(url);
+}
+
 function MarkdownLink({
   href,
   children,
@@ -548,7 +707,11 @@ function MarkdownLink({
   href?: string;
   children?: ReactNode;
 }) {
+  const renderMode = useTranscriptRenderMode();
   if (href && QWEN_SESSION_SCHEME.test(href.trim())) {
+    if (renderMode === 'readonly') {
+      return <span className={styles.link}>{children}</span>;
+    }
     const sessionId = href.trim().replace(QWEN_SESSION_SCHEME, '');
     return (
       <a
@@ -583,6 +746,74 @@ function MarkdownLink({
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const safeSrc = isSafeImageSrc(src) ? src : undefined;
   return <img src={safeSrc} alt={alt || ''} className={styles.image} />;
+}
+
+/**
+ * Throttles a rapidly changing value (like a streaming string) to prevent
+ * O(n²) re-parsing of the entire Markdown AST on every token.
+ */
+function useThrottledValue(
+  value: string,
+  isStreaming: boolean | undefined,
+  intervalMs: number = 80,
+): string {
+  const [throttled, setThrottled] = useState(value);
+  const throttledRef = useRef(throttled);
+  throttledRef.current = throttled;
+  const lastRunRef = useRef(0);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  useEffect(() => {
+    if (!isStreaming) {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      // Flush immediately when streaming stops
+      if (throttledRef.current !== value) {
+        setThrottled(value);
+      }
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - lastRunRef.current;
+
+    if (elapsed >= intervalMs) {
+      lastRunRef.current = now;
+      setThrottled(valueRef.current);
+    } else if (!timeoutRef.current) {
+      timeoutRef.current = setTimeout(() => {
+        lastRunRef.current = Date.now();
+        timeoutRef.current = null;
+        setThrottled(valueRef.current);
+      }, intervalMs - elapsed);
+    }
+  }, [value, isStreaming, intervalMs]);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  if (!isStreaming) return value;
+
+  // Bypass throttle for non-monotonic changes
+  if (
+    typeof value === 'string' &&
+    typeof throttled === 'string' &&
+    !value.startsWith(throttled)
+  ) {
+    return value;
+  }
+
+  return throttled;
 }
 
 // `code`/`pre`/`a`/`img` are stable references; only `table` is created per
@@ -620,6 +851,35 @@ function createComponents(
 
 const COMPONENTS_DEFAULT = createComponents();
 
+/**
+ * Isolated memoized renderer. This ensures react-markdown ONLY re-parses
+ * when the throttled content or plugin references actually change.
+ */
+const MemoizedMarkdownRenderer = memo(function MemoizedMarkdownRenderer({
+  content,
+  components,
+  remarkPlugins,
+  rehypePlugins,
+  urlTransform,
+}: {
+  content: string;
+  components: Options['components'];
+  remarkPlugins: Options['remarkPlugins'];
+  rehypePlugins: Options['rehypePlugins'];
+  urlTransform: Options['urlTransform'];
+}) {
+  return (
+    <ReactMarkdown
+      components={components}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      urlTransform={urlTransform}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 export const Markdown = memo(function Markdown({
   content,
   source,
@@ -627,20 +887,30 @@ export const Markdown = memo(function Markdown({
   tableMode,
 }: MarkdownProps) {
   const { markdown, markdownTableMode } = useWebShellCustomization();
+  const theme = useTheme();
   const sourceMarkdown = source ? markdown : undefined;
-  const renderedContent =
-    content && source && sourceMarkdown?.transformMarkdown
-      ? sourceMarkdown.transformMarkdown(content, { source })
-      : content;
+
+  const throttledContent = useThrottledValue(content ?? '', isStreaming);
+  const renderedContent = useMemo(
+    () =>
+      throttledContent && source && sourceMarkdown?.transformMarkdown
+        ? sourceMarkdown.transformMarkdown(throttledContent, { source })
+        : throttledContent,
+    [throttledContent, source, sourceMarkdown],
+  );
+
   const effectiveTableMode = isStreaming
     ? 'basic'
     : (tableMode ?? markdownTableMode ?? 'basic');
+
+  // Memoize components so references stay stable during throttle window
   const components = useMemo(() => {
     if (effectiveTableMode === 'advanced') {
       return createComponents('advanced', renderedContent);
     }
     return COMPONENTS_DEFAULT;
   }, [effectiveTableMode, renderedContent]);
+
   const sourceComponents = sourceMarkdown?.components;
   const renderedComponents = useMemo(() => {
     if (!sourceComponents) return components;
@@ -650,14 +920,70 @@ export const Markdown = memo(function Markdown({
       ...(effectiveTableMode === 'advanced' ? { table: components.table } : {}),
     };
   }, [components, effectiveTableMode, sourceComponents]);
+  const chart =
+    source === 'assistant' && !sourceComponents?.code && !sourceComponents?.pre
+      ? (sourceMarkdown?.chart ??
+        (sourceMarkdown?.renderCodeBlock
+          ? undefined
+          : DEFAULT_WEB_SHELL_MARKDOWN_CHART))
+      : undefined;
+  const chartPre = useMemo(
+    () =>
+      chart
+        ? createWebShellMarkdownChartPre(chart.registry, {
+            chartClassName: chart.chartClassName,
+            chartStyle: { minHeight: 360, ...chart.chartStyle },
+          })
+        : undefined,
+    [chart],
+  );
+  const componentsWithCharts = useMemo(
+    () =>
+      chartPre
+        ? {
+            ...renderedComponents,
+            pre: chartPre,
+          }
+        : renderedComponents,
+    [chartPre, renderedComponents],
+  );
+
+  // Memoize plugins so their array references remain stable.
+  const remarkPlugins = useMemo(() => {
+    return sourceMarkdown?.remarkPlugins
+      ? [remarkGfm, remarkMath, ...sourceMarkdown.remarkPlugins]
+      : [remarkGfm, remarkMath];
+  }, [sourceMarkdown?.remarkPlugins]);
+
+  const rehypePlugins = useMemo(() => {
+    return sourceMarkdown?.rehypePlugins
+      ? [rehypeKatex, ...sourceMarkdown.rehypePlugins]
+      : [rehypeKatex];
+  }, [sourceMarkdown?.rehypePlugins]);
 
   if (!content) return null;
-  const remarkPlugins = sourceMarkdown?.remarkPlugins
-    ? [remarkGfm, remarkMath, ...sourceMarkdown.remarkPlugins]
-    : [remarkGfm, remarkMath];
-  const rehypePlugins = sourceMarkdown?.rehypePlugins
-    ? [rehypeKatex, ...sourceMarkdown.rehypePlugins]
-    : [rehypeKatex];
+
+  const renderedMarkdown = (
+    <MemoizedMarkdownRenderer
+      content={renderedContent}
+      components={componentsWithCharts}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      urlTransform={markdownUrlTransform}
+    />
+  );
+  const chartAwareMarkdown = chart ? (
+    <WebShellMarkdownChartProvider
+      customization={chart}
+      source={renderedContent}
+      streaming={!!isStreaming}
+      theme={theme}
+    >
+      {renderedMarkdown}
+    </WebShellMarkdownChartProvider>
+  ) : (
+    renderedMarkdown
+  );
 
   return (
     <div
@@ -666,13 +992,9 @@ export const Markdown = memo(function Markdown({
     >
       <IsStreamingContext.Provider value={!!isStreaming}>
         <MarkdownSourceContext.Provider value={source}>
-          <ReactMarkdown
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={rehypePlugins}
-            components={renderedComponents}
-          >
-            {renderedContent}
-          </ReactMarkdown>
+          <MarkdownDocumentContext.Provider value={renderedContent}>
+            {chartAwareMarkdown}
+          </MarkdownDocumentContext.Provider>
         </MarkdownSourceContext.Provider>
       </IsStreamingContext.Provider>
     </div>

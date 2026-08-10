@@ -1,0 +1,110 @@
+name: Termux CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  release-gate:
+    name: Linux / Node 22 / Termux release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      QWEN_SKIP_PREPARE: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify Termux patches
+        run: bash scripts/check-termux-patches.sh
+
+      - name: Lint
+        run: npm run lint:ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test:ci
+
+      - name: Bundle
+        run: npm run bundle
+
+      - name: No-credential integration
+        env:
+          HOME: ${{ runner.temp }}/qwen-no-ak-home
+          USERPROFILE: ${{ runner.temp }}/qwen-no-ak-home
+          QWEN_HOME: ${{ runner.temp }}/qwen-no-ak-home/.qwen
+        run: npm run test:integration:no-ak:sandbox:none
+
+      - name: Audit runtime dependencies
+        run: npm run audit:runtime:critical
+
+      - name: Prepare npm package
+        run: npm run prepare:package
+
+      - name: Pack exact artifact
+        id: pack
+        working-directory: dist
+        run: |
+          pack_json="$(npm pack --json)"
+          printf '%s\n' "${pack_json}"
+          filename="$(node -e 'process.stdout.write(JSON.parse(process.argv[1])[0].filename)' "${pack_json}")"
+          tarball="${PWD}/${filename}"
+          sha256="$(sha256sum "${tarball}" | cut -d' ' -f1)"
+          printf 'filename=%s\n' "${filename}" >> "${GITHUB_OUTPUT}"
+          printf 'tarball=%s\n' "${tarball}" >> "${GITHUB_OUTPUT}"
+          printf 'sha256=%s\n' "${sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke installed package
+        run: |
+          set -euo pipefail
+          smoke_prefix="${RUNNER_TEMP}/qwen-global"
+          install_log="${RUNNER_TEMP}/qwen-npm12-install.log"
+          # npm 12 cannot match allowScripts to a local tarball (npm/cli#9738).
+          # This isolated smoke executes the exact artifact built above; users
+          # install the registry package with the narrow README allowlist.
+          npx --yes npm@12.0.2 install --global \
+            --prefix "${smoke_prefix}" \
+            --foreground-scripts \
+            --dangerously-allow-all-scripts \
+            "${{ steps.pack.outputs.tarball }}" 2>&1 | tee "${install_log}"
+          ! grep -Fq 'had install scripts blocked' "${install_log}"
+          expected="$(node -p "require('./dist/package.json').version")"
+          actual="$("${smoke_prefix}/bin/qwen" --version)"
+          test "${actual}" = "${expected}"
+          "${smoke_prefix}/bin/qwen" --help >/dev/null
+
+      - name: Upload verified tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-code-termux-${{ github.sha }}
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 7

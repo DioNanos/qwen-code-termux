@@ -22,6 +22,7 @@ import {
   DiscoveredMCPTool,
   uiTelemetryService,
   getCoreSystemPrompt,
+  resolveInteractionMode,
   DEFAULT_TOKEN_LIMIT,
   ToolNames,
   buildSkillLlmContent,
@@ -115,15 +116,23 @@ export async function collectContextData(
   // to the global singleton only when no chat exists yet (first /context,
   // --continue resume before any send).
   const geminiClient = config.getGeminiClient?.();
-  const apiTotalTokens = geminiClient?.isInitialized?.()
-    ? geminiClient.getChat().getLastPromptTokenCount()
+  const activeChat = geminiClient?.isInitialized?.()
+    ? geminiClient.getChat()
+    : undefined;
+  const apiTotalTokens = activeChat
+    ? activeChat.getLastPromptTokenCount()
     : uiTelemetryService.getLastPromptTokenCount();
   // Cached-content tokens have no per-chat mirror today (only the global
   // singleton is written, geminiChat.ts), so this read stays global. It only
   // refines the messages-vs-cache split, not the headline total or tier.
   const apiCachedTokens = uiTelemetryService.getLastCachedContentTokenCount();
 
-  const systemPromptText = getCoreSystemPrompt(undefined, modelName);
+  const systemPromptText = getCoreSystemPrompt(
+    undefined,
+    modelName,
+    undefined,
+    resolveInteractionMode(config),
+  );
   const systemPromptTokens = estimateTokens(systemPromptText);
 
   const toolRegistry = config.getToolRegistry();
@@ -163,6 +172,13 @@ export async function collectContextData(
 
   const memoryContent = config.getUserMemory();
   const memoryFiles = parseMemoryFiles(memoryContent);
+  const autoMemoryPrompt = config.getAutoMemoryPrompt();
+  if (autoMemoryPrompt) {
+    memoryFiles.push({
+      path: t('auto memory'),
+      tokens: estimateTokens(autoMemoryPrompt),
+    });
+  }
   const memoryFilesTokens = memoryFiles.reduce((sum, f) => sum + f.tokens, 0);
 
   const skillTool = allTools.find((tool) => tool.name === ToolNames.SKILL);
@@ -223,7 +239,9 @@ export async function collectContextData(
     memoryFilesTokens +
     loadedBodiesTokens;
 
-  const isEstimated = apiTotalTokens === 0;
+  const hasTokenCount = apiTotalTokens > 0;
+  const isEstimated =
+    !hasTokenCount || activeChat?.isLastPromptTokenCountEstimated() === true;
 
   const mcpToolsTotalTokens = mcpTools.reduce(
     (sum, tool) => sum + tool.tokens,
@@ -243,7 +261,7 @@ export async function collectContextData(
   let detailMemoryFiles: ContextMemoryDetail[];
   let detailSkills: ContextSkillDetail[];
 
-  if (isEstimated) {
+  if (!hasTokenCount) {
     totalTokens = 0;
     displaySystemPrompt = systemPromptTokens;
     displaySkills = skillsTokens;
@@ -340,7 +358,7 @@ export async function collectContextData(
   // estimatePromptTokens(history, undefined, 0, 0, imageTokenEstimate) here
   // for same-source-of-truth as the cheap-gate. Defer because Config
   // doesn't expose the active chat instance today.
-  const tierTokens = isEstimated ? rawOverhead : apiTotalTokens;
+  const tierTokens = hasTokenCount ? apiTotalTokens : rawOverhead;
 
   const breakdown: ContextCategoryBreakdown = {
     systemPrompt: displaySystemPrompt,
@@ -422,12 +440,13 @@ export function formatContextUsageText(data: HistoryItemContextUsage): string {
     isEstimated,
     showDetails,
   } = data;
+  const hasTokenCount = totalTokens > 0;
 
   const lines: string[] = [];
   lines.push('## Context Usage');
   lines.push('');
 
-  if (isEstimated) {
+  if (!hasTokenCount) {
     lines.push('*No API response yet. Send a message to see actual usage.*');
     lines.push('');
     lines.push('**Estimated pre-conversation overhead**');
@@ -440,6 +459,12 @@ export function formatContextUsageText(data: HistoryItemContextUsage): string {
       `Model: ${modelName}  Context window: ${fmtTokens(contextWindowSize)} tokens`,
     );
     lines.push('');
+    if (isEstimated) {
+      lines.push(
+        '*Token usage is estimated until provider usage is received.*',
+      );
+      lines.push('');
+    }
     lines.push(fmtCategoryRow('Used', totalTokens, contextWindowSize));
     lines.push(fmtCategoryRow('Free', breakdown.freeSpace, contextWindowSize));
     lines.push('');
@@ -470,7 +495,7 @@ export function formatContextUsageText(data: HistoryItemContextUsage): string {
     fmtCategoryRow('Memory files', breakdown.memoryFiles, contextWindowSize),
   );
   lines.push(fmtCategoryRow('Skills', breakdown.skills, contextWindowSize));
-  if (!isEstimated) {
+  if (hasTokenCount) {
     lines.push(
       fmtCategoryRow('Messages', breakdown.messages, contextWindowSize),
     );

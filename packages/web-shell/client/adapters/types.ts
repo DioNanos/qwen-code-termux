@@ -61,9 +61,9 @@ export interface TurnCollapseHead {
    */
   elapsedMs?: number;
   /**
-   * Per-turn token usage, summed from the turn's assistant messages. Both fields
-   * are present together or the pair is undefined (older sessions stamp no
-   * usage). Sub-agent tokens are included (see the SDK reducer).
+   * Per-turn token usage, summed from the main assistant messages and root
+   * subagent execution summaries. Both fields are present together or the pair
+   * is undefined (older sessions stamp no usage).
    */
   inputTokens?: number;
   outputTokens?: number;
@@ -108,6 +108,10 @@ export interface PermissionRequest {
   toolKind?: string;
   /** Canonical tool name (from the ACP frame's `_meta.toolName`). */
   toolName?: string;
+  todoPlan?: {
+    planId: string;
+    sourceCallId: string;
+  };
   content: ContentBlock[];
   options: PermissionOption[];
   rawInput?: Record<string, unknown>;

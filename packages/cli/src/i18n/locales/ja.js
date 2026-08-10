@@ -18,7 +18,9 @@ export default {
   '@src/myFile.ts': '@src/myFile.ts',
   'Shell mode': 'シェルモード',
   'YOLO mode': 'YOLOモード',
-  'Auto mode': 'Autoモード',
+  'Auto mode': '自動モード',
+  'auto_mode.entry_notice':
+    '自動モードが有効です。\n   LLM 分類器が各ツール呼び出しを評価します — 安全な操作は自動承認され、\n   危険な操作はブロックされます。終了: Shift+Tab または /approval-mode default。',
   'plan mode': 'プランモード',
   'auto-accept edits': '編集を自動承認',
   'Accepting edits': '編集を承認中',
@@ -205,6 +207,40 @@ export default {
   'Delete {{name}}': '{{name}} を削除',
   'Unknown Step': '不明なステップ',
   'Esc to close': 'Esc で閉じる',
+  Transcript: 'トランスクリプト',
+  'Read {{count}} file': '{{count}} 件のファイルを読み込みました',
+  'Read {{count}} files': '{{count}} 件のファイルを読み込みました',
+  'Reading {{count}} file': '{{count}} 件のファイルを読み込み中',
+  'Reading {{count}} files': '{{count}} 件のファイルを読み込み中',
+  'Edited {{count}} file': '{{count}} 件のファイルを編集しました',
+  'Edited {{count}} files': '{{count}} 件のファイルを編集しました',
+  'Editing {{count}} file': '{{count}} 件のファイルを編集中',
+  'Editing {{count}} files': '{{count}} 件のファイルを編集中',
+  'Wrote {{count}} file': '{{count}} 件のファイルを書き込みました',
+  'Wrote {{count}} files': '{{count}} 件のファイルを書き込みました',
+  'Writing {{count}} file': '{{count}} 件のファイルを書き込み中',
+  'Writing {{count}} files': '{{count}} 件のファイルを書き込み中',
+  'Searched {{count}} pattern': '{{count}} 件のパターンを検索しました',
+  'Searched {{count}} patterns': '{{count}} 件のパターンを検索しました',
+  'Searching {{count}} pattern': '{{count}} 件のパターンを検索中',
+  'Searching {{count}} patterns': '{{count}} 件のパターンを検索中',
+  'Listed {{count}} directory': '{{count}} 件のディレクトリを一覧表示しました',
+  'Listed {{count}} directories':
+    '{{count}} 件のディレクトリを一覧表示しました',
+  'Listing {{count}} directory': '{{count}} 件のディレクトリを一覧表示中',
+  'Listing {{count}} directories': '{{count}} 件のディレクトリを一覧表示中',
+  'Ran {{count}} command': '{{count}} 件のコマンドを実行しました',
+  'Ran {{count}} commands': '{{count}} 件のコマンドを実行しました',
+  'Running {{count}} command': '{{count}} 件のコマンドを実行中',
+  'Running {{count}} commands': '{{count}} 件のコマンドを実行中',
+  'Ran {{count}} agent': '{{count}} 件のエージェントを実行しました',
+  'Ran {{count}} agents': '{{count}} 件のエージェントを実行しました',
+  'Running {{count}} agent': '{{count}} 件のエージェントを実行中',
+  'Running {{count}} agents': '{{count}} 件のエージェントを実行中',
+  'Used {{count}} tool': '{{count}} 件のツールを使用しました',
+  'Used {{count}} tools': '{{count}} 件のツールを使用しました',
+  'Using {{count}} tool': '{{count}} 件のツールを使用中',
+  'Using {{count}} tools': '{{count}} 件のツールを使用中',
   'Enter to select, ↑↓ to navigate, Esc to close':
     'Enter で選択、↑↓ で移動、Esc で閉じる',
   'Esc to go back': 'Esc で戻る',
@@ -357,6 +393,7 @@ export default {
   'Tool Output Truncation Lines': 'ツール出力の切り詰め行数',
   'Tool Schema Compliance': 'Tool Schema 準拠',
   'Auto (detect from system)': '自動(システムから検出)',
+  'Auto (follow user input)': '自動(ユーザー入力に従う)',
   'Auto (detect terminal theme)': '自動（端末テーマを検出）',
   Auto: '自動',
   'Show model-specific usage statistics.': 'モデル別の使用統計を表示',
@@ -544,8 +581,8 @@ export default {
     'コマンドへの入力は tool_name、tool_input、tool_use_id、error、error_type、is_interrupt、is_timeout を持つ JSON です。',
   'Input to command is JSON with notification message and type.':
     'コマンドへの入力は通知メッセージとタイプを持つ JSON です。',
-  'Input to command is JSON with original user prompt text.':
-    'コマンドへの入力は元のユーザープロンプトテキストを持つ JSON です。',
+  'Input to command is JSON with "prompt" (the current model-bound prompt) and optional "submitted_prompt" (the supported interactive TUI text projection).':
+    'コマンド入力は、"prompt"（現在のモデル向けプロンプト）と、オプションの "submitted_prompt"（サポート対象の対話型 TUI で入力されたテキストの投影）を含む JSON です。',
   'Input to command is JSON with command_name, command_args, and expanded prompt text.':
     'コマンドへの入力は command_name、command_args、展開後のプロンプトテキストを持つ JSON です。',
   'Input to command is JSON with session start source.':
@@ -726,6 +763,14 @@ export default {
   'Already generating summary, wait for previous request to complete':
     'サマリー生成中です。前のリクエストの完了をお待ちください',
   'No conversation found to summarize.': '要約する会話が見つかりません',
+  'Summary path already exists and is not a generated summary: {{path}}':
+    'サマリーパスは既に存在し、生成されたサマリーではありません: {{path}}',
+  'Summary path must be within the project root.':
+    'サマリーパスはプロジェクトルート内にある必要があります',
+  'Summary path resolves to an existing directory: {{path}}':
+    'サマリーパスは既存のディレクトリに解決されます: {{path}}',
+  'Summary path ends with a separator but is an existing file: {{path}}':
+    'サマリーパスは区切り文字で終わっていますが、既存のファイルです: {{path}}',
   'Failed to generate project context summary: {{error}}':
     'プロジェクトコンテキストサマリーの生成に失敗: {{error}}',
   'Saved project summary to {{filePathForDisplay}}.':
@@ -928,7 +973,16 @@ export default {
   'Approve or deny the request above':
     '上のリクエストを承認または拒否してください',
   Running: '実行中',
+  Pausing: '一時停止に移行中',
   Paused: '一時停止中',
+  'Pause is cooperative; in-flight work may finish before the workflow is paused. An agent call waiting on a tool approval keeps the run in this state and still counts against the active-time limit until the approval is answered.':
+    '一時停止は協調的です。ワークフローが一時停止される前に、実行中の作業が完了する場合があります。ツール承認を待っているエージェント呼び出しは実行をこの状態に留め、承認に応答するまでアクティブ時間の上限に加算され続けます。',
+  'Paused: no new agents will start; script code between agent calls keeps running. Press p to resume. /clear, /branch, and switching sessions cancel paused runs.':
+    '一時停止中：新しいエージェントは開始されません。エージェント呼び出し間のスクリプトコードは実行を続けます。再開するには p を押してください。/clear、/branch、またはセッションを切り替えると、一時停止中の実行はキャンセルされます。',
+  'Pause/resume was rejected; the workflow state changed. Try again.':
+    '一時停止／再開は拒否されました。ワークフローの状態が変化しました。もう一度お試しください。',
+  'Tip: use `/workflows p <runId>` or Background tasks + p to cooperatively pause/resume; use `/workflows <runId>` for details.':
+    'ヒント：`/workflows p <runId>` またはバックグラウンドタスク + p で実行を協調的に一時停止／再開できます。詳細は `/workflows <runId>` で確認できます。',
   Completed: '完了',
   Failed: '失敗',
   Stopped: '停止済み',
@@ -1139,8 +1193,6 @@ export default {
     'Tab または /approval-mode で権限モードをすばやく切り替えられます。',
   'Try /insight to generate personalized insights from your chat history.':
     '/insight でチャット履歴からパーソナライズされたインサイトを生成できます。',
-  'Press Ctrl+O to toggle compact mode — hide tool output and thinking for a cleaner view.':
-    'Ctrl+O でコンパクトモードを切り替え — ツール出力と思考を非表示にしてすっきり表示。',
   'Add a QWEN.md file to give Qwen Code persistent project context.':
     'QWEN.md ファイルを追加すると、Qwen Code に永続的なプロジェクトコンテキストを与えられます。',
   'Use /btw to ask a quick side question without disrupting the conversation.':
@@ -1162,6 +1214,11 @@ export default {
   reviewed: 'レビュー済み',
   'Code Changes:': 'コード変更:',
   Performance: 'パフォーマンス',
+  'Generation Metrics': '生成メトリクス',
+  'Latest Request': '最新のリクエスト',
+  'Generation Time': '生成時間',
+  'Average TTFT': '平均 TTFT',
+  'Session TPS': 'セッション TPS',
   'Wall Time:': '経過時間:',
   'Agent Active:': 'エージェント稼働時間:',
   'API Time:': 'API時間:',
@@ -1406,10 +1463,7 @@ export default {
     'Rawモードが利用できません。インタラクティブターミナルで実行してください。',
   '(Use ↑ ↓ arrows to navigate, Enter to select, Ctrl+C to exit)\n':
     '(↑ ↓ 矢印キーで移動、Enter で選択、Ctrl+C で終了)\n',
-  'to toggle compact mode': 'コンパクトモードの切り替え',
-  'Hide tool output and thinking for a cleaner view (toggle with Ctrl+O).':
-    'コンパクトモードでツール出力と思考を非表示にします（Ctrl+O で切り替え）。',
-  'Press Ctrl+O to show full tool output': 'Ctrl+O で完全なツール出力を表示',
+  'to expand details': '詳細を展開',
   'Switch to plan mode or exit plan mode':
     'プランモードに切り替えるか、プランモードを終了する',
   'Set how hard reasoning-capable models think ({{tiers}}); mapped and clamped per provider.':
@@ -1453,6 +1507,7 @@ export default {
   'to paste images': '画像を貼り付け',
   'for external editor': '外部エディタ用',
   '? for shortcuts': '? でショートカット表示',
+  'Pasting…': '貼り付け中…',
   'Invalid approval mode "{{arg}}". Valid modes: {{modes}}':
     '無効な承認モード "{{arg}}" です。有効なモード: {{modes}}',
   'Approval mode set to "{{mode}}"': '承認モードを "{{mode}}" に設定しました',
@@ -1652,7 +1707,7 @@ export default {
     'アンインストールする拡張機能名を位置引数として指定してください。',
   'Enables an extension.': '拡張機能を有効にします。',
   'The name of the extension to enable.': '有効化する拡張機能の名前。',
-  'The scope to enable the extenison in. If not set, will be enabled in all scopes.':
+  'The scope to enable the extension in. If not set, will be enabled in all scopes.':
     '拡張機能を有効化するスコープ。未指定の場合はすべてのスコープで有効化されます。',
   'Extension "{{name}}" successfully enabled for scope "{{scope}}".':
     'スコープ "{{scope}}" で拡張機能 "{{name}}" を正常に有効化しました。',
@@ -1662,7 +1717,7 @@ export default {
     '無効なスコープです: {{scope}}。{{scopes}} のいずれかを指定してください。',
   'Disables an extension.': '拡張機能を無効にします。',
   'The name of the extension to disable.': '無効化する拡張機能の名前。',
-  'The scope to disable the extenison in.': '拡張機能を無効化するスコープ。',
+  'The scope to disable the extension in.': '拡張機能を無効化するスコープ。',
   'Extension "{{name}}" successfully disabled for scope "{{scope}}".':
     'スコープ "{{scope}}" で拡張機能 "{{name}}" を正常に無効化しました。',
   'Extension "{{name}}" successfully updated: {{oldVersion}} → {{newVersion}}.':
@@ -1877,8 +1932,14 @@ export default {
   'A new version of Qwen Code is available! {{current}} → {{latest}}':
     'Qwen Code の新しいバージョンがあります！{{current}} → {{latest}}',
   'Qwen Code {{version}} is up to date!': 'Qwen Code {{version}} は最新です！',
-  'Failed to check for updates. Please check your network or registry configuration.':
-    'アップデートの確認に失敗しました。ネットワークまたはレジストリ設定を確認してください。',
+  'Failed to check for updates ({{reason}}). Please check your network or registry configuration.':
+    'アップデートの確認に失敗しました（{{reason}}）。ネットワークまたはレジストリ設定を確認してください。',
+  'Update check skipped ({{reason}}) — run /update to retry.':
+    'アップデートの確認をスキップしました（{{reason}}）— /update で再試行できます。',
+  'registry did not respond within {{seconds}}s':
+    'レジストリが {{seconds}} 秒以内に応答しませんでした',
+  'registry unreachable': 'レジストリに接続できません',
+  'registry error': 'レジストリエラー',
   'Unable to check for updates: {{reason}}':
     'アップデートを確認できません: {{reason}}',
   'Update successful! The new version will be used on your next run.':
@@ -1917,6 +1978,16 @@ export default {
     'このスタンドアロンインストールを自動更新できません。以下から再インストールしてください：',
   'Manual update required. Please reinstall Qwen Code.':
     '手動更新が必要です。Qwen Codeを再インストールしてください。',
+  'This session uses the custom sandbox image {{image}}. Update that image and restart Qwen Code.':
+    'このセッションではカスタムサンドボックスイメージ {{image}} を使用しています。イメージを更新して Qwen Code を再起動してください。',
+  'Update Qwen Code on the host, then restart the sandbox.':
+    'ホスト上の Qwen Code を更新してから、サンドボックスを再起動してください。',
+  'The update will be installed after you exit this session.':
+    'このセッションを終了すると、更新が自動的にインストールされます。',
+  'Run /update to install the update on the host.':
+    '/update を実行してホストに更新をインストールしてください。',
+  'Run /update to install the update.':
+    '/update を実行して更新をインストールしてください。',
 
   // ============================================================================
   // reload-plugins command
@@ -1947,4 +2018,68 @@ export default {
     'Failed to refresh extension content. Run /reload-plugins to apply updates.',
   'Extension reload did not complete. Run /reload-plugins to try again.':
     'Extension reload did not complete. Run /reload-plugins to try again.',
+  'Session recording stopped after a write failure. New messages for the affected session will not be saved. Check disk space and permissions, then start a new session to resume recording. See the debug log for details.':
+    '書き込みに失敗したため、セッションの記録を停止しました。影響を受けたセッションの新しいメッセージは保存されません。ディスク容量と権限を確認してから、新しいセッションを開始して記録を再開してください。詳細はデバッグログを確認してください。',
+  'Session recording stopped after a write failure. New messages for the affected session will not be saved. Check disk space and permissions, then run `/clear` to start a new recorded session. See the debug log for details.':
+    '書き込みに失敗したため、セッションの記録を停止しました。影響を受けたセッションの新しいメッセージは保存されません。ディスク容量と権限を確認してから、`/clear` を実行して記録可能な新しいセッションを開始してください。詳細はデバッグログを確認してください。',
+
+  // ==========================================================================
+  // Auto-skill curator (/curator command)
+  // ==========================================================================
+  'Maintain project auto-skills based on recent use.':
+    '最近の使用状況に基づいてプロジェクトの自動スキルを管理します。',
+  'Show project auto-skill lifecycle status.':
+    'プロジェクトの自動スキルのライフサイクル状態を表示します。',
+  'Run project auto-skill lifecycle maintenance.':
+    'プロジェクトの自動スキルのライフサイクル保守を実行します。',
+  'Restore an archived project auto-skill.':
+    'アーカイブ済みのプロジェクト自動スキルを復元します。',
+  'Auto-skill curator': '自動スキル管理',
+  'Last run: {{time}}': '前回の実行：{{time}}',
+  'Active: {{count}}': '有効：{{count}}',
+  'Stale: {{count}}': '非アクティブ：{{count}}',
+  'Archived: {{count}}': 'アーカイブ済み：{{count}}',
+  'Stale skills:': '非アクティブなスキル：',
+  'Pinned skills:': '固定済みのスキル：',
+  'Archived skills:': 'アーカイブ済みのスキル：',
+  'Dry run complete.': 'ドライランが完了しました。',
+  'Curator run complete.': '自動スキル管理の実行が完了しました。',
+  'Checked: {{count}}': '確認済み：{{count}}',
+  'First observed: {{count}}': '初回検出：{{count}}',
+  'Marked stale: {{count}}': '非アクティブ化：{{count}}',
+  'Reactivated: {{count}}': '再有効化：{{count}}',
+  'Skipped archive collisions: {{count}}':
+    'スキップしたアーカイブ先の競合：{{count}}',
+  'Archive candidates:': 'アーカイブ候補：',
+  'Skipped archive collisions:': 'スキップしたアーカイブ先の競合：',
+  'Skipped rename errors: {{count}}': 'スキップした名前変更エラー：{{count}}',
+  'Skipped rename errors:': 'スキップした名前変更エラー：',
+  '{{verb}}: {{count}}': '{{verb}}：{{count}}',
+  'Would archive': 'アーカイブ予定',
+  Archived: 'アーカイブ済み',
+  'Failed to read auto-skill curator status: {{message}}':
+    '自動スキル管理の状態を読み取れませんでした：{{message}}',
+  'Usage: /curator run [--dry-run]': '使用方法：/curator run [--dry-run]',
+  'Failed to run auto-skill curator: {{message}}':
+    '自動スキル管理を実行できませんでした：{{message}}',
+  'Usage: /curator restore <directory>':
+    '使用方法：/curator restore <ディレクトリ>',
+  'Restored auto-skill: {{name}}': '自動スキルを復元しました：{{name}}',
+  'Failed to restore auto-skill: {{message}}':
+    '自動スキルを復元できませんでした：{{message}}',
+  'Exclude an auto-skill from automatic maintenance.':
+    '自動スキルを自動保守の対象外にします。',
+  'Return a pinned auto-skill to automatic maintenance.':
+    '固定済みの自動スキルを自動保守の対象に戻します。',
+  'Usage: /curator pin <directory>': '使用方法：/curator pin <ディレクトリ>',
+  'Usage: /curator unpin <directory>':
+    '使用方法：/curator unpin <ディレクトリ>',
+  'Pinned auto-skill: {{name}}': '自動スキルを固定しました：{{name}}',
+  'Unpinned auto-skill: {{name}}': '自動スキルの固定を解除しました：{{name}}',
+  'Failed to update auto-skill pin: {{message}}':
+    '自動スキルの固定状態を更新できませんでした：{{message}}',
+  'Auto-skill curator changes are disabled in safe mode.':
+    'セーフモードでは自動スキル管理による変更は無効です。',
+  'Auto-skill curator changes are only available in trusted workspaces. Trust this folder via `/trust` and try again.':
+    '自動スキル管理による変更は信頼済みのワークスペースでのみ利用できます。`/trust` でこのフォルダーを信頼してから、もう一度お試しください。',
 };

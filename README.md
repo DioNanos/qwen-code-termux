@@ -15,16 +15,25 @@
 pkg update && pkg upgrade -y
 pkg install nodejs-lts -y
 pkg install termux-api -y   # optional, only for TTS notifications
-npm install -g @mmmbuto/qwen-code-termux@latest
+npm install -g \
+  --allow-scripts=@mmmbuto/qwen-code-termux,@mmmbuto/node-pty-android-arm64,sharp \
+  @mmmbuto/qwen-code-termux@latest
+hash -r
 qwen --version
 ```
+
+npm 12 blocks install scripts by default. The narrow allowlist above permits
+only the fork's reviewed wrapper repair and its two native Termux dependency
+installers. If npm 12 previously installed the package without running those
+scripts, rerun the same command; do not replace the allowlist with a blanket
+script override.
 
 Requirements:
 
 - Android 7+ / API 24+
 - ARM64 device
 - Termux from F-Droid (Google Play build is outdated)
-- Node.js >= 20
+- Node.js >= 22
 
 ### Other platforms
 
@@ -58,7 +67,9 @@ What this fork does not do:
 - `tts_notification` tool backed by `termux-tts-speak` (requires `termux-api`)
 - `DEP0169` (`url.parse` deprecation) warning suppression in the CLI entry point
 - install / update commands point users at `@mmmbuto/qwen-code-termux`
-- `postinstall` + `prepare-termux` scripts skip husky and the bundle step inside Termux
+- managed background npm updates remain pinned to the fork package
+- when npm lifecycle scripts are authorized, `postinstall` safely moves an exact orphaned upstream standalone wrapper out of PATH after the npm launcher is ready; the original is retained as `qwen.qwen-code-termux-orphan`
+- `prepare-termux` skips husky and the bundle step inside Termux
 - npm package metadata published under `@mmmbuto/qwen-code-termux`
 
 Fork delta is verifiable end-to-end with:
@@ -67,12 +78,16 @@ Fork delta is verifiable end-to-end with:
 bash scripts/check-termux-patches.sh
 ```
 
-(17 markers across `getPty.ts`, `termux-detect.ts`, `termux-runtime.ts`, `tts-notification.ts`, `cli/index.ts`, `installationInfo.ts`, `scripts/`, `package.json`)
+(21 markers across `getPty.ts`, `termux-detect.ts`, `termux-runtime.ts`, `tts-notification.ts`, `cli/index.ts`, `installationInfo.ts`, `managed-npm-update.ts`, `scripts/`, `package.json`)
+
+If `qwen` still resolves to a shell-cached path after upgrading from the
+upstream standalone installer, run `hash -r` and verify the active launchers
+with `type -a qwen`.
 
 ## Releases and Updates
 
 - Latest GitHub release: [releases/latest](https://github.com/DioNanos/qwen-code-termux/releases/latest)
-- Upstream baseline: [`QwenLM/qwen-code` v0.19.8](https://github.com/QwenLM/qwen-code/releases/tag/v0.19.8), packaged as `0.19.8-termux` (npm `next`; promoted to `latest` after validation)
+- Upstream baseline: [`QwenLM/qwen-code` v0.21.8](https://github.com/QwenLM/qwen-code/releases/tag/v0.21.8), packaged as `0.21.8-termux`
 - npm package: [`@mmmbuto/qwen-code-termux`](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
 
 Maintainer publish flow:
@@ -80,10 +95,12 @@ Maintainer publish flow:
 - merge upstream release tag into `develop`
 - verify the Termux delta with `scripts/check-termux-patches.sh`
 - build, bundle, prepare:package, smoke `qwen --version`
-- publish the tested npm tarball to `latest`
-- promote the tested commit to clean GitHub `main`
-- publish the GitHub release from `main` with the tarball asset
-- add post-release Termux validation reports after on-device testing
+- promote the tested commit to clean GitHub `main` and wait for Termux CI
+- stage the exact audited npm tarball on `next`
+- install that registry version on a real Termux device with the narrow script
+  allowlist, then promote the same version to `latest`
+- publish the GitHub release from `main` with the exact tarball and checksum
+- add the verified on-device report to the release documentation
 
 ## Authentication
 

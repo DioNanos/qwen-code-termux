@@ -168,6 +168,7 @@ describe('localizeToolDisplayName', () => {
     // The namespaced `toolDisplayName.*` key translates the badge...
     expect(localizeToolDisplayName('Shell')).toBe('运行命令');
     expect(localizeToolDisplayName('TodoList')).toBe('任务清单');
+    expect(localizeToolDisplayName('TTS Notification')).toBe('语音通知');
     // Proper tool names / acronyms are intentionally kept in English.
     expect(localizeToolDisplayName('Agent')).toBe('Agent');
     expect(localizeToolDisplayName('Grep')).toBe('Grep');

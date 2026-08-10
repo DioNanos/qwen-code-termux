@@ -7,6 +7,7 @@
 import type {
   ToolCallRequestInfo,
   ToolCallResponseInfo,
+  ToolExecutionStatus,
   ToolCallConfirmationDetails,
   ToolResult,
   ToolResultDisplay,
@@ -20,6 +21,7 @@ import type {
   ToolArtifact,
 } from '../index.js';
 import { createDebugLogger } from '../utils/debugLogger.js';
+import { sanitizeToolNameForProvider } from '../utils/tool-name-utils.js';
 import { compactToolResultDisplayForHistory } from '../utils/toolResultDisplayCompaction.js';
 import {
   generateToolUseId,
@@ -40,6 +42,10 @@ import {
   TOOL_OUTPUT_TRUNCATED_PREFIX,
 } from '../utils/truncation.js';
 import {
+  finalizeToolResponses,
+  toolResponseTextLength,
+} from '../utils/tool-response-finalizer.js';
+import {
   ToolConfirmationOutcome,
   ApprovalMode,
   logToolCall,
@@ -55,18 +61,24 @@ import type {
   PartListUnion,
 } from '@google/genai';
 import { fileURLToPath } from 'node:url';
-import { ToolNames, ToolNamesMigration } from '../tools/tool-names.js';
+import { ToolNames, canonicalToolName } from '../tools/tool-names.js';
+import { PLAN_EXIT_APPROVED_LLM_CONTENT_PREFIXES } from '../tools/exitPlanMode.js';
+import { approvedPlanRedactionText } from './geminiChat.js';
+import * as fsSync from 'node:fs';
 import {
   collectAvailableSkillEntries,
   renderAvailableSkillsBlock,
   type AvailableSkillEntry,
 } from '../tools/skill-utils.js';
 import { escapeSystemReminderTags } from '../utils/xml.js';
+import {
+  promptIdContext,
+  todoWorkChainContext,
+} from '../utils/promptIdContext.js';
 import { unescapePath, PATH_ARG_KEYS } from '../utils/paths.js';
 import type { MemoryPressureMonitor } from '../services/memoryPressureMonitor.js';
-import { CONCURRENCY_SAFE_KINDS } from '../tools/tools.js';
+import { CONCURRENCY_SAFE_KINDS, isShellProgressData } from '../tools/tools.js';
 import { isShellCommandReadOnly } from '../utils/shellReadOnlyChecker.js';
-import { stripShellWrapper } from '../utils/shell-utils.js';
 import { parsePositiveIntegerEnv } from '../utils/env.js';
 import {
   isAlreadyTruncated,
@@ -84,7 +96,18 @@ import {
   isAutoEditApproved,
 } from './permissionFlow.js';
 import {
+  decoratePlanModeShellConfirmation,
+  evaluatePlanModeShellPolicy,
+  validatePlanModeShellApproval,
+  validatePlanModeShellContext,
+} from './plan-mode-shell-policy.js';
+import {
+  findPlanModeEntryBatchBoundaryIndex,
+  PLAN_MODE_ENTRY_SIBLING_SKIP_MESSAGE,
+} from './plan-mode-entry-policy.js';
+import {
   applyAutoModeDecision,
+  decorateClassifierUnavailableConfirmation,
   evaluateAutoMode,
   getAutoModePermissionDeniedReason,
   shouldClassifyAllShellForAutoMode,
@@ -101,7 +124,10 @@ import {
   recordFallbackApprove,
   shouldFallback,
 } from '../permissions/denialTracking.js';
-import { getResponseTextFromParts } from '../utils/generateContentResponseUtilities.js';
+import {
+  getResponseTextFromParts,
+  TOOL_SUCCEEDED_OUTPUT,
+} from '../utils/generateContentResponseUtilities.js';
 import type { ModifyContext } from '../tools/modifiable-tool.js';
 import {
   isModifiableDeclarativeTool,
@@ -109,8 +135,8 @@ import {
 } from '../tools/modifiable-tool.js';
 import * as Diff from 'diff';
 import levenshtein from 'fast-levenshtein';
-import { getPlanModeSystemReminder } from './prompts.js';
 import { ShellToolInvocation } from '../tools/shell.js';
+import { DiscoveredMCPTool } from '../tools/mcp-tool.js';
 import { IdeClient } from '../ide/ide-client.js';
 import {
   getPlanRequiredTeammatePreApprovalMessage,
@@ -119,6 +145,21 @@ import {
   shouldUsePlanOnlyReminderInSubagentContext,
 } from '../agents/runtime/subagent-plan-tool-policy.js';
 import { safeSetStatus } from '../telemetry/tracer.js';
+import {
+  TOOL_FAILURE_KIND_ATTRIBUTE,
+  TOOL_FAILURE_KIND_BACKGROUND_AGENT_DENIED,
+  TOOL_FAILURE_KIND_CANCELLED,
+  TOOL_FAILURE_KIND_INVOCATION_GUARD_DENIED,
+  TOOL_FAILURE_KIND_NON_INTERACTIVE_DENIED,
+  TOOL_FAILURE_KIND_PERMISSION_DENIED,
+  TOOL_FAILURE_KIND_PERMISSION_HOOK_DENIED,
+  TOOL_FAILURE_KIND_PLAN_MODE_BLOCKED,
+  TOOL_FAILURE_KIND_POST_HOOK_STOPPED,
+  TOOL_FAILURE_KIND_PRE_HOOK_BLOCKED,
+  TOOL_FAILURE_KIND_TIMEOUT,
+  TOOL_FAILURE_KIND_TOOL_ERROR,
+  TOOL_FAILURE_KIND_TOOL_EXCEPTION,
+} from '../telemetry/constants.js';
 import { SpanStatusCode, type Span } from '@opentelemetry/api';
 import {
   startToolSpan,
@@ -130,16 +171,31 @@ import {
   endToolBlockedOnUserSpan,
   startHookSpan,
   endHookSpan,
-  addToolInputAttributes,
-  addToolResultAttributes,
+  addToolArgumentsAttributes,
+  addToolCallResultAttributes,
   truncateSpanError,
   type ToolBlockedDecision,
   type ToolBlockedSource,
   type StartHookSpanOptions,
   type HookSpanMetadata,
 } from '../telemetry/index.js';
-import { safeJsonStringify } from '../utils/safeJsonStringify.js';
 import { acquireSleepInhibitor } from '../services/sleepInhibitor.js';
+import {
+  getRuntimeContentGenerator,
+  runWithRuntimeContentGenerator,
+  type RuntimeContentGeneratorView,
+} from '../agents/runtime/agent-context.js';
+import {
+  isImagePart,
+  normalizeParts,
+} from '../services/visionBridge/image-part-utils.js';
+import { bridgeToolResultImages } from '../services/visionBridge/tool-result-vision-bridge.js';
+import {
+  getInvocationContext,
+  runWithInvocationContext,
+} from '../utils/invocation-context.js';
+import { evaluateToolInvocationGuard } from './tool-invocation-guard.js';
+import { goalTurnContext } from '../goals/goal-turn-context.js';
 
 const debugLogger = createDebugLogger('TOOL_SCHEDULER');
 
@@ -163,19 +219,28 @@ function dedupeRequestsByCallId(
   return deduped;
 }
 
+function runInRequestGoalContext<T>(
+  request: ToolCallRequestInfo,
+  callback: () => T,
+): T {
+  return request.goalContext
+    ? goalTurnContext.run(request.goalContext, callback)
+    : goalTurnContext.exit(callback);
+}
+
 // Gap between the persistence gate and per-tool truncation thresholds.
 // Tools that self-truncate to ~25K add headers bringing output to ~25.4K;
 // the headroom ensures the gate only fires for genuinely un-truncated output
 // and must exceed the stub size (~2.3K) to avoid cascading re-persistence.
 const GATE_HEADROOM = 3000;
-// Tools that bound their own output and must bypass the persistence gate.
-// read_file pages/truncates itself; read_mcp_resource caps text in
-// formatMcpResourceContents and sets maxOutputChars=Infinity — but this gate
-// runs first, so without the exemption a 28k–100k resource is spilled to a
-// stub before that self-cap takes effect and the model never sees the body.
+// Tools whose output must bypass the persistence gate. read_file pages itself,
+// and read_mcp_resource caps text in formatMcpResourceContents. enter_plan_mode
+// returns lifecycle policy that must remain inline. This gate runs before
+// per-tool limits, so each requires an explicit exemption here.
 const GATE_EXEMPT_TOOLS = new Set<string>([
   ToolNames.READ_FILE,
   ToolNames.READ_MCP_RESOURCE,
+  ToolNames.ENTER_PLAN_MODE,
 ]);
 
 function extractTextFromPartListUnion(c: PartListUnion): string {
@@ -198,6 +263,7 @@ function extractTextFromPartListUnion(c: PartListUnion): string {
       const resp = fr?.response;
       if (resp) {
         if (typeof resp['output'] === 'string') return resp['output'];
+        if (typeof resp['error'] === 'string') return resp['error'];
         if (typeof resp['content'] === 'string') return resp['content'];
       }
     }
@@ -205,22 +271,9 @@ function extractTextFromPartListUnion(c: PartListUnion): string {
   return '';
 }
 
-const TOOL_FAILURE_KIND_ATTRIBUTE = 'tool.failure_kind';
-const TOOL_FAILURE_KIND_PRE_HOOK_BLOCKED = 'pre_hook_blocked';
-const TOOL_FAILURE_KIND_POST_HOOK_STOPPED = 'post_hook_stopped';
-const TOOL_FAILURE_KIND_TOOL_ERROR = 'tool_error';
-const TOOL_FAILURE_KIND_TOOL_EXCEPTION = 'tool_exception';
-const TOOL_FAILURE_KIND_CANCELLED = 'cancelled';
-// Approval-flow failure kinds — distinct from `pre_hook_blocked` (which
-// only applies to actual PreToolUse hook denials in `_executeToolCallBody`)
-// so dashboards can attribute denies to their real cause (#4321 review).
-const TOOL_FAILURE_KIND_PERMISSION_DENIED = 'permission_denied';
-const TOOL_FAILURE_KIND_PERMISSION_HOOK_DENIED = 'permission_hook_denied';
-const TOOL_FAILURE_KIND_PLAN_MODE_BLOCKED = 'plan_mode_blocked';
-const TOOL_FAILURE_KIND_NON_INTERACTIVE_DENIED = 'non_interactive_denied';
-const TOOL_FAILURE_KIND_BACKGROUND_AGENT_DENIED = 'background_agent_denied';
-
 const TOOL_SPAN_STATUS_PRE_HOOK_BLOCKED = 'Tool execution blocked by hook';
+const TOOL_SPAN_STATUS_INVOCATION_GUARD_DENIED =
+  'Tool execution blocked by host policy';
 
 const TOOL_SPAN_STATUS_POST_HOOK_STOPPED = 'Tool execution stopped by hook';
 const TOOL_SPAN_STATUS_PERMISSION_DENIED = 'Permission denied for tool';
@@ -236,10 +289,17 @@ const TOOL_SPAN_STATUS_TOOL_ERROR = 'Tool execution failed';
 const TOOL_SPAN_STATUS_TOOL_EXCEPTION = 'Tool execution failed with exception';
 const TOOL_SPAN_STATUS_TOOL_CANCELLED = 'Tool execution cancelled by user';
 
-// Timeout-specific observability constants — distinguish timeouts from
-// generic tool errors in OTel traces.
-const TOOL_FAILURE_KIND_TIMEOUT = 'timeout';
 const TOOL_SPAN_STATUS_TOOL_TIMEOUT = 'Tool execution timed out';
+
+// The cancellation notice handed to the model depends on whether the tool's
+// work actually finished. Claiming a tool "already completed" when it was
+// interrupted mid-flight makes the model skip work that never happened; the
+// converse makes it redo work whose side effects already landed. Both sites
+// that can cancel after `execute()` was entered must pick the right one.
+const TOOL_CANCELLED_BEFORE_COMPLETION_MESSAGE =
+  'User cancelled tool execution.';
+const TOOL_CANCELLED_AFTER_COMPLETION_MESSAGE =
+  'The tool had already completed; its output was discarded.';
 
 /**
  * Builds the failure ToolResult surfaced when a tool call exceeds the
@@ -364,6 +424,10 @@ export type ScheduledToolCall = {
   outcome?: ToolConfirmationOutcome;
 };
 
+type CoreToolCallResponseInfo = ToolCallResponseInfo & {
+  executionStatus: ToolExecutionStatus;
+};
+
 export type ErroredToolCall = {
   status: 'error';
   request: ToolCallRequestInfo;
@@ -415,8 +479,8 @@ export type CancelledToolCall = {
   status: 'cancelled';
   request: ToolCallRequestInfo;
   response: ToolCallResponseInfo;
-  tool: AnyDeclarativeTool;
-  invocation: AnyToolInvocation;
+  tool?: AnyDeclarativeTool;
+  invocation?: AnyToolInvocation;
   durationMs?: number;
   outcome?: ToolConfirmationOutcome;
 };
@@ -463,6 +527,7 @@ export type CompletedToolCall =
  */
 const FS_PATH_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   ToolNames.READ_FILE,
+  ToolNames.ZOOM_IMAGE,
   ToolNames.EDIT,
   ToolNames.WRITE_FILE,
   ToolNames.GREP,
@@ -470,11 +535,8 @@ const FS_PATH_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   ToolNames.LS,
   ToolNames.LSP,
   ToolNames.NOTEBOOK_EDIT,
+  ToolNames.DISPLAY_IMAGE,
 ]);
-
-function canonicalToolName(toolName: string): string {
-  return (ToolNamesMigration as Record<string, string>)[toolName] ?? toolName;
-}
 
 function isFilesystemPathTool(toolName: string): boolean {
   return FS_PATH_TOOL_NAMES.has(canonicalToolName(toolName));
@@ -538,7 +600,7 @@ function pushLspPathCandidate(out: string[], v: unknown): void {
  * Pull the filesystem path-bearing fields out of a tool's input.
  * Per-tool dispatcher because the field name and shape differ:
  *
- *  - read_file / edit / write_file → `file_path`
+ *  - read_file / zoom_image / edit / write_file → `file_path`
  *  - notebook_edit → `notebook_path`
  *  - list_directory → `path` (search root)
  *  - glob → `path` (search root, optional) + `pattern` (path-shaped
@@ -657,8 +719,10 @@ export function extractToolFilePaths(
       return out;
 
     case ToolNames.READ_FILE:
+    case ToolNames.ZOOM_IMAGE:
     case ToolNames.EDIT:
     case ToolNames.WRITE_FILE:
+    case ToolNames.DISPLAY_IMAGE:
       push(obj['file_path']);
       return out;
 
@@ -741,7 +805,7 @@ export function convertToFunctionResponse(
     }
 
     const output =
-      textParts.length > 0 ? textParts.join('\n') : 'Tool execution succeeded.';
+      textParts.length > 0 ? textParts.join('\n') : TOOL_SUCCEEDED_OUTPUT;
     return [createFunctionResponsePart(callId, toolName, output, mediaParts)];
   }
 
@@ -783,9 +847,40 @@ export function convertToFunctionResponse(
   }
 
   // Default case for other kinds of parts.
-  return [
-    createFunctionResponsePart(callId, toolName, 'Tool execution succeeded.'),
-  ];
+  return [createFunctionResponsePart(callId, toolName, TOOL_SUCCEEDED_OUTPUT)];
+}
+
+export function convertToFunctionErrorResponse(
+  toolName: string,
+  callId: string,
+  llmContent: PartListUnion,
+  fallbackError: string,
+): Part[] {
+  return convertToFunctionResponse(toolName, callId, llmContent).map((part) => {
+    const functionResponse = part.functionResponse;
+    if (!functionResponse) return part;
+
+    const response = functionResponse.response ?? {};
+    const existingError = response['error'];
+    const output = response['output'];
+    const error =
+      typeof existingError === 'string' && existingError.trim()
+        ? existingError
+        : typeof output === 'string' &&
+            output.trim() &&
+            output !== TOOL_SUCCEEDED_OUTPUT
+          ? output
+          : fallbackError;
+    const { output: _output, ...responseWithoutOutput } = response;
+
+    return {
+      ...part,
+      functionResponse: {
+        ...functionResponse,
+        response: { ...responseWithoutOutput, error },
+      },
+    };
+  });
 }
 
 function toParts(input: PartListUnion): Part[] {
@@ -798,24 +893,6 @@ function toParts(input: PartListUnion): Part[] {
     }
   }
   return parts;
-}
-
-/**
- * Per-message offload: when a batch of tool results collectively exceeds the
- * budget, the largest results are spilled to disk and replaced with a small
- * preview + recoverable pointer. This is the preview size used for that spill.
- */
-const BATCH_OFFLOAD_PREVIEW_CHARS = 2000;
-
-/** Total model-facing string output across a completed call's responseParts. */
-function batchResponseOutputSize(call: CompletedToolCall): number {
-  if (call.status !== 'success') return 0;
-  let size = 0;
-  for (const part of call.response.responseParts) {
-    const output = part.functionResponse?.response?.['output'];
-    if (typeof output === 'string') size += output.length;
-  }
-  return size;
 }
 
 const VALIDATION_RETRY_LOOP_THRESHOLD = 3;
@@ -840,9 +917,11 @@ const TRUNCATION_RETRY_LOOP_DIRECTIVE =
 const createErrorResponse = (
   request: ToolCallRequestInfo,
   error: Error,
-  errorType: ToolErrorType | undefined,
+  errorType: ToolErrorType,
+  executionStatus: ToolExecutionStatus,
   artifacts?: ToolArtifact[],
-): ToolCallResponseInfo => ({
+  resultDisplay?: ToolResultDisplay,
+): CoreToolCallResponseInfo => ({
   callId: request.callId,
   error,
   responseParts: [
@@ -854,8 +933,9 @@ const createErrorResponse = (
       },
     },
   ],
-  resultDisplay: error.message,
+  resultDisplay: resultDisplay ?? error.message,
   errorType,
+  executionStatus,
   contentLength: error.message.length,
   ...(artifacts && artifacts.length > 0 ? { artifacts } : {}),
 });
@@ -863,8 +943,13 @@ const createErrorResponse = (
 const createCancelledResponse = (
   request: ToolCallRequestInfo,
   reason: string,
+  executionStatus: ToolExecutionStatus,
   artifacts?: ToolArtifact[],
-): ToolCallResponseInfo => {
+  // Disk references and bridge notices survive cancellation: dropping the
+  // model-visible output must not orphan files already persisted to disk.
+  persistedOutputFiles?: string[],
+  visionBridgeNotice?: string,
+): CoreToolCallResponseInfo => {
   const errorMessage = `[Operation Cancelled] Reason: ${reason}`;
   return {
     callId: request.callId,
@@ -880,8 +965,11 @@ const createCancelledResponse = (
     resultDisplay: undefined,
     error: undefined,
     errorType: undefined,
+    executionStatus,
     contentLength: errorMessage.length,
     ...(artifacts && artifacts.length > 0 ? { artifacts } : {}),
+    ...(persistedOutputFiles !== undefined ? { persistedOutputFiles } : {}),
+    ...(visionBridgeNotice !== undefined ? { visionBridgeNotice } : {}),
   };
 };
 
@@ -906,7 +994,11 @@ function serializeToolResponse(
     result_display: response.resultDisplay,
     error: response.error?.message,
     error_type: response.errorType,
+    execution_status: response.executionStatus,
     content_length: response.contentLength,
+    ...(response.visionBridgeNotice !== undefined
+      ? { vision_bridge_notice: response.visionBridgeNotice }
+      : {}),
   };
 }
 
@@ -1076,15 +1168,24 @@ function withPostToolBatchStop(
 
   const calls = [...completedCalls];
   const lastCall = calls[calls.length - 1];
+  const executionStatus = lastCall.response.executionStatus;
+  // A batch stop must not invent an outcome the tool never produced:
+  // when the replaced response had no executionStatus, omit it here too.
+  const { executionStatus: _es, ...baseResponse } = createErrorResponse(
+    lastCall.request,
+    new Error(stopReason),
+    ToolErrorType.EXECUTION_DENIED,
+    executionStatus ?? 'not_started',
+  );
+  const response: ToolCallResponseInfo =
+    executionStatus !== undefined
+      ? { ...baseResponse, executionStatus }
+      : baseResponse;
   calls[calls.length - 1] = {
     status: 'error',
     request: lastCall.request,
     tool: lastCall.tool,
-    response: createErrorResponse(
-      lastCall.request,
-      new Error(stopReason),
-      ToolErrorType.EXECUTION_DENIED,
-    ),
+    response,
     durationMs: lastCall.durationMs,
     outcome: undefined,
   } as ErroredToolCall;
@@ -1099,17 +1200,25 @@ interface CoreToolSchedulerOptions {
   getPreferredEditor: () => EditorType | undefined;
   onEditorClose: () => void;
   /**
-   * Optional recording service. If provided, tool results will be recorded.
+   * Optional recording service for direct scheduler consumers.
+   * Aggregating runtimes record at their outer boundary instead.
    */
   chatRecordingService?: ChatRecordingService;
+  onToolResultFullTurnModel?: (model: string) => boolean;
 }
 
 // ─── Tool Concurrency Helpers ────────────────────────────────
 
-interface ToolBatch {
+/**
+ * A batch of items grouped by concurrency safety: `concurrent` batches may run
+ * their `calls` in parallel; non-concurrent batches run one at a time.
+ */
+export interface ConcurrencyBatch<T> {
   concurrent: boolean;
-  calls: ScheduledToolCall[];
+  calls: T[];
 }
+
+type ToolBatch = ConcurrencyBatch<ScheduledToolCall>;
 
 /**
  * State for the per-batch signal.abort listener registered in
@@ -1125,48 +1234,82 @@ interface BatchAbortState {
 }
 
 /**
- * Returns true if a scheduled tool call can safely execute concurrently
- * with other safe tools (no side effects, no shared mutable state).
+ * Returns true if a tool call can safely execute concurrently with other
+ * safe tools (no side effects, no shared mutable state), decided from its
+ * raw name/kind/args alone. Shared by the interactive scheduler's batch
+ * partitioning and the headless runner (`runNonInteractive`) so both
+ * runtimes parallelize exactly the same set of tools.
+ *
+ * `kind` is the resolved tool's {@link Kind}; pass `undefined` when the tool
+ * cannot be resolved from the registry, which is treated as unsafe (the call
+ * runs sequentially).
  */
-function isConcurrencySafe(call: ScheduledToolCall): boolean {
+export function isToolCallConcurrencySafe(
+  name: string,
+  kind: Kind | undefined,
+  args: unknown,
+): boolean {
   // Agent tools spawn independent sub-agents with no shared state.
-  if (canonicalToolName(call.request.name) === ToolNames.AGENT) return true;
+  if (canonicalToolName(name) === ToolNames.AGENT) return true;
   // Shell commands: check if the command is read-only (e.g., git log, cat).
   // Uses the synchronous regex+shell-quote checker (not the async AST-based
-  // one) because partitioning runs synchronously. The sync checker covers
-  // the same command whitelist and is fail-closed — unknown commands remain
-  // sequential. The AST version is used separately for permission decisions.
-  if (call.tool.kind === Kind.Execute) {
-    const command = (call.request.args as { command?: string }).command;
+  // one) because partitioning runs synchronously. It is deliberately more
+  // conservative than the AST version used for permission decisions.
+  if (kind === Kind.Execute) {
+    const command = (args as { command?: string } | undefined)?.command;
     if (typeof command !== 'string') return false;
     try {
-      return isShellCommandReadOnly(stripShellWrapper(command));
+      return isShellCommandReadOnly(command);
     } catch {
       return false; // fail-closed
     }
   }
-  return CONCURRENCY_SAFE_KINDS.has(call.tool.kind);
+  if (kind === undefined) return false;
+  return CONCURRENCY_SAFE_KINDS.has(kind);
 }
 
 /**
- * Partition tool calls into consecutive batches by concurrency safety.
+ * Returns true if a scheduled tool call can safely execute concurrently
+ * with other safe tools (no side effects, no shared mutable state).
+ */
+function isConcurrencySafe(call: ScheduledToolCall): boolean {
+  return isToolCallConcurrencySafe(
+    call.request.name,
+    call.tool.kind,
+    call.request.args,
+  );
+}
+
+/**
+ * Partition items into consecutive batches by concurrency safety: consecutive
+ * safe items are merged into a single parallel batch, and each unsafe item
+ * forms its own sequential batch. Order is preserved.
  *
- * Consecutive safe tools are merged into a single parallel batch.
- * Each unsafe tool forms its own sequential batch.
+ * Shared by the interactive scheduler ({@link partitionToolCalls}) and the
+ * headless runner (`partitionHeadlessToolCalls` in nonInteractiveCli) via the
+ * {@link isToolCallConcurrencySafe} predicate, so the two runtimes partition
+ * using one algorithm and can't silently diverge.
  *
  * Example: [Read, Read, Edit, Read] → [[Read,Read](parallel), [Edit](seq), [Read](seq)]
  */
-function partitionToolCalls(calls: ScheduledToolCall[]): ToolBatch[] {
-  return calls.reduce<ToolBatch[]>((batches, call) => {
-    const safe = isConcurrencySafe(call);
+export function partitionByConcurrencySafety<T>(
+  items: T[],
+  isSafe: (item: T) => boolean,
+): Array<ConcurrencyBatch<T>> {
+  return items.reduce<Array<ConcurrencyBatch<T>>>((batches, item) => {
+    const safe = isSafe(item);
     const lastBatch = batches[batches.length - 1];
     if (safe && lastBatch?.concurrent) {
-      lastBatch.calls.push(call);
+      lastBatch.calls.push(item);
     } else {
-      batches.push({ concurrent: safe, calls: [call] });
+      batches.push({ concurrent: safe, calls: [item] });
     }
     return batches;
   }, []);
+}
+
+function partitionToolCalls(calls: ScheduledToolCall[]): ToolBatch[] {
+  return partitionByConcurrencySafety(calls, isConcurrencySafe);
 }
 
 export class CoreToolScheduler {
@@ -1179,7 +1322,11 @@ export class CoreToolScheduler {
   private config: Config;
   private onEditorClose: () => void;
   private chatRecordingService?: ChatRecordingService;
+  private onToolResultFullTurnModel?: (model: string) => boolean;
   private isFinalizingToolCalls = false;
+  private postToolBatchEnabledForBatch = false;
+  private postToolBatchSpanCallId: string | undefined;
+  private postToolBatchConfigWarned = false;
   private isScheduling = false;
   private validationRetryCounts = new Map<string, number>();
   private autoModeFallbackCallIds = new Set<string>();
@@ -1223,9 +1370,14 @@ export class CoreToolScheduler {
   // PostToolUse — reusing this id keeps the Pre/Post pair correlated instead
   // of orphaning two events. Cleared on terminal state via finalizeToolSpan.
   private readonly bouncedToolUseId = new Map<string, string>();
+  private readonly runtimeContentGeneratorViews = new Map<
+    string,
+    RuntimeContentGeneratorView
+  >();
   private requestQueue: Array<{
     request: ToolCallRequestInfo | ToolCallRequestInfo[];
     signal: AbortSignal;
+    runtimeView?: RuntimeContentGeneratorView;
     resolve: () => void;
     reject: (reason?: Error) => void;
   }> = [];
@@ -1239,6 +1391,7 @@ export class CoreToolScheduler {
     this.getPreferredEditor = options.getPreferredEditor;
     this.onEditorClose = options.onEditorClose;
     this.chatRecordingService = options.chatRecordingService;
+    this.onToolResultFullTurnModel = options.onToolResultFullTurnModel;
   }
 
   private get memoryMonitor(): MemoryPressureMonitor | undefined {
@@ -1254,10 +1407,38 @@ export class CoreToolScheduler {
       : resultDisplay;
   }
 
+  private async processToolResultImages(
+    responseParts: Part[],
+    signal: AbortSignal,
+  ): Promise<{
+    responseParts: Part[];
+    modelOverride?: string;
+    visionBridgeNotice?: string;
+  }> {
+    let modelOverride: string | undefined;
+    const notices: string[] = [];
+    const processedParts = await bridgeToolResultImages({
+      config: this.config,
+      responseParts,
+      signal,
+      onFullTurnModel: (model) => {
+        if (!this.onToolResultFullTurnModel?.(model)) return false;
+        modelOverride = model;
+        return true;
+      },
+      onVisionBridgeNotice: (notice) => notices.push(notice),
+    });
+    return {
+      responseParts: processedParts,
+      ...(modelOverride !== undefined ? { modelOverride } : {}),
+      ...(notices.length > 0 ? { visionBridgeNotice: notices.join('\n') } : {}),
+    };
+  }
+
   private setStatusInternal(
     targetCallId: string,
     status: 'success',
-    response: ToolCallResponseInfo,
+    response: CoreToolCallResponseInfo,
   ): void;
   private setStatusInternal(
     targetCallId: string,
@@ -1267,12 +1448,18 @@ export class CoreToolScheduler {
   private setStatusInternal(
     targetCallId: string,
     status: 'error',
-    response: ToolCallResponseInfo,
+    response: CoreToolCallResponseInfo,
   ): void;
   private setStatusInternal(
     targetCallId: string,
     status: 'cancelled',
-    reason: string | ToolCallResponseInfo,
+    reason: string,
+    executionStatus: ToolExecutionStatus,
+  ): void;
+  private setStatusInternal(
+    targetCallId: string,
+    status: 'cancelled',
+    response: CoreToolCallResponseInfo,
   ): void;
   private setStatusInternal(
     targetCallId: string,
@@ -1282,6 +1469,7 @@ export class CoreToolScheduler {
     targetCallId: string,
     newStatus: Status,
     auxiliaryData?: unknown,
+    executionStatus?: ToolExecutionStatus,
   ): void {
     this.toolCalls = this.toolCalls.map((currentCall) => {
       if (
@@ -1312,7 +1500,7 @@ export class CoreToolScheduler {
             tool: toolInstance,
             invocation,
             status: 'success',
-            response: auxiliaryData as ToolCallResponseInfo,
+            response: auxiliaryData as CoreToolCallResponseInfo,
             durationMs,
             outcome,
           } as SuccessfulToolCall;
@@ -1325,7 +1513,7 @@ export class CoreToolScheduler {
             request: currentCall.request,
             status: 'error',
             tool: toolInstance,
-            response: auxiliaryData as ToolCallResponseInfo,
+            response: auxiliaryData as CoreToolCallResponseInfo,
             durationMs,
             outcome,
           } as ErroredToolCall;
@@ -1387,9 +1575,15 @@ export class CoreToolScheduler {
           const preservedResultDisplay =
             this.compactResultDisplayForInteractiveHistory(resultDisplay);
           const errorMessage = `[Operation Cancelled] Reason: ${auxiliaryData}`;
-          const response = isToolCallResponseInfo(auxiliaryData)
+          const response: CoreToolCallResponseInfo = isToolCallResponseInfo(
+            auxiliaryData,
+          )
             ? {
                 ...auxiliaryData,
+                executionStatus:
+                  auxiliaryData.executionStatus ??
+                  executionStatus ??
+                  'not_started',
                 resultDisplay:
                   auxiliaryData.resultDisplay ?? preservedResultDisplay,
               }
@@ -1409,6 +1603,7 @@ export class CoreToolScheduler {
                 resultDisplay: preservedResultDisplay,
                 error: undefined,
                 errorType: undefined,
+                executionStatus: executionStatus ?? 'not_started',
                 contentLength: errorMessage.length,
               };
           return {
@@ -1456,25 +1651,34 @@ export class CoreToolScheduler {
     });
   }
 
-  private setArgsInternal(targetCallId: string, args: unknown): void {
+  private setArgsInternal(targetCallId: string, args: unknown): boolean {
+    let invocationError: Error | undefined;
+    let argsUpdated = false;
     this.toolCalls = this.toolCalls.map((call) => {
-      // We should never be asked to set args on an ErroredToolCall, but
-      // we guard for the case anyways.
-      if (call.request.callId !== targetCallId || call.status === 'error') {
+      if (
+        call.request.callId !== targetCallId ||
+        call.status === 'success' ||
+        call.status === 'error' ||
+        call.status === 'cancelled'
+      ) {
         return call;
       }
 
-      const invocationOrError = this.buildInvocation(
-        call.tool,
-        args as Record<string, unknown>,
-        targetCallId,
-        call.request.prompt_id,
+      const invocationOrError = runInRequestGoalContext(call.request, () =>
+        this.buildInvocation(
+          call.tool,
+          args as Record<string, unknown>,
+          targetCallId,
+          call.request.prompt_id,
+        ),
       );
       if (invocationOrError instanceof Error) {
+        invocationError = invocationOrError;
         const response = createErrorResponse(
           call.request,
           invocationOrError,
           ToolErrorType.INVALID_TOOL_PARAMS,
+          'not_started',
         );
         return {
           request: { ...call.request, args: args as Record<string, unknown> },
@@ -1484,12 +1688,36 @@ export class CoreToolScheduler {
         } as ErroredToolCall;
       }
 
+      argsUpdated = true;
       return {
         ...call,
         request: { ...call.request, args: args as Record<string, unknown> },
         invocation: invocationOrError,
       };
     });
+
+    if (invocationError) {
+      this.finalizeBlockedSpan(targetCallId, 'error', 'system');
+      const toolSpan = this.toolSpans.get(targetCallId);
+      if (toolSpan) {
+        setToolSpanFailure(
+          toolSpan,
+          TOOL_FAILURE_KIND_TOOL_EXCEPTION,
+          invocationError.message,
+        );
+      }
+      this.finalizeToolSpan(targetCallId);
+      this.notifyToolCallsUpdate();
+      void this.checkAndNotifyCompletion().catch((error: unknown) => {
+        debugLogger.warn(
+          `setArgsInternal completion notification failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+      return false;
+    }
+    return argsUpdated;
   }
 
   private isRunning(): boolean {
@@ -1502,6 +1730,26 @@ export class CoreToolScheduler {
     );
   }
 
+  private cancelPreExecutionIfAborted(
+    callId: string,
+    signal: AbortSignal,
+    toolSpan = this.toolSpans.get(callId),
+  ): boolean {
+    if (!signal.aborted) return false;
+    this.setStatusInternal(
+      callId,
+      'cancelled',
+      'Tool call cancelled by user.',
+      'not_started',
+    );
+    this.finalizeBlockedSpan(callId, 'aborted', 'system');
+    if (toolSpan) {
+      setToolSpanCancelled(toolSpan);
+    }
+    this.finalizeToolSpan(callId);
+    return true;
+  }
+
   /**
    * End the tool span for `callId` (if any) and remove it from the map.
    * Centralizes terminal-state cleanup so every cancel/error/success path
@@ -1511,13 +1759,23 @@ export class CoreToolScheduler {
    * No `metadata` parameter: every caller pre-sets span status via
    * `setToolSpan{Failure,Cancelled,Ok}` before this call (#4321 review).
    */
-  private finalizeToolSpan(callId: string): void {
+  private finalizeToolSpan(callId: string, force = false): void {
     // Terminal-state cleanup: drop any PreToolUse 'ask' bounce markers so
     // they never leak past the tool call's lifetime. Done unconditionally
     // (before the span guard) so a bounced call is cleared even on the
     // defensive no-span path.
     this.bouncedAwaitingApproval.delete(callId);
     this.bouncedToolUseId.delete(callId);
+    this.autoModeFallbackCallIds.delete(callId);
+    this.runtimeContentGeneratorViews.delete(callId);
+    // PostToolBatch can replace the response at the last position in request
+    // order, which is not necessarily the call that settles last. Keep that
+    // specific span open until the hook has produced the terminal result.
+    // Known window: if a batch never reaches completion for a non-abort
+    // reason (e.g. a sibling parked in awaiting_approval when the session
+    // tears down), this span stays open until process exit. Force-finalize
+    // on session dispose would close this gap.
+    if (callId === this.postToolBatchSpanCallId && !force) return;
     const span = this.toolSpans.get(callId);
     if (!span) return;
     this.toolSpans.delete(callId);
@@ -1621,6 +1879,7 @@ export class CoreToolScheduler {
             callId,
             'cancelled',
             'Tool call cancelled by user.',
+            'not_started',
           );
           if (this.blockedSpans.has(callId)) {
             this.finalizeBlockedSpan(callId, 'aborted', 'system');
@@ -1628,7 +1887,10 @@ export class CoreToolScheduler {
           const span = this.toolSpans.get(callId);
           if (span) {
             setToolSpanCancelled(span);
-            this.finalizeToolSpan(callId);
+            // Abort drain is terminal: force-finalize even when this is the
+            // deferred PostToolBatch parent span, which otherwise stays open
+            // for a batch hook that will no longer run on an aborted batch.
+            this.finalizeToolSpan(callId, true);
           }
           this.callIdToPostToolBatchSignal.delete(callId);
           this.autoModeFallbackCallIds.delete(callId);
@@ -1799,12 +2061,11 @@ export class CoreToolScheduler {
     if (!unknownToolName.startsWith('mcp__')) {
       return null;
     }
-    // Mirror generateValidName's per-char sanitization when rebuilding a
-    // server's registered prefix. The trailing `__` makes the match exact at a
-    // server boundary (so `foo` does not match a `foobar` server). Truncation
-    // (>63-char names) is the rare case we let fall through.
+    // Rebuild the provider-safe server prefix without the full-name hash. The
+    // trailing `__` keeps matching exact at the server boundary; truncation
+    // (>63-char names) remains the rare case that falls through.
     const prefixOf = (server: string): string =>
-      `mcp__${server}__`.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      sanitizeToolNameForProvider(`mcp__${server}__`);
     // When one server name is a prefix of another after sanitization (e.g.
     // `foo` vs `foo__bar`), a tool of the longer server also startsWith the
     // shorter one's prefix. Match longest-first so the most specific server
@@ -1878,6 +2139,7 @@ export class CoreToolScheduler {
   schedule(
     request: ToolCallRequestInfo | ToolCallRequestInfo[],
     signal: AbortSignal,
+    runtimeView?: RuntimeContentGeneratorView,
   ): Promise<void> {
     if (this.isRunning() || this.isScheduling) {
       return new Promise((resolve, reject) => {
@@ -1897,6 +2159,7 @@ export class CoreToolScheduler {
         this.requestQueue.push({
           request,
           signal,
+          runtimeView,
           resolve: () => {
             signal.removeEventListener('abort', abortHandler);
             resolve();
@@ -1908,7 +2171,21 @@ export class CoreToolScheduler {
         });
       });
     }
-    return this._schedule(request, signal);
+    return this._schedule(request, signal, runtimeView);
+  }
+
+  private drainRequestQueueIfIdle(): void {
+    if (
+      this.requestQueue.length === 0 ||
+      this.isScheduling ||
+      this.isRunning()
+    ) {
+      return;
+    }
+    const next = this.requestQueue.shift()!;
+    this._schedule(next.request, next.signal, next.runtimeView)
+      .then(next.resolve)
+      .catch(next.reject);
   }
 
   /**
@@ -1950,7 +2227,24 @@ export class CoreToolScheduler {
   private async _schedule(
     request: ToolCallRequestInfo | ToolCallRequestInfo[],
     signal: AbortSignal,
+    runtimeView?: RuntimeContentGeneratorView,
   ): Promise<void> {
+    if (runtimeView) {
+      const items = Array.isArray(request) ? request : [request];
+      for (const item of items) {
+        this.runtimeContentGeneratorViews.set(item.callId, runtimeView);
+      }
+      try {
+        return await runWithRuntimeContentGenerator(runtimeView, () =>
+          this._schedule(request, signal),
+        );
+      } catch (error) {
+        for (const item of items) {
+          this.runtimeContentGeneratorViews.delete(item.callId);
+        }
+        throw error;
+      }
+    }
     this.isScheduling = true;
     try {
       if (this.isRunning()) {
@@ -1960,6 +2254,9 @@ export class CoreToolScheduler {
       }
       const requestsToProcess = dedupeRequestsByCallId(
         Array.isArray(request) ? request : [request],
+      );
+      const planModeEntryBoundaryIndex = findPlanModeEntryBatchBoundaryIndex(
+        requestsToProcess.map((item) => canonicalToolName(item.name)),
       );
 
       // Prune validation retry state per-tool, not wholesale. Keys are
@@ -1980,157 +2277,283 @@ export class CoreToolScheduler {
       }
 
       const newToolCalls: ToolCall[] = [];
-      for (const reqInfo of requestsToProcess) {
-        const canonicalName = canonicalToolName(reqInfo.name);
-
-        // Check if the tool is excluded due to permissions/environment restrictions
-        // This check should happen before registry lookup to provide a clear permission error
-        const pm = this.config.getPermissionManager?.();
-        if (pm && !(await pm.isToolEnabled(canonicalName))) {
-          const matchingRule = pm.findMatchingDenyRule({
-            toolName: canonicalName,
-          });
-          const ruleInfo = matchingRule
-            ? ` Matching deny rule: "${matchingRule}".`
-            : '';
-          const permissionErrorMessage = `Qwen Code requires permission to use "${reqInfo.name}", but that permission was declined.${ruleInfo}`;
-          newToolCalls.push({
-            status: 'error',
-            request: reqInfo,
-            response: createErrorResponse(
-              reqInfo,
-              new Error(permissionErrorMessage),
-              ToolErrorType.EXECUTION_DENIED,
-            ),
-            durationMs: 0,
-          });
-          continue;
-        }
-
-        // Legacy fallback: check getPermissionsDeny() when PM is not available
-        if (!pm) {
-          const excludeTools = this.config.getPermissionsDeny?.() ?? undefined;
-          if (excludeTools && excludeTools.length > 0) {
-            const normalizedToolName = canonicalName.toLowerCase().trim();
-            const excludedMatch = excludeTools.find(
-              (excludedTool) =>
-                excludedTool.toLowerCase().trim() === normalizedToolName,
-            );
-            if (excludedMatch) {
-              const permissionErrorMessage = `Qwen Code requires permission to use ${excludedMatch}, but that permission was declined.`;
-              newToolCalls.push({
-                status: 'error',
-                request: reqInfo,
-                response: createErrorResponse(
-                  reqInfo,
-                  new Error(permissionErrorMessage),
-                  ToolErrorType.EXECUTION_DENIED,
-                ),
-                durationMs: 0,
-              });
-              continue;
+      const retryErrorsRecordedInBatch = new Map<string, number>();
+      const recordBatchRetryableToolError = (
+        toolName: string,
+        errorMessage: string,
+      ): number => {
+        const key = `${toolName}:${errorMessage}`;
+        const existingCount = retryErrorsRecordedInBatch.get(key);
+        if (existingCount !== undefined) {
+          for (const trackedKey of this.validationRetryCounts.keys()) {
+            if (trackedKey.startsWith(`${toolName}:`)) {
+              this.validationRetryCounts.delete(trackedKey);
             }
           }
+          this.validationRetryCounts.set(key, existingCount);
+          return existingCount;
         }
-
-        const toolInstance = await this.toolRegistry.ensureTool(canonicalName);
-        if (!toolInstance) {
-          // Tool is not in registry and not excluded - likely hallucinated or typo
-          const errorMessage = await this.getToolNotFoundMessage(reqInfo.name);
+        const count = this.recordRetryableToolError(toolName, errorMessage);
+        retryErrorsRecordedInBatch.set(key, count);
+        return count;
+      };
+      for (const [requestIndex, reqInfo] of requestsToProcess.entries()) {
+        let resolvedTool: AnyDeclarativeTool | undefined;
+        let resolvedInvocation: AnyToolInvocation | undefined;
+        const recordPrevalidationCancellation = (): boolean => {
+          if (!signal.aborted) return false;
           newToolCalls.push({
-            status: 'error',
+            status: 'cancelled',
             request: reqInfo,
-            response: createErrorResponse(
+            response: createCancelledResponse(
               reqInfo,
-              new Error(errorMessage),
-              ToolErrorType.TOOL_NOT_REGISTERED,
+              'Tool call cancelled before execution.',
+              'not_started',
             ),
+            ...(resolvedTool ? { tool: resolvedTool } : {}),
+            ...(resolvedInvocation ? { invocation: resolvedInvocation } : {}),
             durationMs: 0,
           });
-          continue;
-        }
+          return true;
+        };
+        try {
+          if (recordPrevalidationCancellation()) continue;
+          if (
+            planModeEntryBoundaryIndex !== undefined &&
+            requestIndex !== planModeEntryBoundaryIndex
+          ) {
+            newToolCalls.push({
+              status: 'error',
+              request: reqInfo,
+              response: createErrorResponse(
+                reqInfo,
+                new Error(PLAN_MODE_ENTRY_SIBLING_SKIP_MESSAGE),
+                ToolErrorType.EXECUTION_DENIED,
+                'not_started',
+              ),
+              durationMs: 0,
+            });
+            continue;
+          }
 
-        // Reject file-modifying calls when truncated to prevent
-        // writing incomplete content, even if params failed schema validation.
-        if (reqInfo.wasOutputTruncated && toolInstance.kind === Kind.Edit) {
-          const count = this.recordRetryableToolError(
-            reqInfo.name,
-            TRUNCATION_EDIT_REJECTION,
+          const canonicalName = canonicalToolName(reqInfo.name);
+
+          // Check if the tool is excluded due to permissions/environment restrictions
+          // This check should happen before registry lookup to provide a clear permission error
+          const pm = this.config.getPermissionManager?.();
+          const permissionEnabled = pm
+            ? await pm.isToolEnabled(canonicalName)
+            : true;
+          if (recordPrevalidationCancellation()) continue;
+          if (pm && !permissionEnabled) {
+            const matchingRule = pm.findMatchingDenyRule({
+              toolName: canonicalName,
+            });
+            const ruleInfo = matchingRule
+              ? ` Matching deny rule: "${matchingRule}".`
+              : '';
+            const permissionErrorMessage = `Qwen Code requires permission to use "${reqInfo.name}", but that permission was declined.${ruleInfo}`;
+            newToolCalls.push({
+              status: 'error',
+              request: reqInfo,
+              response: createErrorResponse(
+                reqInfo,
+                new Error(permissionErrorMessage),
+                ToolErrorType.EXECUTION_DENIED,
+                'not_started',
+              ),
+              durationMs: 0,
+            });
+            continue;
+          }
+
+          // Legacy fallback: check getPermissionsDeny() when PM is not available
+          if (!pm) {
+            const excludeTools =
+              this.config.getPermissionsDeny?.() ?? undefined;
+            if (excludeTools && excludeTools.length > 0) {
+              const normalizedToolName = canonicalName.toLowerCase().trim();
+              const excludedMatch = excludeTools.find(
+                (excludedTool) =>
+                  excludedTool.toLowerCase().trim() === normalizedToolName,
+              );
+              if (excludedMatch) {
+                const permissionErrorMessage = `Qwen Code requires permission to use ${excludedMatch}, but that permission was declined.`;
+                newToolCalls.push({
+                  status: 'error',
+                  request: reqInfo,
+                  response: createErrorResponse(
+                    reqInfo,
+                    new Error(permissionErrorMessage),
+                    ToolErrorType.EXECUTION_DENIED,
+                    'not_started',
+                  ),
+                  durationMs: 0,
+                });
+                continue;
+              }
+            }
+          }
+
+          const toolInstance = await runInRequestGoalContext(reqInfo, () =>
+            this.toolRegistry.ensureTool(canonicalName),
           );
-          const truncationError = new Error(
-            count >= VALIDATION_RETRY_LOOP_THRESHOLD
-              ? `${TRUNCATION_EDIT_REJECTION}${TRUNCATION_RETRY_LOOP_DIRECTIVE}`
-              : TRUNCATION_EDIT_REJECTION,
-          );
-          newToolCalls.push({
-            status: 'error',
-            request: reqInfo,
-            tool: toolInstance,
-            response: createErrorResponse(
-              reqInfo,
-              truncationError,
-              ToolErrorType.OUTPUT_TRUNCATED,
+          resolvedTool = toolInstance;
+          if (recordPrevalidationCancellation()) continue;
+          if (!toolInstance) {
+            // Tool is not in registry and not excluded - likely hallucinated or typo
+            const errorMessage = await runInRequestGoalContext(reqInfo, () =>
+              this.getToolNotFoundMessage(reqInfo.name),
+            );
+            if (recordPrevalidationCancellation()) continue;
+            newToolCalls.push({
+              status: 'error',
+              request: reqInfo,
+              response: createErrorResponse(
+                reqInfo,
+                new Error(errorMessage),
+                ToolErrorType.TOOL_NOT_REGISTERED,
+                'not_started',
+              ),
+              durationMs: 0,
+            });
+            continue;
+          }
+
+          // Reject file-modifying calls when truncated to prevent
+          // writing incomplete content, even if params failed schema validation.
+          if (reqInfo.wasOutputTruncated && toolInstance.kind === Kind.Edit) {
+            const count = recordBatchRetryableToolError(
+              reqInfo.name,
+              TRUNCATION_EDIT_REJECTION,
+            );
+            const truncationError = new Error(
+              count >= VALIDATION_RETRY_LOOP_THRESHOLD
+                ? `${TRUNCATION_EDIT_REJECTION}${TRUNCATION_RETRY_LOOP_DIRECTIVE}`
+                : TRUNCATION_EDIT_REJECTION,
+            );
+            newToolCalls.push({
+              status: 'error',
+              request: reqInfo,
+              tool: toolInstance,
+              response: createErrorResponse(
+                reqInfo,
+                truncationError,
+                ToolErrorType.OUTPUT_TRUNCATED,
+                'not_started',
+              ),
+              durationMs: 0,
+            });
+            continue;
+          }
+
+          const invocationOrError = runInRequestGoalContext(reqInfo, () =>
+            this.buildInvocation(
+              toolInstance,
+              reqInfo.args,
+              reqInfo.callId,
+              reqInfo.prompt_id,
             ),
-            durationMs: 0,
-          });
-          continue;
-        }
-
-        const invocationOrError = this.buildInvocation(
-          toolInstance,
-          reqInfo.args,
-          reqInfo.callId,
-          reqInfo.prompt_id,
-        );
-        if (invocationOrError instanceof Error) {
-          const displayError = reqInfo.wasOutputTruncated
-            ? new Error(
-                `${invocationOrError.message} ${TRUNCATION_PARAM_GUIDANCE}`,
-              )
-            : invocationOrError;
-
-          // Track validation retry for loop detection. Counts accumulate per
-          // (tool, error message) pair so a different validation mistake on
-          // the same tool starts fresh rather than tripping the threshold.
-          const count = this.recordRetryableToolError(
-            reqInfo.name,
-            invocationOrError.message,
           );
-
-          const finalError =
-            count >= VALIDATION_RETRY_LOOP_THRESHOLD
+          if (recordPrevalidationCancellation()) continue;
+          if (invocationOrError instanceof Error) {
+            const displayError = reqInfo.wasOutputTruncated
               ? new Error(
-                  `${invocationOrError.message}${RETRY_LOOP_STOP_DIRECTIVE}`,
+                  `${invocationOrError.message} ${TRUNCATION_PARAM_GUIDANCE}`,
                 )
-              : displayError;
+              : invocationOrError;
 
+            // Track validation retry for loop detection. Counts accumulate per
+            // (tool, error message) pair so a different validation mistake on
+            // the same tool starts fresh rather than tripping the threshold.
+            const count = recordBatchRetryableToolError(
+              reqInfo.name,
+              invocationOrError.message,
+            );
+
+            const finalError =
+              count >= VALIDATION_RETRY_LOOP_THRESHOLD
+                ? new Error(
+                    `${invocationOrError.message}${RETRY_LOOP_STOP_DIRECTIVE}`,
+                  )
+                : displayError;
+
+            newToolCalls.push({
+              status: 'error',
+              request: reqInfo,
+              tool: toolInstance,
+              response: createErrorResponse(
+                reqInfo,
+                finalError,
+                ToolErrorType.INVALID_TOOL_PARAMS,
+                'not_started',
+              ),
+              durationMs: 0,
+            });
+            continue;
+          }
+          resolvedInvocation = invocationOrError;
+
+          // Reset all validation retry counters for this tool since it passed validation
+          this.clearRetryCountsForTool(reqInfo.name);
+
+          newToolCalls.push({
+            status: 'validating',
+            request: reqInfo,
+            tool: toolInstance,
+            invocation: invocationOrError,
+            startTime: Date.now(),
+          });
+        } catch (error) {
+          if (recordPrevalidationCancellation()) continue;
+          const normalizedError =
+            error instanceof Error ? error : new Error(String(error));
           newToolCalls.push({
             status: 'error',
             request: reqInfo,
-            tool: toolInstance,
             response: createErrorResponse(
               reqInfo,
-              finalError,
-              ToolErrorType.INVALID_TOOL_PARAMS,
+              normalizedError,
+              (error as { errorType?: ToolErrorType } | undefined)?.errorType ??
+                ToolErrorType.UNHANDLED_EXCEPTION,
+              'not_started',
             ),
+            ...(resolvedTool ? { tool: resolvedTool } : {}),
             durationMs: 0,
           });
-          continue;
         }
-
-        // Reset all validation retry counters for this tool since it passed validation
-        this.clearRetryCountsForTool(reqInfo.name);
-
-        newToolCalls.push({
-          status: 'validating',
-          request: reqInfo,
-          tool: toolInstance,
-          invocation: invocationOrError,
-          startTime: Date.now(),
-        });
       }
 
       this.toolCalls = this.toolCalls.concat(newToolCalls);
+      for (const toolCall of newToolCalls) {
+        this.callIdToPostToolBatchSignal.set(toolCall.request.callId, signal);
+      }
+      const postToolBatchParentCallId = newToolCalls.findLast(
+        (toolCall) => toolCall.status === 'validating',
+      )?.request.callId;
+      this.postToolBatchEnabledForBatch = false;
+      this.postToolBatchSpanCallId = undefined;
+      try {
+        this.postToolBatchEnabledForBatch =
+          !this.config.getDisableAllHooks() &&
+          (this.config.hasHooksForEvent?.('PostToolBatch') ?? false);
+        if (this.postToolBatchEnabledForBatch) {
+          this.postToolBatchSpanCallId = postToolBatchParentCallId;
+        }
+      } catch (configError) {
+        // Fail safe: completion will attempt the hook once. Preserve the
+        // potential parent so a transient configuration failure cannot let
+        // its span end early.
+        this.postToolBatchEnabledForBatch = true;
+        this.postToolBatchSpanCallId = postToolBatchParentCallId;
+        if (!this.postToolBatchConfigWarned) {
+          this.postToolBatchConfigWarned = true;
+          debugLogger.warn(
+            'PostToolBatch hook detection failed; deferring span as a precaution:',
+            configError,
+          );
+        }
+      }
       this.notifyToolCallsUpdate();
 
       // Per-batch abort-listener state. Shared by every callId added in
@@ -2161,33 +2584,33 @@ export class CoreToolScheduler {
         // Phase 2). Every cancel/error path below — and the existing
         // success path in executeSingleToolCall — must call
         // finalizeToolSpan(callId, ...) to avoid leaking spans.
-        // `tool.name` is set automatically by startToolSpan from the first
-        // arg; only namespaced extras go in attrs. `call_id` (non-namespaced)
+        // `gen_ai.tool.name` is set automatically by startToolSpan from the
+        // first arg; only call-id aliases go in attrs. `call_id` (non-namespaced)
         // is dual-emitted for one release as a backwards-compat shim for
         // pre-Phase-2 dashboards/alerts that grep the old key — drop after
         // operators migrate (#4321 review). `tool_name` is dual-emitted on
         // the same migration window (review-2 DeepSeek Suggestion) so
         // pre-Phase-2 dashboards filtering on it don't silently stop
         // matching during the rollout.
-        const toolSpan = startToolSpan(canonicalName, {
-          'tool.call_id': reqInfo.callId,
-          call_id: reqInfo.callId,
-          tool_name: canonicalName,
-        });
+        const toolSpan = startToolSpan(
+          canonicalName,
+          {
+            'tool.call_id': reqInfo.callId,
+            'gen_ai.tool.call.id': reqInfo.providerCallId ?? reqInfo.callId,
+            call_id: reqInfo.callId,
+            tool_name: canonicalName,
+          },
+          toolCall.tool.description,
+          reqInfo.prompt_id,
+        );
         this.toolSpans.set(reqInfo.callId, toolSpan);
         batchState.callIds.add(reqInfo.callId);
         this.callIdToBatch.set(reqInfo.callId, batchState);
-        this.callIdToPostToolBatchSignal.set(reqInfo.callId, signal);
 
         try {
-          if (signal.aborted) {
-            this.setStatusInternal(
-              reqInfo.callId,
-              'cancelled',
-              'Tool call cancelled by user.',
-            );
-            setToolSpanCancelled(toolSpan);
-            this.finalizeToolSpan(reqInfo.callId);
+          if (
+            this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+          ) {
             continue;
           }
 
@@ -2196,24 +2619,36 @@ export class CoreToolScheduler {
           // =================================================================
 
           // ---- L3→L4: Shared permission flow ----
-          const toolParams = invocation.params as Record<string, unknown>;
-          const flowResult = await evaluatePermissionFlow(
-            this.config,
-            invocation,
-            canonicalName,
-            toolParams,
+          let toolParams = invocation.params as Record<string, unknown>;
+          const flowResult = await runInRequestGoalContext(reqInfo, () =>
+            evaluatePermissionFlow(
+              this.config,
+              invocation,
+              canonicalName,
+              toolParams,
+            ),
           );
+          if (
+            this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+          ) {
+            continue;
+          }
           const {
             defaultPermission,
             finalPermission,
             pmForcedAsk,
             pmCtx,
             denyMessage,
+            requiresUserInteraction,
           } = flowResult;
 
           // ---- L5: Final decision based on permission + ApprovalMode ----
           const approvalMode = this.config.getApprovalMode();
           const isPlanMode = approvalMode === ApprovalMode.PLAN;
+          const isPlanShellCall =
+            isPlanMode &&
+            (canonicalName === ToolNames.SHELL ||
+              canonicalName === ToolNames.MONITOR);
           const isExitPlanModeTool = canonicalName === ToolNames.EXIT_PLAN_MODE;
           const isEnterPlanModeTool =
             canonicalName === ToolNames.ENTER_PLAN_MODE;
@@ -2268,6 +2703,7 @@ export class CoreToolScheduler {
                 reqInfo,
                 new Error(message),
                 ToolErrorType.EXECUTION_DENIED,
+                'not_started',
               ),
             );
             setToolSpanFailure(
@@ -2279,7 +2715,117 @@ export class CoreToolScheduler {
             continue;
           }
 
-          if (finalPermission === 'allow' && !forceAutoReviewForAllow) {
+          if (finalPermission === 'deny') {
+            // Hard deny: security violation or PM explicit deny
+            this.setStatusInternal(
+              reqInfo.callId,
+              'error',
+              createErrorResponse(
+                reqInfo,
+                new Error(denyMessage ?? `Tool "${reqInfo.name}" is denied.`),
+                ToolErrorType.EXECUTION_DENIED,
+                'not_started',
+              ),
+            );
+            setToolSpanFailure(
+              toolSpan,
+              TOOL_FAILURE_KIND_PERMISSION_DENIED,
+              TOOL_SPAN_STATUS_PERMISSION_DENIED,
+            );
+            this.finalizeToolSpan(reqInfo.callId);
+            continue;
+          }
+
+          let planShellAmbientWorkingDirectory: string | undefined;
+          if (isPlanShellCall) {
+            const directory = toolParams['directory'];
+            planShellAmbientWorkingDirectory =
+              typeof directory === 'string' && directory.length > 0
+                ? undefined
+                : this.config.getTargetDir();
+            invocation.params = {
+              ...structuredClone(invocation.params),
+              directory:
+                typeof directory === 'string' && directory.length > 0
+                  ? directory
+                  : planShellAmbientWorkingDirectory,
+            };
+            toolParams = invocation.params as Record<string, unknown>;
+          }
+
+          const planShellDecision = isPlanShellCall
+            ? await runInRequestGoalContext(reqInfo, () =>
+                evaluatePlanModeShellPolicy({
+                  config: this.config,
+                  toolName: canonicalName,
+                  requestArgs: reqInfo.args,
+                  invocationParams: toolParams,
+                  permissionContext: pmCtx,
+                  ambientWorkingDirectory: planShellAmbientWorkingDirectory,
+                  signal,
+                }),
+              )
+            : ({ classification: 'not-applicable' } as const);
+          if (
+            this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+          ) {
+            continue;
+          }
+          const rejectPlanShell = (message: string) => {
+            this.setStatusInternal(reqInfo.callId, 'error', {
+              ...createErrorResponse(
+                reqInfo,
+                new Error(message),
+                ToolErrorType.EXECUTION_DENIED,
+                'not_started',
+              ),
+              resultDisplay: message,
+            });
+            setToolSpanFailure(
+              toolSpan,
+              TOOL_FAILURE_KIND_PLAN_MODE_BLOCKED,
+              TOOL_SPAN_STATUS_PLAN_MODE_BLOCKED,
+            );
+            this.finalizeToolSpan(reqInfo.callId);
+          };
+
+          if (planShellDecision.classification !== 'not-applicable') {
+            const initialPlanShellError = await runInRequestGoalContext(
+              reqInfo,
+              () =>
+                validatePlanModeShellContext({
+                  config: this.config,
+                  decision: planShellDecision,
+                  requestArgs: reqInfo.args,
+                  invocationParams: invocation.params as Record<
+                    string,
+                    unknown
+                  >,
+                  signal,
+                }),
+            );
+            if (
+              this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+            ) {
+              continue;
+            }
+            if (initialPlanShellError) {
+              rejectPlanShell(initialPlanShellError);
+              continue;
+            }
+          }
+          if (planShellDecision.classification === 'write') {
+            rejectPlanShell(planShellDecision.writeBlockMessage);
+            continue;
+          }
+          const planShellRequiresConfirmation =
+            planShellDecision.classification === 'unknown';
+
+          if (
+            finalPermission === 'allow' &&
+            !forceAutoReviewForAllow &&
+            !planShellRequiresConfirmation
+          ) {
             // Auto-approve: tool is inherently safe (read-only) or PM allows.
             // In AUTO mode, also reset denialTracking so an L4 allow-rule
             // match counts as a successful call and clears any in-flight
@@ -2302,32 +2848,16 @@ export class CoreToolScheduler {
             continue;
           }
 
-          if (finalPermission === 'deny') {
-            // Hard deny: security violation or PM explicit deny
-            this.setStatusInternal(
-              reqInfo.callId,
-              'error',
-              createErrorResponse(
-                reqInfo,
-                new Error(denyMessage ?? `Tool "${reqInfo.name}" is denied.`),
-                ToolErrorType.EXECUTION_DENIED,
-              ),
-            );
-            setToolSpanFailure(
-              toolSpan,
-              TOOL_FAILURE_KIND_PERMISSION_DENIED,
-              TOOL_SPAN_STATUS_PERMISSION_DENIED,
-            );
-            this.finalizeToolSpan(reqInfo.callId);
-            continue;
-          }
-
           // ── L5: AUTO mode three-layer filter ──────────────────────────
           // Fast-paths run BEFORE the fallback check so safe tools (Read,
           // Grep, LS, in-cwd Edit, …) short-circuit even in a denial-streak
           // fallback state — otherwise every trivially safe tool would
           // force manual approval until the user toggles modes.
-          if (shouldRunAutoModeForCall(approvalMode, canonicalName)) {
+          let autoModeFallbackMessage: string | undefined;
+          if (
+            !requiresUserInteraction &&
+            shouldRunAutoModeForCall(approvalMode, canonicalName)
+          ) {
             const denialState = this.config.getAutoModeDenialState();
             const fallback = shouldFallback(denialState);
             // `buildClassifierContents` retains only the most recent
@@ -2339,17 +2869,24 @@ export class CoreToolScheduler {
               this.config
                 .getGeminiClient?.()
                 ?.getHistoryTail(MAX_TRANSCRIPT_MESSAGES, false) ?? [];
-            const decision = await evaluateAutoMode({
-              ctx: pmCtx,
-              pmForcedAsk,
-              toolParams,
-              messages,
-              config: this.config,
-              signal,
-              skipClassifierReason: fallback.fallback
-                ? fallback.reason
-                : undefined,
-            });
+            const decision = await runInRequestGoalContext(reqInfo, () =>
+              evaluateAutoMode({
+                ctx: pmCtx,
+                pmForcedAsk,
+                toolParams,
+                messages,
+                config: this.config,
+                signal,
+                skipClassifierReason: fallback.fallback
+                  ? fallback.reason
+                  : undefined,
+              }),
+            );
+            if (
+              this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+            ) {
+              continue;
+            }
 
             const outcome = applyAutoModeDecision(
               decision,
@@ -2361,21 +2898,28 @@ export class CoreToolScheduler {
               shouldFirePermissionDeniedForAutoMode(decision, outcome)
             ) {
               try {
-                await this.config
-                  .getHookSystem?.()
-                  ?.firePermissionDeniedEvent(
-                    canonicalName,
-                    toolParams,
-                    reqInfo.callId,
-                    getAutoModePermissionDeniedReason(decision),
-                    signal,
-                    reqInfo.callId,
-                  );
+                await runInRequestGoalContext(reqInfo, () =>
+                  this.config
+                    .getHookSystem?.()
+                    ?.firePermissionDeniedEvent(
+                      canonicalName,
+                      toolParams,
+                      reqInfo.callId,
+                      getAutoModePermissionDeniedReason(decision),
+                      signal,
+                      reqInfo.callId,
+                    ),
+                );
               } catch (hookError) {
                 debugLogger.warn(
                   `PermissionDenied hook failed for tool ${reqInfo.callId}: ${hookError instanceof Error ? hookError.message : String(hookError)}`,
                 );
               }
+            }
+            if (
+              this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+            ) {
+              continue;
             }
             switch (outcome.kind) {
               case 'approved':
@@ -2397,17 +2941,27 @@ export class CoreToolScheduler {
                     reqInfo,
                     new Error(outcome.errorMessage),
                     ToolErrorType.EXECUTION_DENIED,
+                    'not_started',
                   ),
                 );
+                setToolSpanFailure(
+                  toolSpan,
+                  TOOL_FAILURE_KIND_PERMISSION_DENIED,
+                  outcome.errorMessage,
+                );
+                this.finalizeToolSpan(reqInfo.callId);
                 continue;
               case 'fallback':
                 // Drop through to the manual-approval flow below. The
                 // pending dialog tells the user what's being asked;
-                // operators see the cause in the debug log (only when
-                // fallback was specifically armed by denialTracking —
-                // a pmForcedAsk fallback isn't an audit-worthy event).
-                if (isDenialFallbackReason(outcome.reason)) {
+                // operators see recovery fallbacks in the debug log. A
+                // pmForcedAsk fallback isn't an audit-worthy event.
+                if (
+                  isDenialFallbackReason(outcome.reason) ||
+                  outcome.reason === 'classifier_unavailable'
+                ) {
                   this.autoModeFallbackCallIds.add(reqInfo.callId);
+                  autoModeFallbackMessage = outcome.message;
                   debugLogger.warn(
                     `Auto mode fallback to manual approval (${outcome.reason}): ` +
                       formatDenialStateLog(denialState),
@@ -2431,9 +2985,10 @@ export class CoreToolScheduler {
 
           if (
             !needsConfirmation(
-              confirmationPermission,
+              planShellRequiresConfirmation ? 'ask' : confirmationPermission,
               approvalMode,
               canonicalName,
+              requiresUserInteraction,
             )
           ) {
             this.setToolCallOutcome(
@@ -2442,13 +2997,70 @@ export class CoreToolScheduler {
             );
             this.setStatusInternal(reqInfo.callId, 'scheduled');
           } else {
-            confirmationDetails =
-              await invocation.getConfirmationDetails(signal);
+            confirmationDetails = await runInRequestGoalContext(reqInfo, () =>
+              invocation.getConfirmationDetails(signal),
+            );
+            if (
+              this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+            ) {
+              continue;
+            }
+
+            if (autoModeFallbackMessage) {
+              confirmationDetails = decorateClassifierUnavailableConfirmation(
+                confirmationDetails,
+                autoModeFallbackMessage,
+              );
+            }
+
+            if (planShellDecision.classification !== 'not-applicable') {
+              const preDisplayPlanShellError = await runInRequestGoalContext(
+                reqInfo,
+                () =>
+                  validatePlanModeShellContext({
+                    config: this.config,
+                    decision: planShellDecision,
+                    requestArgs: reqInfo.args,
+                    invocationParams: invocation.params as Record<
+                      string,
+                      unknown
+                    >,
+                    signal,
+                  }),
+              );
+              if (
+                this.cancelPreExecutionIfAborted(
+                  reqInfo.callId,
+                  signal,
+                  toolSpan,
+                )
+              ) {
+                continue;
+              }
+              if (preDisplayPlanShellError) {
+                rejectPlanShell(preDisplayPlanShellError);
+                continue;
+              }
+            }
+
+            try {
+              confirmationDetails = decoratePlanModeShellConfirmation(
+                planShellDecision,
+                confirmationDetails,
+              );
+            } catch {
+              if (planShellDecision.classification === 'unknown') {
+                rejectPlanShell(planShellDecision.noApprovalMessage);
+                continue;
+              }
+              throw new Error('Unable to prepare shell confirmation.');
+            }
 
             // ── Centralised rule injection ──────────────────────────────────
             injectPermissionRulesIfMissing(confirmationDetails, pmCtx);
 
             if (
+              planShellDecision.classification === 'not-applicable' &&
               isPlanModeBlocked(
                 isPlanMode,
                 isExitPlanModeTool,
@@ -2457,22 +3069,29 @@ export class CoreToolScheduler {
                 isEnterPlanModeTool,
               )
             ) {
+              // SDK and ordinary subagent-like callers should return plans
+              // directly; they do not have exit_plan_mode available. Plan-required
+              // teammates have a dedicated exit_plan_mode approval path.
+              const isPlanRequiredTeammate =
+                !shouldUsePlanOnlyReminderInSubagentContext() &&
+                !this.config.getSdkMode();
+              const planModeError = new Error(
+                `Tool blocked by plan mode: "${reqInfo.name}" is not a read-only tool. ` +
+                  `Only read-only tools (read_file, grep_search, glob, list_directory, ` +
+                  `web_fetch, etc.) are allowed in plan mode.` +
+                  ` Do NOT retry this tool. ` +
+                  (isPlanRequiredTeammate
+                    ? `Pivot to read-only alternatives to gather the information you need, then call exit_plan_mode with a plan that covers this tool's purpose.`
+                    : `Pivot to read-only alternatives to gather equivalent information, then present your plan directly to the caller.`),
+              );
               this.setStatusInternal(reqInfo.callId, 'error', {
-                callId: reqInfo.callId,
-                responseParts: convertToFunctionResponse(
-                  reqInfo.name,
-                  reqInfo.callId,
-                  // SDK callers and ordinary subagent-like callers should
-                  // return plans directly. Plan-required teammates have a
-                  // dedicated exit_plan_mode approval path instead.
-                  getPlanModeSystemReminder(
-                    shouldUsePlanOnlyReminderInSubagentContext() ||
-                      this.config.getSdkMode(),
-                  ),
+                ...createErrorResponse(
+                  reqInfo,
+                  planModeError,
+                  ToolErrorType.EXECUTION_DENIED,
+                  'not_started',
                 ),
                 resultDisplay: 'Plan mode blocked a non-read-only tool call.',
-                error: undefined,
-                errorType: undefined,
               });
               setToolSpanFailure(
                 toolSpan,
@@ -2484,7 +3103,10 @@ export class CoreToolScheduler {
             }
 
             // AUTO_EDIT mode: auto-approve edit-like and info tools
-            if (isAutoEditApproved(approvalMode, confirmationDetails)) {
+            if (
+              !requiresUserInteraction &&
+              isAutoEditApproved(approvalMode, confirmationDetails)
+            ) {
               this.setToolCallOutcome(
                 reqInfo.callId,
                 ToolConfirmationOutcome.ProceedAlways,
@@ -2502,7 +3124,14 @@ export class CoreToolScheduler {
               this.config.getInputFormat() !== InputFormat.STREAM_JSON;
 
             if (isNonInteractiveDeny) {
-              const errorMessage = `Qwen Code requires permission to use "${reqInfo.name}", but that permission was declined (non-interactive mode cannot prompt for confirmation).`;
+              const errorMessage =
+                planShellDecision.classification === 'unknown'
+                  ? planShellDecision.noApprovalMessage
+                  : `Qwen Code requires permission to use "${reqInfo.name}", but that permission was declined (non-interactive mode cannot prompt for confirmation).`;
+              if (planShellDecision.classification === 'unknown') {
+                rejectPlanShell(errorMessage);
+                continue;
+              }
               this.setStatusInternal(
                 reqInfo.callId,
                 'error',
@@ -2510,6 +3139,7 @@ export class CoreToolScheduler {
                   reqInfo,
                   new Error(errorMessage),
                   ToolErrorType.EXECUTION_DENIED,
+                  'not_started',
                 ),
               );
               setToolSpanFailure(
@@ -2521,6 +3151,8 @@ export class CoreToolScheduler {
               continue;
             }
 
+            const preparedConfirmationDetails = confirmationDetails;
+
             // Fire PermissionRequest hook before showing the permission dialog.
             // Hooks run before the background-agent auto-deny so they can
             // override the denial with policy-based decisions.
@@ -2531,28 +3163,132 @@ export class CoreToolScheduler {
 
             if (hooksEnabled && messageBus) {
               const permissionMode = String(this.config.getApprovalMode());
-              const hookResult = await firePermissionRequestHook(
-                messageBus,
-                canonicalName,
-                (reqInfo.args as Record<string, unknown>) || {},
-                permissionMode,
+              const hookResult = await runInRequestGoalContext(reqInfo, () =>
+                firePermissionRequestHook(
+                  messageBus,
+                  canonicalName,
+                  (reqInfo.args as Record<string, unknown>) || {},
+                  permissionMode,
+                  undefined,
+                  signal,
+                ),
               );
+              if (
+                this.cancelPreExecutionIfAborted(
+                  reqInfo.callId,
+                  signal,
+                  toolSpan,
+                )
+              ) {
+                continue;
+              }
 
-              if (hookResult.hasDecision) {
+              if (
+                hookResult.hasDecision &&
+                (!hookResult.shouldAllow || !requiresUserInteraction)
+              ) {
                 if (hookResult.shouldAllow) {
+                  if (planShellDecision.classification !== 'not-applicable') {
+                    const approval = await runInRequestGoalContext(
+                      reqInfo,
+                      () =>
+                        validatePlanModeShellApproval({
+                          config: this.config,
+                          decision: planShellDecision,
+                          requestArgs: reqInfo.args,
+                          invocationParams: invocation.params as Record<
+                            string,
+                            unknown
+                          >,
+                          signal,
+                          outcome: ToolConfirmationOutcome.ProceedOnce,
+                          payload: hookResult.updatedInput
+                            ? { updatedInput: hookResult.updatedInput }
+                            : undefined,
+                        }),
+                    );
+                    if (
+                      this.cancelPreExecutionIfAborted(
+                        reqInfo.callId,
+                        signal,
+                        toolSpan,
+                      )
+                    ) {
+                      continue;
+                    }
+                    if (approval.outcome === ToolConfirmationOutcome.Cancel) {
+                      await runInRequestGoalContext(reqInfo, () =>
+                        preparedConfirmationDetails.onConfirm(
+                          approval.outcome,
+                          approval.payload,
+                        ),
+                      );
+                      if (
+                        this.cancelPreExecutionIfAborted(
+                          reqInfo.callId,
+                          signal,
+                          toolSpan,
+                        )
+                      ) {
+                        continue;
+                      }
+                      rejectPlanShell(
+                        approval.payload?.cancelMessage ??
+                          planShellDecision.noApprovalMessage,
+                      );
+                      continue;
+                    }
+                    await runInRequestGoalContext(reqInfo, () =>
+                      preparedConfirmationDetails.onConfirm(
+                        approval.outcome,
+                        approval.payload,
+                      ),
+                    );
+                    if (
+                      this.cancelPreExecutionIfAborted(
+                        reqInfo.callId,
+                        signal,
+                        toolSpan,
+                      )
+                    ) {
+                      continue;
+                    }
+                    this.recordAutoModeFallbackResolution(
+                      reqInfo.callId,
+                      approval.outcome,
+                    );
+                    this.setToolCallOutcome(reqInfo.callId, approval.outcome);
+                    this.setStatusInternal(reqInfo.callId, 'scheduled');
+                    continue;
+                  }
                   // Hook granted permission - apply updated input if provided and proceed
                   if (
                     hookResult.updatedInput &&
                     typeof reqInfo.args === 'object'
                   ) {
-                    this.setArgsInternal(
-                      reqInfo.callId,
-                      hookResult.updatedInput,
-                    );
+                    if (
+                      !this.setArgsInternal(
+                        reqInfo.callId,
+                        hookResult.updatedInput,
+                      )
+                    ) {
+                      continue;
+                    }
                   }
-                  await confirmationDetails.onConfirm(
-                    ToolConfirmationOutcome.ProceedOnce,
+                  await runInRequestGoalContext(reqInfo, () =>
+                    preparedConfirmationDetails.onConfirm(
+                      ToolConfirmationOutcome.ProceedOnce,
+                    ),
                   );
+                  if (
+                    this.cancelPreExecutionIfAborted(
+                      reqInfo.callId,
+                      signal,
+                      toolSpan,
+                    )
+                  ) {
+                    continue;
+                  }
                   this.recordAutoModeFallbackResolution(
                     reqInfo.callId,
                     ToolConfirmationOutcome.ProceedOnce,
@@ -2567,10 +3303,21 @@ export class CoreToolScheduler {
                   const cancelPayload = hookResult.denyMessage
                     ? { cancelMessage: hookResult.denyMessage }
                     : undefined;
-                  await confirmationDetails.onConfirm(
-                    ToolConfirmationOutcome.Cancel,
-                    cancelPayload,
+                  await runInRequestGoalContext(reqInfo, () =>
+                    preparedConfirmationDetails.onConfirm(
+                      ToolConfirmationOutcome.Cancel,
+                      cancelPayload,
+                    ),
                   );
+                  if (
+                    this.cancelPreExecutionIfAborted(
+                      reqInfo.callId,
+                      signal,
+                      toolSpan,
+                    )
+                  ) {
+                    continue;
+                  }
                   this.recordAutoModeFallbackResolution(
                     reqInfo.callId,
                     ToolConfirmationOutcome.Cancel,
@@ -2589,6 +3336,7 @@ export class CoreToolScheduler {
                           `Permission denied by hook for "${reqInfo.name}"`,
                       ),
                       ToolErrorType.EXECUTION_DENIED,
+                      'not_started',
                     ),
                   );
                   setToolSpanFailure(
@@ -2605,7 +3353,14 @@ export class CoreToolScheduler {
             // Background agents can't show interactive prompts.
             // Auto-deny after hooks have had a chance to decide.
             if (this.config.getShouldAvoidPermissionPrompts?.()) {
-              const errorMessage = `Tool "${reqInfo.name}" requires permission, but background agents cannot prompt for confirmation. The tool call was denied.`;
+              const errorMessage =
+                planShellDecision.classification === 'unknown'
+                  ? planShellDecision.noApprovalMessage
+                  : `Tool "${reqInfo.name}" requires permission, but background agents cannot prompt for confirmation. The tool call was denied.`;
+              if (planShellDecision.classification === 'unknown') {
+                rejectPlanShell(errorMessage);
+                continue;
+              }
               this.setStatusInternal(
                 reqInfo.callId,
                 'error',
@@ -2613,6 +3368,7 @@ export class CoreToolScheduler {
                   reqInfo,
                   new Error(errorMessage),
                   ToolErrorType.EXECUTION_DENIED,
+                  'not_started',
                 ),
               );
               setToolSpanFailure(
@@ -2633,42 +3389,107 @@ export class CoreToolScheduler {
             // setTimeout(0)) may have already fired by then, so the new
             // entries would never be drained (#4321 review-3 wenshao
             // Critical).
-            if (signal.aborted) {
-              this.setStatusInternal(
-                reqInfo.callId,
-                'cancelled',
-                'Tool call cancelled by user.',
-              );
-              setToolSpanCancelled(toolSpan);
-              this.finalizeToolSpan(reqInfo.callId);
+            if (
+              this.cancelPreExecutionIfAborted(reqInfo.callId, signal, toolSpan)
+            ) {
               continue;
             }
 
+            if (planShellDecision.classification !== 'not-applicable') {
+              const finalPreDisplayPlanShellError =
+                await runInRequestGoalContext(reqInfo, () =>
+                  validatePlanModeShellContext({
+                    config: this.config,
+                    decision: planShellDecision,
+                    requestArgs: reqInfo.args,
+                    invocationParams: invocation.params as Record<
+                      string,
+                      unknown
+                    >,
+                    signal,
+                  }),
+                );
+              if (
+                this.cancelPreExecutionIfAborted(
+                  reqInfo.callId,
+                  signal,
+                  toolSpan,
+                )
+              ) {
+                continue;
+              }
+              if (finalPreDisplayPlanShellError) {
+                rejectPlanShell(finalPreDisplayPlanShellError);
+                continue;
+              }
+            }
+
             // Allow IDE to resolve confirmation
-            this.openIdeDiffIfEnabled(
-              confirmationDetails,
-              reqInfo.callId,
-              signal,
-            );
+            if (
+              confirmationDetails.type !== 'edit' ||
+              !confirmationDetails.skipIdeDiff
+            ) {
+              this.openIdeDiffIfEnabled(
+                confirmationDetails,
+                reqInfo.callId,
+                signal,
+              );
+            }
 
             const originalOnConfirm = confirmationDetails.onConfirm;
+            const invocationContext = getInvocationContext();
+            let planShellResponseClaimed = false;
             const wrappedConfirmationDetails: ToolCallConfirmationDetails = {
               ...confirmationDetails,
               // When PM has an explicit 'ask' rule, 'always allow' would be
               // ineffective because ask takes priority over allow.
               // Hide the option so users aren't misled.
-              ...(pmForcedAsk ? { hideAlwaysAllow: true } : {}),
-              onConfirm: (
+              ...(pmForcedAsk || requiresUserInteraction
+                ? { hideAlwaysAllow: true }
+                : {}),
+              onConfirm: async (
                 outcome: ToolConfirmationOutcome,
                 payload?: ToolConfirmationPayload,
               ) =>
-                this.handleConfirmationResponse(
-                  reqInfo.callId,
-                  originalOnConfirm,
-                  outcome,
-                  signal,
-                  payload,
-                ),
+                runWithInvocationContext(invocationContext, async () => {
+                  await runInRequestGoalContext(reqInfo, async () => {
+                    if (planShellDecision.classification !== 'not-applicable') {
+                      if (planShellResponseClaimed) return;
+                      planShellResponseClaimed = true;
+                      const currentCall = this.toolCalls.find(
+                        (call) =>
+                          call.request.callId === reqInfo.callId &&
+                          call.status === 'awaiting_approval',
+                      ) as WaitingToolCall | undefined;
+                      if (!currentCall) return;
+                      const approval = await validatePlanModeShellApproval({
+                        config: this.config,
+                        decision: planShellDecision,
+                        requestArgs: currentCall.request.args,
+                        invocationParams: currentCall.invocation
+                          .params as Record<string, unknown>,
+                        signal,
+                        outcome,
+                        payload,
+                      });
+                      await this.handleConfirmationResponse(
+                        reqInfo.callId,
+                        originalOnConfirm,
+                        approval.outcome,
+                        signal,
+                        approval.payload,
+                      );
+                      return;
+                    }
+                    await this.handleConfirmationResponse(
+                      reqInfo.callId,
+                      originalOnConfirm,
+                      outcome,
+                      signal,
+                      payload,
+                    );
+                  });
+                }),
             };
             this.setStatusInternal(
               reqInfo.callId,
@@ -2707,6 +3528,7 @@ export class CoreToolScheduler {
               reqInfo.callId,
               'cancelled',
               'Tool call cancelled by user.',
+              'not_started',
             );
             // If this tool was waiting on the user, end the blocked span
             // as aborted before the tool span itself.
@@ -2732,6 +3554,7 @@ export class CoreToolScheduler {
               reqInfo,
               error instanceof Error ? error : new Error(String(error)),
               explicitErrorType ?? ToolErrorType.UNHANDLED_EXCEPTION,
+              'not_started',
             ),
           );
           // Non-aborted catch is a system error (e.g. getConfirmationDetails
@@ -2773,6 +3596,7 @@ export class CoreToolScheduler {
       }
     } finally {
       this.isScheduling = false;
+      this.drainRequestQueueIfIdle();
     }
   }
 
@@ -2786,6 +3610,18 @@ export class CoreToolScheduler {
     signal: AbortSignal,
     payload?: ToolConfirmationPayload,
   ): Promise<void> {
+    const runtimeView = this.runtimeContentGeneratorViews.get(callId);
+    if (runtimeView && getRuntimeContentGenerator() !== runtimeView) {
+      return runWithRuntimeContentGenerator(runtimeView, () =>
+        this.handleConfirmationResponse(
+          callId,
+          originalOnConfirm,
+          outcome,
+          signal,
+          payload,
+        ),
+      );
+    }
     const toolCall = this.toolCalls.find(
       (c) => c.request.callId === callId && c.status === 'awaiting_approval',
     );
@@ -2794,6 +3630,18 @@ export class CoreToolScheduler {
     // another confirmation path, e.g. IDE vs CLI race), skip to avoid double
     // processing and potential re-execution.
     if (!toolCall) return;
+
+    if (goalTurnContext.getStore() !== toolCall.request.goalContext) {
+      return runInRequestGoalContext(toolCall.request, () =>
+        this.handleConfirmationResponse(
+          callId,
+          originalOnConfirm,
+          outcome,
+          signal,
+          payload,
+        ),
+      );
+    }
 
     try {
       await this._handleConfirmationResponseInner(
@@ -2814,10 +3662,8 @@ export class CoreToolScheduler {
       // path already closed them, these are no-ops.
       //
       // attemptExecutionOfScheduledCalls is NOT covered by this catch
-      // (see below). A sister tool's prelude throw escaping through
-      // attemptExecutionOfScheduledCalls would otherwise corrupt A's
-      // span — each executeSingleToolCall handles its own span
-      // lifecycle via its own catch (#4321 review-9 wenshao Critical).
+      // (see below). Each sister tool owns and terminalizes failures in
+      // executeSingleToolCall, so none can be mis-attributed to A's span.
       //
       // Branch on signal.aborted so a throw caused by the abort signal
       // (e.g. ModifyWithEditor child interrupted by Ctrl+C) lands as
@@ -2825,6 +3671,25 @@ export class CoreToolScheduler {
       // in `_schedule:1797` and the dashboard intent of separating
       // user/system aborts from real exceptions (#4321 review-2 wenshao).
       const aborted = signal.aborted;
+      if (aborted) {
+        this.setStatusInternal(
+          callId,
+          'cancelled',
+          'Tool call cancelled by user.',
+          'not_started',
+        );
+      } else {
+        this.setStatusInternal(
+          callId,
+          'error',
+          createErrorResponse(
+            toolCall.request,
+            error instanceof Error ? error : new Error(String(error)),
+            ToolErrorType.UNHANDLED_EXCEPTION,
+            'not_started',
+          ),
+        );
+      }
       this.finalizeBlockedSpan(callId, aborted ? 'aborted' : 'error', 'system');
       const toolSpan = this.toolSpans.get(callId);
       if (toolSpan) {
@@ -2850,13 +3715,8 @@ export class CoreToolScheduler {
       throw error;
     }
 
-    // Execution phase runs OUTSIDE the catch above so a sister tool's
-    // prelude throw (re-thrown by executeSingleToolCall after SF-H2)
-    // can't be mis-attributed to A's span. Each executeSingleToolCall
-    // handles its own span lifecycle; failures propagate to the caller
-    // as-is. (#4321 review-9 wenshao Critical refines review-2
-    // pushback which became live after SF-H2 added the prelude
-    // re-throw.)
+    // Execution runs outside the confirmation catch so each sister tool's
+    // executeSingleToolCall owns its own terminal response and span.
     await this.attemptExecutionOfScheduledCalls(signal);
   }
 
@@ -2871,7 +3731,17 @@ export class CoreToolScheduler {
     signal: AbortSignal,
     payload?: ToolConfirmationPayload,
   ): Promise<void> {
-    await originalOnConfirm(outcome, payload);
+    const shouldSwitchToDefault =
+      outcome === ToolConfirmationOutcome.ProceedOnceAndSwitchToDefault;
+    const normalizedOutcome = shouldSwitchToDefault
+      ? ToolConfirmationOutcome.ProceedOnce
+      : outcome;
+
+    await originalOnConfirm(normalizedOutcome, payload);
+    if (shouldSwitchToDefault) {
+      this.config.setApprovalMode(ApprovalMode.DEFAULT);
+    }
+    outcome = normalizedOutcome;
 
     if (
       outcome === ToolConfirmationOutcome.ProceedAlways ||
@@ -2897,7 +3767,7 @@ export class CoreToolScheduler {
       // Use custom cancel message from payload if provided, otherwise use default
       const cancelMessage =
         payload?.cancelMessage || 'User did not allow tool call';
-      this.setStatusInternal(callId, 'cancelled', cancelMessage);
+      this.setStatusInternal(callId, 'cancelled', cancelMessage, 'not_started');
       // Tool span is cancelled too — finalize it via setToolSpanCancelled
       // before pulling it out of the map so the status survives end().
       const toolSpan = this.toolSpans.get(callId);
@@ -2985,7 +3855,7 @@ export class CoreToolScheduler {
           signal,
           this.onEditorClose,
         );
-        this.setArgsInternal(callId, updatedParams);
+        if (!this.setArgsInternal(callId, updatedParams)) return;
         this.setStatusInternal(callId, 'awaiting_approval', {
           ...waitingToolCall.confirmationDetails,
           fileDiff: updatedDiff,
@@ -2995,11 +3865,15 @@ export class CoreToolScheduler {
     } else {
       // If the client provided new content, apply it before scheduling.
       if (payload?.newContent && toolCall) {
-        await this._applyInlineModify(
-          toolCall as WaitingToolCall,
-          payload,
-          signal,
-        );
+        if (
+          !(await this._applyInlineModify(
+            toolCall as WaitingToolCall,
+            payload,
+            signal,
+          ))
+        ) {
+          return;
+        }
       }
       this.setStatusInternal(callId, 'scheduled');
       // Proceed: end the blocked span before execution begins. ProceedOnce
@@ -3024,12 +3898,11 @@ export class CoreToolScheduler {
   ): void {
     const wasAutoModeFallback = this.autoModeFallbackCallIds.delete(callId);
 
-    // AUTO-mode denialTracking recovery: when the user manually approves a
-    // call that fell back because denialTracking was armed, clear the armed
-    // counters so subsequent calls return to classifier flow. Ordinary AUTO
-    // approvals for ask rules must not clear cumulative denial totals.
-    // Cancel / abort do NOT reset — spec §9.1.4 treats rejection as a
-    // signal that the classifier was correct to block.
+    // AUTO-mode recovery: when the user manually approves a call that fell
+    // back because denialTracking was armed or the classifier was unavailable,
+    // clear the counters so subsequent calls return to classifier flow.
+    // Ordinary AUTO approvals for ask rules must not clear cumulative totals.
+    // Cancel / abort do not reset because the user declined the action.
     if (
       this.config.getApprovalMode() === ApprovalMode.AUTO &&
       wasAutoModeFallback &&
@@ -3132,14 +4005,14 @@ export class CoreToolScheduler {
     toolCall: WaitingToolCall,
     payload: ToolConfirmationPayload,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const confirmDetails = toolCall.confirmationDetails;
     if (
       confirmDetails.type !== 'edit' ||
       !isModifiableDeclarativeTool(toolCall.tool) ||
       !payload.newContent
     ) {
-      return;
+      return true;
     }
 
     const currentContent = confirmDetails.originalContent ?? '';
@@ -3158,11 +4031,14 @@ export class CoreToolScheduler {
       'Proposed',
     );
 
-    this.setArgsInternal(toolCall.request.callId, updatedParams);
+    if (!this.setArgsInternal(toolCall.request.callId, updatedParams)) {
+      return false;
+    }
     this.setStatusInternal(toolCall.request.callId, 'awaiting_approval', {
       ...confirmDetails,
       fileDiff: updatedDiff,
     });
+    return true;
   }
 
   private async attemptExecutionOfScheduledCalls(
@@ -3259,8 +4135,20 @@ export class CoreToolScheduler {
   ): Promise<void> {
     if (toolCall.status !== 'scheduled') return;
 
+    if (goalTurnContext.getStore() !== toolCall.request.goalContext) {
+      return runInRequestGoalContext(toolCall.request, () =>
+        this.executeSingleToolCall(toolCall, signal),
+      );
+    }
+
     const scheduledCall = toolCall;
     const { callId, name: toolName } = scheduledCall.request;
+    const runtimeView = this.runtimeContentGeneratorViews.get(callId);
+    if (runtimeView && getRuntimeContentGenerator() !== runtimeView) {
+      return runWithRuntimeContentGenerator(runtimeView, () =>
+        this.executeSingleToolCall(toolCall, signal),
+      );
+    }
 
     // The tool span is opened in `_schedule` so it covers validating →
     // awaiting_approval → executing in one span. Reuse it here. If it's
@@ -3272,11 +4160,17 @@ export class CoreToolScheduler {
       // grouping by span name don't see two entries for migrated/MCP tools
       // when this defensive fallback fires (#4321 review).
       const canonical = canonicalToolName(toolName);
-      toolSpan = startToolSpan(canonical, {
-        'tool.call_id': callId,
-        call_id: callId, // legacy alias — see _schedule for context
-        tool_name: canonical, // legacy alias — see _schedule for context
-      });
+      toolSpan = startToolSpan(
+        canonical,
+        {
+          'tool.call_id': callId,
+          'gen_ai.tool.call.id': scheduledCall.request.providerCallId ?? callId,
+          call_id: callId, // legacy alias — see _schedule for context
+          tool_name: canonical, // legacy alias — see _schedule for context
+        },
+        scheduledCall.tool.description,
+        scheduledCall.request.prompt_id,
+      );
       this.toolSpans.set(callId, toolSpan);
     }
     try {
@@ -3288,9 +4182,8 @@ export class CoreToolScheduler {
       this.bouncedToolUseId.delete(callId);
       // _executeToolCallBody pre-sets span status (OK / FAILURE /
       // CANCELLED) only AFTER its main try/catch is entered. Throws
-      // from the prelude — getMessageBus,
-      // startToolExecutionSpan, etc. — happen BEFORE the
-      // `scheduled → executing` transition, so the span would end
+      // from the prelude — for example getMessageBus — happen BEFORE
+      // the `scheduled → executing` transition, so the span would end
       // UNSET with no failure_kind AND the tool call would stay in
       // `scheduled` forever (checkAndNotifyCompletion never sees a
       // terminal state). Set failure status + error response here so
@@ -3315,9 +4208,12 @@ export class CoreToolScheduler {
           scheduledCall.request,
           error instanceof Error ? error : new Error(errorMessage),
           ToolErrorType.UNHANDLED_EXCEPTION,
+          this.toolCalls.find((call) => call.request.callId === callId)
+            ?.status === 'executing'
+            ? 'error'
+            : 'not_started',
         ),
       );
-      throw error;
     } finally {
       // A PreToolUse 'ask' hook can bounce this tool back to
       // awaiting_approval (see bounceToAwaitingApprovalForAsk). The tool
@@ -3387,6 +4283,7 @@ export class CoreToolScheduler {
       prompt:
         reason ||
         `A PreToolUse hook requested confirmation before running ${toolName}.`,
+      renderPromptAsPlainText: true,
       hideAlwaysAllow: true,
       onConfirm: (outcome, payload) =>
         this.handleConfirmationResponse(
@@ -3427,27 +4324,22 @@ export class CoreToolScheduler {
     }
   }
 
-  private safelyAddToolInputAttributes(
+  private safelyAddToolArgumentsAttributes(
     span: Span,
-    toolName: string,
-    toolInput: string,
+    argumentsValue: unknown,
   ): void {
     try {
-      addToolInputAttributes(this.config, span, toolName, toolInput);
+      addToolArgumentsAttributes(this.config, span, argumentsValue);
     } catch (error) {
-      debugLogger.warn('Failed to add tool input span attributes:', error);
+      debugLogger.warn('Failed to add tool arguments span attribute:', error);
     }
   }
 
-  private safelyAddToolResultAttributes(
-    span: Span,
-    toolName: string,
-    toolResult: string,
-  ): void {
+  private safelyAddToolCallResultAttributes(span: Span, result: unknown): void {
     try {
-      addToolResultAttributes(this.config, span, toolName, toolResult);
+      addToolCallResultAttributes(this.config, span, result);
     } catch (error) {
-      debugLogger.warn('Failed to add tool result span attributes:', error);
+      debugLogger.warn('Failed to add tool result span attribute:', error);
     }
   }
 
@@ -3478,17 +4370,6 @@ export class CoreToolScheduler {
           toolInput[key] = unescapePath(String(toolInput[key]).trim());
         }
       }
-    }
-
-    // Guard the JSON serialization — addToolInputAttributes early-returns
-    // when sensitive attributes are off, but the argument is computed
-    // before the call.
-    if (this.config.getTelemetryIncludeSensitiveSpanAttributes?.()) {
-      this.safelyAddToolInputAttributes(
-        span,
-        toolName,
-        safeJsonStringify(toolInput) ?? '{}',
-      );
     }
 
     // Generate unique tool_use_id for hook tracking. On a post-'ask'
@@ -3542,7 +4423,7 @@ export class CoreToolScheduler {
                 hasAdditionalContext: !!r.additionalContext,
               },
       );
-      if (!preHookResult.shouldProceed) {
+      if (!signal.aborted && !preHookResult.shouldProceed) {
         // A PreToolUse hook returning permissionDecision:'ask' wants the
         // user to confirm in the TUI before the tool runs. When we can
         // prompt, bounce the tool into the existing awaiting_approval flow
@@ -3576,11 +4457,7 @@ export class CoreToolScheduler {
           scheduledCall.request,
           new Error(blockMessage),
           ToolErrorType.EXECUTION_DENIED,
-        );
-        this.safelyAddToolResultAttributes(
-          span,
-          toolName,
-          `BLOCKED: ${blockMessage}`,
+          'not_started',
         );
         this.setStatusInternal(callId, 'error', errorResponse);
         setToolSpanFailure(
@@ -3592,10 +4469,89 @@ export class CoreToolScheduler {
       }
     }
 
-    this.setStatusInternal(callId, 'executing');
+    const toolInvocationGuard = this.config.getToolInvocationGuard?.();
+    if (toolInvocationGuard) {
+      const invocationContext = getInvocationContext();
+      const guardDecision = await evaluateToolInvocationGuard(
+        toolInvocationGuard,
+        {
+          callId,
+          toolName: canonicalName,
+          args: invocation.params as Record<string, unknown>,
+          signal,
+          ...(invocationContext ? { invocationContext } : {}),
+        },
+      );
+      if (signal.aborted) {
+        this.setStatusInternal(
+          callId,
+          'cancelled',
+          createCancelledResponse(
+            scheduledCall.request,
+            'Tool call cancelled before execution.',
+            'not_started',
+          ),
+        );
+        if (this.toolSpans.has(callId)) {
+          setToolSpanCancelled(span);
+        }
+        return;
+      }
+      if (!guardDecision.allowed) {
+        const errorResponse = createErrorResponse(
+          scheduledCall.request,
+          new Error(guardDecision.reason),
+          ToolErrorType.EXECUTION_DENIED,
+          'not_started',
+        );
+        this.setStatusInternal(callId, 'error', errorResponse);
+        setToolSpanFailure(
+          span,
+          TOOL_FAILURE_KIND_INVOCATION_GUARD_DENIED,
+          TOOL_SPAN_STATUS_INVOCATION_GUARD_DENIED,
+        );
+        return;
+      }
+    }
+
+    if (signal.aborted) {
+      const currentCall = this.toolCalls.find(
+        (call) => call.request.callId === callId,
+      );
+      if (
+        currentCall &&
+        currentCall.status !== 'success' &&
+        currentCall.status !== 'error' &&
+        currentCall.status !== 'cancelled'
+      ) {
+        this.setStatusInternal(
+          callId,
+          'cancelled',
+          createCancelledResponse(
+            scheduledCall.request,
+            'Tool call cancelled before execution.',
+            'not_started',
+          ),
+        );
+        if (this.toolSpans.has(callId)) {
+          setToolSpanCancelled(span);
+        }
+      }
+      return;
+    }
 
     const liveOutputCallback = scheduledCall.tool.canUpdateOutput
       ? (outputChunk: ToolResultDisplay) => {
+          if (isShellProgressData(outputChunk)) {
+            // Liveness heartbeat, not display content: forward to the
+            // outputUpdateHandler (stream-json progress events) but keep it
+            // out of liveOutput — replacing the accumulated command output
+            // with a stats object would blank the live view.
+            if (this.outputUpdateHandler) {
+              this.outputUpdateHandler(callId, outputChunk);
+            }
+            return;
+          }
           const compactOutput =
             this.compactResultDisplayForInteractiveHistory(outputChunk);
           if (this.outputUpdateHandler) {
@@ -3617,23 +4573,14 @@ export class CoreToolScheduler {
     // things like `onPid` and `onLiveOutput`. This will make the scheduler
     // agnostic to the invocation type.
     //
-    // Start the execution sub-span BEFORE invocation.execute() so its
-    // synchronous setup (shell command preprocessing, child_process.spawn,
-    // etc.) is bracketed by the span. We don't manually activate the span
-    // as OTel context here because the surrounding tool span is already
-    // active via runInToolSpanContext, and tool implementations don't
-    // currently emit nested OTel spans of their own — the span boundary
-    // is purely for timing/attribution.
-    const execSpan = startToolExecutionSpan();
-    // try wraps both invocation.execute() and the await so synchronous
-    // throws (e.g. shell setup failure) flow into the same catch as async
-    // rejections — otherwise execSpan leaks unended and failure hooks
-    // are skipped.
     const sleepInhibitorHandle = acquireSleepInhibitor(
       this.config,
       `Qwen Code is executing tool ${canonicalName}`,
     );
     let removeParentAbortForward: (() => void) | undefined;
+    let executionStatus: ToolExecutionStatus = 'not_started';
+    let executionSettled = false;
+    let execSpan: Span | undefined;
     try {
       let promise: Promise<ToolResult>;
 
@@ -3674,6 +4621,15 @@ export class CoreToolScheduler {
         }
       }
 
+      const inheritedTodoWorkChainId = todoWorkChainContext.getStore();
+      const todoWorkChainId =
+        this.config.getActiveTodoWorkChainOwner?.(
+          scheduledCall.request.prompt_id,
+          inheritedTodoWorkChainId,
+        ) ??
+        inheritedTodoWorkChainId ??
+        scheduledCall.request.prompt_id;
+
       if (invocation instanceof ShellToolInvocation) {
         const setPidCallback = (pid: number) => {
           this.toolCalls = this.toolCalls.map((tc) =>
@@ -3706,28 +4662,58 @@ export class CoreToolScheduler {
             promotableShells[0]?.request.callId === callId
           );
         };
-        promise = invocation.execute(
-          execSignal,
-          liveOutputCallback,
-          shellExecutionConfig,
-          setPidCallback,
-          setPromoteAbortControllerCallback,
-          canPromoteForegroundShell,
+        this.safelyAddToolArgumentsAttributes(span, invocation.params);
+        promise = todoWorkChainContext.run(todoWorkChainId, () =>
+          promptIdContext.run(scheduledCall.request.prompt_id, () => {
+            // Keep this transition and execution span at the invocation
+            // boundary so setup failures remain not_started.
+            this.setStatusInternal(callId, 'executing');
+            execSpan = startToolExecutionSpan({
+              toolName: canonicalName,
+              callId,
+            });
+            executionStatus = 'error';
+            return invocation.execute(
+              execSignal,
+              liveOutputCallback,
+              shellExecutionConfig,
+              setPidCallback,
+              setPromoteAbortControllerCallback,
+              canPromoteForegroundShell,
+            );
+          }),
         );
       } else {
-        promise = invocation.execute(
-          execSignal,
-          liveOutputCallback,
-          shellExecutionConfig,
+        this.safelyAddToolArgumentsAttributes(span, invocation.params);
+        promise = todoWorkChainContext.run(todoWorkChainId, () =>
+          promptIdContext.run(scheduledCall.request.prompt_id, () => {
+            // Keep this transition and execution span at the invocation
+            // boundary so setup failures remain not_started.
+            this.setStatusInternal(callId, 'executing');
+            execSpan = startToolExecutionSpan({
+              toolName: canonicalName,
+              callId,
+            });
+            executionStatus = 'error';
+            return invocation.execute(
+              execSignal,
+              liveOutputCallback,
+              shellExecutionConfig,
+            );
+          }),
         );
       }
 
       let toolResult: ToolResult;
+      let schedulerTimeoutResultSelected = false;
+      let schedulerTimeoutWon = false;
       if (timeoutController) {
         let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
         try {
           toolResult = await new Promise<ToolResult>((resolve, reject) => {
             timeoutTimer = setTimeout(() => {
+              schedulerTimeoutResultSelected = true;
+              schedulerTimeoutWon = !signal.aborted;
               debugLogger.warn(
                 `Tool ${canonicalName} (${callId}) timed out after ` +
                   `${toolExecutionTimeoutMs}ms — aborting`,
@@ -3762,23 +4748,44 @@ export class CoreToolScheduler {
       // Mirror the abort signal here — and pass `cancelled: true` so the
       // exec sub-span ends UNSET, matching setToolSpanCancelled on the
       // parent (#4212, #4302 review).
-      const aborted = signal.aborted;
       const isTimeout =
-        !aborted && toolResult.error?.type === ToolErrorType.EXECUTION_TIMEOUT;
-      endToolExecutionSpan(execSpan, {
-        success: toolResult.error === undefined && !aborted,
-        error: aborted
-          ? TOOL_SPAN_STATUS_TOOL_CANCELLED
-          : isTimeout
-            ? TOOL_SPAN_STATUS_TOOL_TIMEOUT
-            : toolResult.error
-              ? TOOL_SPAN_STATUS_TOOL_ERROR
-              : undefined,
-        cancelled: aborted,
-      });
+        toolResult.error?.type === ToolErrorType.EXECUTION_TIMEOUT &&
+        (!schedulerTimeoutResultSelected || schedulerTimeoutWon);
+      const parentAbortedAtExecutionSettle = signal.aborted;
+      const aborted = parentAbortedAtExecutionSettle && !isTimeout;
+      const executionErrorType = toolResult.error
+        ? (toolResult.error.type ??
+          (scheduledCall.tool instanceof DiscoveredMCPTool
+            ? ToolErrorType.MCP_TOOL_ERROR
+            : ToolErrorType.UNKNOWN))
+        : undefined;
+      executionStatus = aborted
+        ? 'cancelled'
+        : toolResult.error
+          ? 'error'
+          : 'success';
+      executionSettled = true;
+      if (execSpan) {
+        const completedExecSpan = execSpan;
+        execSpan = undefined;
+        endToolExecutionSpan(completedExecSpan, {
+          success: executionStatus === 'success',
+          error: aborted
+            ? TOOL_SPAN_STATUS_TOOL_CANCELLED
+            : isTimeout
+              ? TOOL_SPAN_STATUS_TOOL_TIMEOUT
+              : toolResult.error
+                ? TOOL_SPAN_STATUS_TOOL_ERROR
+                : undefined,
+          cancelled: aborted,
+          executionStatus,
+          errorType: executionErrorType,
+        });
+      }
       if (aborted) {
         // PostToolUseFailure Hook
-        let cancelMessage = 'User cancelled tool execution.';
+        // `execute()` returned a result here, so the tool's work did finish.
+        let cancelMessage = TOOL_CANCELLED_AFTER_COMPLETION_MESSAGE;
         let failureHookArtifacts: ToolArtifact[] | undefined;
         if (hooksEnabled && messageBus) {
           const failureHookResult = await this.withHookSpan(
@@ -3808,28 +4815,61 @@ export class CoreToolScheduler {
           }
           failureHookArtifacts = failureHookResult.artifacts;
         }
-        this.safelyAddToolResultAttributes(
-          span,
-          toolName,
-          `CANCELLED: ${cancelMessage}`,
-        );
         this.setStatusInternal(
           callId,
           'cancelled',
-          failureHookArtifacts && failureHookArtifacts.length > 0
-            ? createCancelledResponse(
-                scheduledCall.request,
-                cancelMessage,
-                failureHookArtifacts,
-              )
-            : cancelMessage,
+          createCancelledResponse(
+            scheduledCall.request,
+            cancelMessage,
+            executionStatus,
+            failureHookArtifacts,
+            toolResult.persistedOutputFiles,
+          ),
         );
         setToolSpanCancelled(span);
         return; // Both code paths should return here
       }
 
+      const cancelAfterPostProcessing = (
+        artifacts?: ToolArtifact[],
+        preserved?: {
+          persistedOutputFiles?: string[];
+          visionBridgeNotice?: string;
+        },
+      ): boolean => {
+        if (!signal.aborted || (isTimeout && parentAbortedAtExecutionSettle)) {
+          return false;
+        }
+        this.setStatusInternal(
+          callId,
+          'cancelled',
+          createCancelledResponse(
+            scheduledCall.request,
+            // Reached only after `execute()` settled with a result.
+            TOOL_CANCELLED_AFTER_COMPLETION_MESSAGE,
+            executionStatus,
+            artifacts,
+            preserved?.persistedOutputFiles,
+            preserved?.visionBridgeNotice,
+          ),
+        );
+        setToolSpanCancelled(span);
+        return true;
+      };
+
       if (toolResult.error === undefined) {
-        let content = toolResult.llmContent;
+        let content = toolResult.llmContent ?? '';
+        let persistedOutputFiles = toolResult.persistedOutputFiles
+          ? [...toolResult.persistedOutputFiles]
+          : toolResult.persistedOutputFiles;
+        const mergePersistedOutputFiles = (
+          outputFiles: string[] | undefined,
+        ) => {
+          if (outputFiles === undefined) return;
+          persistedOutputFiles = Array.from(
+            new Set([...(persistedOutputFiles ?? []), ...outputFiles]),
+          );
+        };
         let contentLength: number | undefined =
           typeof content === 'string' ? content.length : undefined;
 
@@ -3892,18 +4932,24 @@ export class CoreToolScheduler {
 
           // Check if hook requested to stop execution
           if (postHookResult.shouldStop) {
+            if (
+              cancelAfterPostProcessing(postHookResult.artifacts, {
+                persistedOutputFiles,
+              })
+            ) {
+              return;
+            }
             const stopMessage =
               postHookResult.stopReason || 'Execution stopped by hook';
             const errorResponse = createErrorResponse(
               scheduledCall.request,
               new Error(stopMessage),
               ToolErrorType.EXECUTION_DENIED,
+              executionStatus,
             );
-            this.safelyAddToolResultAttributes(
-              span,
-              toolName,
-              `STOPPED: ${stopMessage}`,
-            );
+            if (persistedOutputFiles !== undefined) {
+              errorResponse.persistedOutputFiles = persistedOutputFiles;
+            }
             this.setStatusInternal(callId, 'error', errorResponse);
             setToolSpanFailure(
               span,
@@ -3916,11 +4962,13 @@ export class CoreToolScheduler {
 
         // Universal post-execution truncation gate — persists oversized
         // tool results to disk before system-reminders are appended.
-        content = await this.maybePersistLargeToolResult(
+        const persisted = await this.maybePersistLargeToolResult(
           callId,
           toolName,
           content,
         );
+        content = persisted.content;
+        mergePersistedOutputFiles(persisted.persistedOutputFiles);
 
         // Collect filesystem paths the tool just touched. Different tools
         // use different parameter names: `file_path` (read/edit/write),
@@ -4056,6 +5104,7 @@ export class CoreToolScheduler {
           perToolMax !== undefined ? Number.POSITIVE_INFINITY : undefined;
         const promptIdForTruncation = scheduledCall.request.prompt_id;
         try {
+          const contentBeforeTruncation = content;
           const truncated = await truncateLlmContent(
             this.config,
             toolName,
@@ -4064,6 +5113,13 @@ export class CoreToolScheduler {
             promptIdForTruncation,
           );
           content = truncated.content;
+          mergePersistedOutputFiles(
+            truncated.outputFile
+              ? [truncated.outputFile]
+              : truncated.content !== contentBeforeTruncation
+                ? []
+                : undefined,
+          );
         } catch (truncErr) {
           // A truncation/IO failure must never demote a successful tool call
           // to an error — keep the content and warn.
@@ -4107,6 +5163,7 @@ export class CoreToolScheduler {
               : this.config.getTruncateToolOutputLines() * 2;
           if (content.length > baseThreshold * 2) {
             try {
+              const contentBeforeRecombination = content;
               const recombined = await truncateToolOutput(
                 this.config,
                 toolName,
@@ -4119,6 +5176,13 @@ export class CoreToolScheduler {
                 promptIdForTruncation,
               );
               content = recombined.content;
+              mergePersistedOutputFiles(
+                recombined.outputFile
+                  ? [recombined.outputFile]
+                  : recombined.content !== contentBeforeRecombination
+                    ? []
+                    : undefined,
+              );
             } catch (truncErr) {
               debugLogger.warn(
                 `TRUNCATION (combined) failed for ${toolName}: ${
@@ -4131,30 +5195,32 @@ export class CoreToolScheduler {
           }
         }
 
-        // Guard the JSON serialization for non-string content. Tool
-        // results can contain Part[] with large inlineData/media payloads
-        // that we don't want to serialize when telemetry is off.
-        if (this.config.getTelemetryIncludeSensitiveSpanAttributes?.()) {
-          this.safelyAddToolResultAttributes(
-            span,
-            toolName,
-            typeof content === 'string'
-              ? content
-              : (safeJsonStringify(content) ?? ''),
-          );
-        }
-
-        // Recompute AFTER truncation so it reflects the model-facing length,
-        // consistent with the batch-offload path (which also updates it).
+        // Recompute AFTER truncation so it reflects the model-facing length;
+        // the final batch pass recomputes it again after aggregate reduction.
         contentLength =
           typeof content === 'string' ? content.length : undefined;
 
-        const response = convertToFunctionResponse(toolName, callId, content);
+        const convertedResponse = convertToFunctionResponse(
+          toolName,
+          callId,
+          content,
+        );
+        const processedImages = await this.processToolResultImages(
+          convertedResponse,
+          signal,
+        );
+        const response = processedImages.responseParts;
+        if (response !== convertedResponse) {
+          contentLength = response.reduce(
+            (total, part) => total + extractTextFromPartListUnion(part).length,
+            0,
+          );
+        }
         const artifacts = [
           ...(toolResult.artifacts ?? []),
           ...(postToolUseArtifacts ?? []),
         ];
-        const successResponse: ToolCallResponseInfo = {
+        const successResponse: CoreToolCallResponseInfo = {
           callId,
           responseParts: response,
           resultDisplay: this.compactResultDisplayForInteractiveHistory(
@@ -4162,14 +5228,86 @@ export class CoreToolScheduler {
           ),
           error: undefined,
           errorType: undefined,
+          executionStatus,
           contentLength,
+          ...(persistedOutputFiles !== undefined
+            ? { persistedOutputFiles }
+            : {}),
           // Propagate modelOverride from skill tools. Use `in` to distinguish
           // "skill returned undefined (inherit)" from "non-skill tool (no field)".
-          ...('modelOverride' in toolResult
-            ? { modelOverride: toolResult.modelOverride }
+          ...(processedImages.modelOverride !== undefined
+            ? { modelOverride: processedImages.modelOverride }
+            : 'modelOverride' in toolResult
+              ? { modelOverride: toolResult.modelOverride }
+              : {}),
+          ...(toolResult.terminateTurn ? { terminateTurn: true } : {}),
+          ...(processedImages.visionBridgeNotice !== undefined
+            ? { visionBridgeNotice: processedImages.visionBridgeNotice }
             : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
         };
+        // After an APPROVED exit_plan_mode, swap the large `plan` argument
+        // still sitting in the model turn's functionCall for a pointer to the
+        // saved plan file. The blob otherwise stays in the model's attention
+        // window and gets regurgitated into later responses (#6237). Keyed off
+        // the approval llmContent prefixes (not just tool success) so
+        // rejected/no-action results keep their plan text for revision. Must
+        // run BEFORE setStatusInternal: completion callbacks may submit the
+        // continuation turn synchronously, and it should already see the
+        // sanitized history.
+        if (
+          canonicalName === ToolNames.EXIT_PLAN_MODE &&
+          typeof toolResult.llmContent === 'string' &&
+          PLAN_EXIT_APPROVED_LLM_CONTENT_PREFIXES.some((prefix) =>
+            (toolResult.llmContent as string).startsWith(prefix),
+          )
+        ) {
+          try {
+            const planPath = this.config.getPlanFilePath();
+            // Gate on the on-disk plan actually matching the in-history
+            // text: savePlanBestEffort swallows filesystem errors, and the
+            // pointer must never claim a save that failed or reference a
+            // file holding a different plan. A missing/unreadable file
+            // throws here and skips the redaction entirely.
+            const savedPlan = fsSync.readFileSync(planPath, 'utf-8');
+            const redacted = this.config
+              .getGeminiClient?.()
+              ?.getChat()
+              .redactApprovedPlanFromHistory(
+                callId,
+                approvedPlanRedactionText(planPath),
+                savedPlan,
+              );
+            // The rewrite declines silently on a no-match call id, a
+            // non-string plan argument, or in-history text differing from
+            // the saved file — trace those so a "plan still in history"
+            // report can tell a skipped rewrite from a run one.
+            if (redacted === false) {
+              debugLogger.debug(
+                `Approved-plan redaction left history unchanged for ` +
+                  `${callId}: no matching exit_plan_mode call, or its ` +
+                  `plan text does not match ${planPath}.`,
+              );
+            }
+          } catch (redactErr) {
+            debugLogger.warn(
+              `Skipping approved-plan redaction for ${callId} (plan file ` +
+                `unavailable?): ${
+                  redactErr instanceof Error
+                    ? redactErr.message
+                    : String(redactErr)
+                }`,
+            );
+          }
+        }
+        if (
+          cancelAfterPostProcessing(artifacts, {
+            persistedOutputFiles: successResponse.persistedOutputFiles,
+            visionBridgeNotice: successResponse.visionBridgeNotice,
+          })
+        ) {
+          return;
+        }
         this.setStatusInternal(callId, 'success', successResponse);
         safeSetStatus(span, { code: SpanStatusCode.OK });
         // Mirrors setToolSpanFailure/setToolSpanCancelled — every tool span
@@ -4180,10 +5318,21 @@ export class CoreToolScheduler {
         } catch {
           // OTel errors must not block API behavior.
         }
+        const result = response.find(
+          (part) => part.functionResponse !== undefined,
+        )?.functionResponse?.response;
+        if (result !== undefined) {
+          this.safelyAddToolCallResultAttributes(span, result);
+        }
       } else {
         // It is a failure
         // PostToolUseFailure Hook
-        let errorMessage = toolResult.error.message;
+        const operationalErrorMessage = toolResult.error.message;
+        let errorMessage = operationalErrorMessage;
+        let errorPersistedOutputFiles = toolResult.persistedOutputFiles
+          ? [...toolResult.persistedOutputFiles]
+          : toolResult.persistedOutputFiles;
+        let failureHookAdditionalContext: string | undefined;
         let failureHookArtifacts: ToolArtifact[] | undefined;
         if (hooksEnabled && messageBus) {
           const failureHookResult = await this.withHookSpan(
@@ -4209,9 +5358,95 @@ export class CoreToolScheduler {
 
           // Append additional context from hook if provided
           if (failureHookResult.additionalContext) {
-            errorMessage += `\n\n${failureHookResult.additionalContext}`;
+            if (isTimeout) {
+              failureHookAdditionalContext =
+                failureHookResult.additionalContext;
+            } else {
+              errorMessage += `\n\n${failureHookResult.additionalContext}`;
+            }
           }
           failureHookArtifacts = failureHookResult.artifacts;
+        }
+
+        if (isTimeout) {
+          const timeoutContent = await this.maybePersistLargeToolResult(
+            callId,
+            toolName,
+            toolResult.llmContent,
+          );
+          let responseParts = convertToFunctionErrorResponse(
+            toolName,
+            callId,
+            timeoutContent.content,
+            operationalErrorMessage,
+          );
+          if (failureHookAdditionalContext && responseParts.length > 0) {
+            const lastIndex = responseParts.length - 1;
+            responseParts = [...responseParts];
+            responseParts[lastIndex] = appendContextToResponsePart(
+              responseParts[lastIndex],
+              failureHookAdditionalContext,
+            );
+          }
+          const processedImages = await this.processToolResultImages(
+            responseParts,
+            signal,
+          );
+          responseParts = processedImages.responseParts;
+
+          const contentLength = responseParts.reduce((total, part) => {
+            const error = part.functionResponse?.response?.['error'];
+            return total + (typeof error === 'string' ? error.length : 0);
+          }, 0);
+          const artifacts = [
+            ...(toolResult.artifacts ?? []),
+            ...(failureHookArtifacts ?? []),
+          ];
+          const timeoutPersistedOutputFiles =
+            errorPersistedOutputFiles === undefined &&
+            timeoutContent.persistedOutputFiles === undefined
+              ? undefined
+              : Array.from(
+                  new Set([
+                    ...(errorPersistedOutputFiles ?? []),
+                    ...(timeoutContent.persistedOutputFiles ?? []),
+                  ]),
+                );
+          if (
+            cancelAfterPostProcessing(artifacts, {
+              persistedOutputFiles: timeoutPersistedOutputFiles,
+              visionBridgeNotice: processedImages.visionBridgeNotice,
+            })
+          ) {
+            return;
+          }
+          this.setStatusInternal(callId, 'error', {
+            callId,
+            responseParts,
+            resultDisplay: this.compactResultDisplayForInteractiveHistory(
+              toolResult.returnDisplay,
+            ),
+            error: new Error(operationalErrorMessage),
+            errorType: ToolErrorType.EXECUTION_TIMEOUT,
+            executionStatus,
+            contentLength,
+            ...(timeoutPersistedOutputFiles !== undefined
+              ? { persistedOutputFiles: timeoutPersistedOutputFiles }
+              : {}),
+            ...(processedImages.modelOverride !== undefined
+              ? { modelOverride: processedImages.modelOverride }
+              : {}),
+            ...(processedImages.visionBridgeNotice !== undefined
+              ? { visionBridgeNotice: processedImages.visionBridgeNotice }
+              : {}),
+            ...(artifacts.length > 0 ? { artifacts } : {}),
+          });
+          setToolSpanFailure(
+            span,
+            TOOL_FAILURE_KIND_TIMEOUT,
+            TOOL_SPAN_STATUS_TOOL_TIMEOUT,
+          );
+          return;
         }
 
         // Truncate oversized error messages (e.g., large stderr)
@@ -4228,35 +5463,97 @@ export class CoreToolScheduler {
             this.config,
           );
           errorMessage = persistResult.content;
+          errorPersistedOutputFiles = Array.from(
+            new Set([
+              ...(errorPersistedOutputFiles ?? []),
+              ...(persistResult.outputFile ? [persistResult.outputFile] : []),
+            ]),
+          );
         }
-
-        this.safelyAddToolResultAttributes(
-          span,
-          toolName,
-          `ERROR: ${errorMessage}`,
-        );
 
         const error = new Error(errorMessage);
-        const errorResponse = createErrorResponse(
+        let errorResponse = createErrorResponse(
           scheduledCall.request,
           error,
-          toolResult.error.type,
+          executionErrorType ?? ToolErrorType.UNKNOWN,
+          executionStatus,
           failureHookArtifacts,
+          typeof toolResult.returnDisplay === 'string'
+            ? undefined
+            : this.compactResultDisplayForInteractiveHistory(
+                toolResult.returnDisplay,
+              ),
         );
-        this.setStatusInternal(callId, 'error', errorResponse);
-        if (toolResult.error.type === ToolErrorType.EXECUTION_TIMEOUT) {
-          setToolSpanFailure(
-            span,
-            TOOL_FAILURE_KIND_TIMEOUT,
-            TOOL_SPAN_STATUS_TOOL_TIMEOUT,
-          );
-        } else {
-          setToolSpanFailure(
-            span,
-            TOOL_FAILURE_KIND_TOOL_ERROR,
-            TOOL_SPAN_STATUS_TOOL_ERROR,
+        if (errorPersistedOutputFiles !== undefined) {
+          errorResponse.persistedOutputFiles = Array.from(
+            new Set(errorPersistedOutputFiles),
           );
         }
+        const imageParts = normalizeParts(toolResult.llmContent).flatMap(
+          (part) => {
+            const nestedImages = (part.functionResponse?.parts ?? [])
+              .filter((nested) => isImagePart(nested as Part))
+              .map((nested) => nested as Part);
+            return isImagePart(part) ? [part, ...nestedImages] : nestedImages;
+          },
+        );
+        if (imageParts.length > 0) {
+          const basePart = errorResponse.responseParts[0];
+          const functionResponse = basePart?.functionResponse;
+          const imageErrorParts = functionResponse
+            ? [
+                {
+                  ...basePart,
+                  functionResponse: {
+                    ...functionResponse,
+                    parts: imageParts,
+                  },
+                },
+              ]
+            : errorResponse.responseParts;
+          const processedImages = await this.processToolResultImages(
+            imageErrorParts,
+            signal,
+          );
+          const bridgedErrorParts = processedImages.responseParts;
+          if (
+            bridgedErrorParts !== imageErrorParts ||
+            this.config.getEffectiveInputModalities?.()?.image === true
+          ) {
+            errorResponse = {
+              ...errorResponse,
+              responseParts: bridgedErrorParts,
+              contentLength: bridgedErrorParts.reduce((total, part) => {
+                const response = part.functionResponse?.response;
+                const text = response?.['error'] ?? response?.['output'];
+                return total + (typeof text === 'string' ? text.length : 0);
+              }, 0),
+              ...(processedImages.modelOverride !== undefined
+                ? { modelOverride: processedImages.modelOverride }
+                : {}),
+              ...(processedImages.visionBridgeNotice !== undefined
+                ? { visionBridgeNotice: processedImages.visionBridgeNotice }
+                : {}),
+            };
+          }
+        }
+        if (
+          cancelAfterPostProcessing(
+            [...(toolResult.artifacts ?? []), ...(failureHookArtifacts ?? [])],
+            {
+              persistedOutputFiles: errorResponse.persistedOutputFiles,
+              visionBridgeNotice: errorResponse.visionBridgeNotice,
+            },
+          )
+        ) {
+          return;
+        }
+        this.setStatusInternal(callId, 'error', errorResponse);
+        setToolSpanFailure(
+          span,
+          TOOL_FAILURE_KIND_TOOL_ERROR,
+          TOOL_SPAN_STATUS_TOOL_ERROR,
+        );
       }
     } catch (executionError: unknown) {
       const errorMessage =
@@ -4268,18 +5565,48 @@ export class CoreToolScheduler {
       // see false positives. Both are still success: false; only the
       // sanitized error message and (for cancellation) the UNSET status
       // differ.
-      const aborted = signal.aborted;
-      endToolExecutionSpan(execSpan, {
-        success: false,
-        error: aborted
-          ? TOOL_SPAN_STATUS_TOOL_CANCELLED
-          : TOOL_SPAN_STATUS_TOOL_EXCEPTION,
-        cancelled: aborted,
-      });
+      const executionThrew =
+        !executionSettled && executionStatus !== 'not_started';
+      const explicitErrorType = (
+        executionError as { errorType?: ToolErrorType } | undefined
+      )?.errorType;
+      const executionTimedOut =
+        executionThrew && explicitErrorType === ToolErrorType.EXECUTION_TIMEOUT;
+      const aborted = signal.aborted && !executionTimedOut;
+      if (executionThrew) {
+        executionStatus = aborted ? 'cancelled' : 'error';
+        executionSettled = true;
+      }
+      const exceptionErrorType =
+        explicitErrorType ??
+        (executionThrew && scheduledCall.tool instanceof DiscoveredMCPTool
+          ? ToolErrorType.MCP_TOOL_ERROR
+          : ToolErrorType.UNHANDLED_EXCEPTION);
+      if (execSpan) {
+        const failedExecSpan = execSpan;
+        execSpan = undefined;
+        endToolExecutionSpan(failedExecSpan, {
+          success: false,
+          error: aborted
+            ? TOOL_SPAN_STATUS_TOOL_CANCELLED
+            : executionTimedOut
+              ? TOOL_SPAN_STATUS_TOOL_TIMEOUT
+              : TOOL_SPAN_STATUS_TOOL_EXCEPTION,
+          cancelled: aborted,
+          executionStatus,
+          errorType:
+            executionStatus === 'error' ? exceptionErrorType : undefined,
+        });
+      }
 
       if (aborted) {
         // PostToolUseFailure Hook (user interrupt)
-        let cancelMessage = 'User cancelled tool execution.';
+        // `executionThrew` distinguishes a tool interrupted mid-flight (its
+        // work did NOT finish) from a throw raised after `execute()` already
+        // settled — e.g. by a post-processing transform.
+        let cancelMessage = executionThrew
+          ? TOOL_CANCELLED_BEFORE_COMPLETION_MESSAGE
+          : TOOL_CANCELLED_AFTER_COMPLETION_MESSAGE;
         let failureHookArtifacts: ToolArtifact[] | undefined;
         if (hooksEnabled && messageBus) {
           const failureHookResult = await this.withHookSpan(
@@ -4309,21 +5636,15 @@ export class CoreToolScheduler {
           }
           failureHookArtifacts = failureHookResult.artifacts;
         }
-        this.safelyAddToolResultAttributes(
-          span,
-          toolName,
-          `CANCELLED: ${cancelMessage}`,
-        );
         this.setStatusInternal(
           callId,
           'cancelled',
-          failureHookArtifacts && failureHookArtifacts.length > 0
-            ? createCancelledResponse(
-                scheduledCall.request,
-                cancelMessage,
-                failureHookArtifacts,
-              )
-            : cancelMessage,
+          createCancelledResponse(
+            scheduledCall.request,
+            cancelMessage,
+            executionStatus,
+            failureHookArtifacts,
+          ),
         );
         setToolSpanCancelled(span);
         return;
@@ -4359,11 +5680,24 @@ export class CoreToolScheduler {
           }
           failureHookArtifacts = failureHookResult.artifacts;
         }
-        this.safelyAddToolResultAttributes(
-          span,
-          toolName,
-          `EXCEPTION: ${exceptionErrorMessage}`,
-        );
+        if (signal.aborted && !executionTimedOut) {
+          this.setStatusInternal(
+            callId,
+            'cancelled',
+            createCancelledResponse(
+              scheduledCall.request,
+              // The abort landed while the failure hook was running; the
+              // tool's own outcome is still what `executionThrew` says.
+              executionThrew
+                ? TOOL_CANCELLED_BEFORE_COMPLETION_MESSAGE
+                : TOOL_CANCELLED_AFTER_COMPLETION_MESSAGE,
+              executionStatus,
+              failureHookArtifacts,
+            ),
+          );
+          setToolSpanCancelled(span);
+          return;
+        }
         this.setStatusInternal(
           callId,
           'error',
@@ -4372,7 +5706,8 @@ export class CoreToolScheduler {
             executionError instanceof Error
               ? new Error(exceptionErrorMessage)
               : new Error(String(executionError)),
-            ToolErrorType.UNHANDLED_EXCEPTION,
+            exceptionErrorType,
+            executionStatus,
             failureHookArtifacts,
           ),
         );
@@ -4411,10 +5746,7 @@ export class CoreToolScheduler {
 
       let messageBus: MessageBus | undefined;
       try {
-        const shouldFirePostToolBatch =
-          !this.config.getDisableAllHooks() &&
-          (this.config.hasHooksForEvent?.('PostToolBatch') ?? false);
-        messageBus = shouldFirePostToolBatch
+        messageBus = this.postToolBatchEnabledForBatch
           ? this.config.getMessageBus()
           : undefined;
       } catch (error) {
@@ -4425,52 +5757,81 @@ export class CoreToolScheduler {
         );
       }
       try {
+        const batchBudget = this.config.getToolOutputBatchBudget?.();
+        if (batchBudget !== undefined && Number.isFinite(batchBudget)) {
+          completedCalls = await this.applyBatchOutputBudget(completedCalls);
+        }
+
         if (messageBus) {
           const batchToolCalls = completedCalls.map(toPostToolBatchToolCall);
           const permissionMode = this.config.getApprovalMode();
-          const batchHookResult = await this.withHookSpan(
-            { hookEvent: 'PostToolBatch', toolName: 'batch' },
-            () =>
-              firePostToolBatchHook(
-                messageBus,
-                batchToolCalls,
-                permissionMode,
-                batchSignal,
-              ),
-            (r) =>
-              r.hookError
-                ? {
-                    success: false,
-                    error: r.hookError,
-                    shouldStop: false,
-                    postBatchStop: false,
-                  }
-                : {
-                    success: true,
-                    shouldStop: r.shouldStop,
-                    hasAdditionalContext: !!r.additionalContext,
-                    hasArtifacts: !!r.artifacts?.length,
-                    blockType: r.shouldStop ? 'stop' : undefined,
-                    postBatchStop: r.shouldStop,
-                    postBatchStopReason: r.shouldStop
-                      ? r.stopReason || 'no reason given'
-                      : undefined,
-                  },
-          );
+          const fireBatchHook = () =>
+            this.withHookSpan(
+              { hookEvent: 'PostToolBatch', toolName: 'batch' },
+              () =>
+                firePostToolBatchHook(
+                  messageBus,
+                  batchToolCalls,
+                  permissionMode,
+                  batchSignal,
+                ),
+              (r) =>
+                r.hookError
+                  ? {
+                      success: false,
+                      error: r.hookError,
+                      shouldStop: false,
+                      postBatchStop: false,
+                    }
+                  : {
+                      success: true,
+                      shouldStop: r.shouldStop,
+                      hasAdditionalContext: !!r.additionalContext,
+                      hasArtifacts: !!r.artifacts?.length,
+                      blockType: r.shouldStop ? 'stop' : undefined,
+                      postBatchStop: r.shouldStop,
+                      postBatchStopReason: r.shouldStop
+                        ? r.stopReason || 'no reason given'
+                        : undefined,
+                    },
+            );
+          const batchParentSpan = this.postToolBatchSpanCallId
+            ? this.toolSpans.get(this.postToolBatchSpanCallId)
+            : undefined;
+          const batchHookResult = await (batchParentSpan
+            ? runInToolSpanContext(batchParentSpan, fireBatchHook)
+            : fireBatchHook());
 
           // Order matters: stop replaces the last response, so append
           // additionalContext only after the stop decision is applied.
           if (batchHookResult.shouldStop) {
+            const stopMessage =
+              batchHookResult.stopReason ||
+              'Execution stopped by PostToolBatch hook';
             debugLogger.info(
               `PostToolBatch hook stopped batch (${completedCalls.length} calls): ${
                 batchHookResult.stopReason || 'no reason given'
               }`,
             );
-            completedCalls = withPostToolBatchStop(
-              completedCalls,
-              batchHookResult.stopReason ||
-                'Execution stopped by PostToolBatch hook',
-            );
+            completedCalls = withPostToolBatchStop(completedCalls, stopMessage);
+            const stoppedCall = completedCalls.at(-1);
+            const stoppedSpan = stoppedCall
+              ? this.toolSpans.get(stoppedCall.request.callId)
+              : undefined;
+            if (stoppedSpan) {
+              setToolSpanFailure(
+                stoppedSpan,
+                TOOL_FAILURE_KIND_POST_HOOK_STOPPED,
+                stopMessage,
+              );
+            } else {
+              // Known gap: on a mixed batch the stopped call (last completed)
+              // can differ from the deferred-span call (last validating), so
+              // post_hook_stopped has no span to attach to.
+              debugLogger.debug(
+                `PostToolBatch stop: no tool span for stopped call ${stoppedCall?.request.callId}; post_hook_stopped not recorded`,
+              );
+            }
           }
 
           completedCalls = withPostToolBatchAdditionalContext(
@@ -4483,16 +5844,19 @@ export class CoreToolScheduler {
           );
         }
 
-        // Per-message budget: offload the largest results if the batch's
-        // combined model-facing output exceeds the budget, before recording
-        // and notifying so both consumers see the same (bounded) version.
+        // Hooks may replace responses or append context, so enforce the same
+        // final invariant again after PostToolBatch.
         completedCalls = await this.applyBatchOutputBudget(completedCalls);
 
         for (const call of completedCalls) {
+          this.finalizeToolSpan(call.request.callId, true);
+        }
+
+        for (const call of completedCalls) {
+          this.runtimeContentGeneratorViews.delete(call.request.callId);
           logToolCall(this.config, new ToolCallEvent(call));
         }
 
-        // Record tool results before notifying completion
         this.recordToolResults(completedCalls);
 
         if (this.onAllToolCallsComplete) {
@@ -4500,16 +5864,18 @@ export class CoreToolScheduler {
         }
       } finally {
         try {
+          // Completion callbacks and output-budget transforms are external
+          // failure points. Never leave the one span deliberately deferred
+          // for PostToolBatch open when one of them throws.
+          for (const call of completedCalls) {
+            this.finalizeToolSpan(call.request.callId, true);
+          }
+          this.postToolBatchEnabledForBatch = false;
+          this.postToolBatchSpanCallId = undefined;
           this.notifyToolCallsUpdate();
         } finally {
           this.isFinalizingToolCalls = false;
-          // Always drain the queue, even if completion callbacks throw.
-          if (this.requestQueue.length > 0) {
-            const next = this.requestQueue.shift()!;
-            this._schedule(next.request, next.signal)
-              .then(next.resolve)
-              .catch(next.reject);
-          }
+          this.drainRequestQueueIfIdle();
         }
       }
     }
@@ -4519,15 +5885,18 @@ export class CoreToolScheduler {
     callId: string,
     toolName: string,
     content: PartListUnion,
-  ): Promise<PartListUnion> {
-    if (GATE_EXEMPT_TOOLS.has(toolName)) return content;
+  ): Promise<{
+    content: PartListUnion;
+    persistedOutputFiles?: string[];
+  }> {
+    if (GATE_EXEMPT_TOOLS.has(canonicalToolName(toolName))) return { content };
 
     const text = extractTextFromPartListUnion(content);
-    if (!text || isAlreadyTruncated(text)) return content;
+    if (!text || isAlreadyTruncated(text)) return { content };
 
     const gateThreshold =
       this.config.getTruncateToolOutputThreshold() + GATE_HEADROOM;
-    if (text.length <= gateThreshold) return content;
+    if (text.length <= gateThreshold) return { content };
 
     const result = await persistAndTruncateToolResult(
       callId,
@@ -4550,142 +5919,98 @@ export class CoreToolScheduler {
           (p as { fileData?: unknown }).fileData,
       );
       const stubPart: Part = { text: result.content };
-      return mediaParts.length > 0 ? [stubPart, ...mediaParts] : [stubPart];
+      return {
+        content: mediaParts.length > 0 ? [stubPart, ...mediaParts] : [stubPart],
+        persistedOutputFiles: result.outputFile ? [result.outputFile] : [],
+      };
     }
 
-    return result.content;
+    return {
+      content: result.content,
+      persistedOutputFiles: result.outputFile ? [result.outputFile] : [],
+    };
   }
 
-  /**
-   * Records tool results to the chat recording service.
-   * This captures both the raw Content (for API reconstruction) and
-   * enriched metadata (for UI recovery).
-   */
-  private recordToolResults(completedCalls: CompletedToolCall[]): void {
-    if (!this.chatRecordingService) return;
-
-    // Collect all response parts from completed calls
-    const responseParts: Part[] = completedCalls.flatMap(
-      (call) => call.response.responseParts,
-    );
-
-    if (responseParts.length === 0) return;
-
-    // Record each tool result individually
-    for (const call of completedCalls) {
-      this.chatRecordingService.recordToolResult(call.response.responseParts, {
-        callId: call.request.callId,
-        status: call.status,
-        resultDisplay: call.response.resultDisplay,
-        error: call.response.error,
-        errorType: call.response.errorType,
-      });
-    }
-  }
-
-  /**
-   * Per-message tool-result budget. When the combined model-facing output of a
-   * completed batch exceeds `toolOutputBatchBudget`, the largest results are
-   * offloaded to disk (greedily, largest first) until the batch is back under
-   * budget. Idempotent: already-persisted / media-bearing results are skipped.
-   */
   private async applyBatchOutputBudget(
     completedCalls: CompletedToolCall[],
   ): Promise<CompletedToolCall[]> {
     const budget =
       this.config.getToolOutputBatchBudget?.() ?? Number.POSITIVE_INFINITY;
-    if (!Number.isFinite(budget)) return completedCalls;
+    if (!Number.isFinite(budget) || budget <= 0) return completedCalls;
 
-    const sizes = completedCalls.map(batchResponseOutputSize);
-    let total = sizes.reduce((sum, size) => sum + size, 0);
-    if (total <= budget) return completedCalls;
+    const finalized = await finalizeToolResponses(
+      this.config,
+      completedCalls.map((call) => ({
+        callId: call.request.callId,
+        toolName: call.request.name,
+        responseParts: call.response.responseParts,
+        persistedOutputFiles: call.response.persistedOutputFiles,
+      })),
+    );
 
-    // Offload the largest results first until back under budget.
-    const order = completedCalls
-      .map((_, i) => i)
-      .sort((a, b) => sizes[b] - sizes[a]);
-
-    const result = [...completedCalls];
-    let offloaded = 0;
-    for (const i of order) {
-      if (total <= budget) break;
-      const replaced = await this.offloadCallOutput(result[i]);
-      if (!replaced) continue;
-      total -= sizes[i] - batchResponseOutputSize(replaced);
-      result[i] = replaced;
-      offloaded++;
-    }
-    if (offloaded > 0) {
-      debugLogger.info(
-        `Batch output budget (${budget} chars): offloaded ${offloaded} largest result(s) to disk.`,
-      );
-    }
-    if (total > budget) {
-      // Could not get under budget — e.g. a single per-tool result whose
-      // ceiling (MCP's 500k) exceeds the 200k batch budget, or results already
-      // persisted (sentinel-bearing) and therefore skipped. Surface it instead
-      // of silently exceeding the per-message budget.
-      debugLogger.warn(
-        `Batch output budget (${budget} chars) still exceeded after offloading ${offloaded}: ${total} chars across ${completedCalls.length} result(s).`,
-      );
-    }
-    return result;
-  }
-
-  /**
-   * Spill a single completed call's text output to disk, replacing it with a
-   * small preview + recoverable pointer. Returns null (skip) for non-success,
-   * multi-part, media-bearing, or already-persisted results.
-   */
-  private async offloadCallOutput(
-    call: CompletedToolCall,
-  ): Promise<CompletedToolCall | null> {
-    if (call.status !== 'success') return null;
-    const parts = call.response.responseParts;
-    if (parts.length !== 1) return null;
-    const fr = parts[0]?.functionResponse;
-    if (!fr) return null;
-    const output = fr.response?.['output'];
-    if (typeof output !== 'string') return null;
-    if (fr.parts && fr.parts.length > 0) return null; // media present
-    if (output.startsWith(TOOL_OUTPUT_TRUNCATED_PREFIX)) return null; // already
-    if (output.startsWith('<persisted-output>')) return null;
-
-    let truncated: { content: string; outputFile?: string };
-    try {
-      truncated = await truncateToolOutput(
-        this.config,
-        call.request.name,
-        output,
-        { threshold: BATCH_OFFLOAD_PREVIEW_CHARS },
-        call.request.prompt_id,
-      );
-    } catch {
-      return null; // offload failure must not break the batch
-    }
-    if (!truncated.outputFile) return null;
-
-    return {
+    return completedCalls.map((call, index) => ({
       ...call,
       response: {
         ...call.response,
-        responseParts: [
-          {
-            functionResponse: {
-              id: fr.id,
-              name: fr.name,
-              response: { output: truncated.content },
-            },
-          },
-        ],
-        contentLength: truncated.content.length,
+        responseParts: finalized[index].responseParts,
+        persistedOutputFiles: finalized[index].persistedOutputFiles,
+        contentLength: toolResponseTextLength(finalized[index].responseParts),
       },
-    };
+    }));
+  }
+
+  private recordToolResults(completedCalls: CompletedToolCall[]): void {
+    if (!this.chatRecordingService) return;
+
+    for (const call of completedCalls) {
+      const result = {
+        callId: call.request.callId,
+        status: call.status,
+        executionStatus: call.response.executionStatus,
+        resultDisplay: call.response.resultDisplay,
+        ...(call.response.visionBridgeNotice !== undefined
+          ? { visionBridgeNotice: call.response.visionBridgeNotice }
+          : {}),
+        error: call.response.error,
+        errorType: call.response.errorType,
+      };
+      const goalContext = call.request.goalContext;
+      if (!goalContext) {
+        this.chatRecordingService.recordToolResult(
+          call.response.responseParts,
+          result,
+        );
+      } else if (
+        call.request.name === ToolNames.GET_GOAL ||
+        call.request.name === ToolNames.UPDATE_GOAL
+      ) {
+        this.chatRecordingService.recordToolResult(
+          call.response.responseParts,
+          result,
+          { goalContext: { ...goalContext }, provenance: 'goal_runtime' },
+        );
+      } else {
+        this.chatRecordingService.recordToolResult(
+          call.response.responseParts,
+          result,
+          { goalContext: { ...goalContext } },
+        );
+      }
+    }
   }
 
   private notifyToolCallsUpdate(): void {
-    if (this.onToolCallsUpdate) {
+    if (!this.onToolCallsUpdate) {
+      return;
+    }
+    try {
       this.onToolCallsUpdate([...this.toolCalls]);
+    } catch (error) {
+      debugLogger.error(
+        `Tool call update observer failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -4707,6 +6032,8 @@ export class CoreToolScheduler {
       (call) =>
         call.status === 'awaiting_approval' &&
         call.request.callId !== triggeringCallId &&
+        (!('hideAlwaysAllow' in call.confirmationDetails) ||
+          call.confirmationDetails.hideAlwaysAllow !== true) &&
         // A tool bounced by a PreToolUse 'ask' must NOT be auto-approved as a
         // side effect of approving a sibling: the hook explicitly requested
         // confirmation, and re-execution skips the hook — auto-approving here
@@ -4717,18 +6044,37 @@ export class CoreToolScheduler {
 
     for (const pendingTool of pendingTools) {
       try {
+        if (
+          this.cancelPreExecutionIfAborted(pendingTool.request.callId, signal)
+        ) {
+          continue;
+        }
         // Re-run L3→L4 to see if the tool can now be auto-approved
         const toolParams = pendingTool.invocation.params as Record<
           string,
           unknown
         >;
-        const flowResult = await evaluatePermissionFlow(
-          this.config,
-          pendingTool.invocation,
-          pendingTool.request.name,
-          toolParams,
+        const flowResult = await runInRequestGoalContext(
+          pendingTool.request,
+          () =>
+            evaluatePermissionFlow(
+              this.config,
+              pendingTool.invocation,
+              pendingTool.request.name,
+              toolParams,
+            ),
         );
-        const { finalPermission, pmForcedAsk, pmCtx } = flowResult;
+        if (
+          this.cancelPreExecutionIfAborted(pendingTool.request.callId, signal)
+        ) {
+          continue;
+        }
+        const { finalPermission, pmForcedAsk, pmCtx, requiresUserInteraction } =
+          flowResult;
+
+        if (requiresUserInteraction) {
+          continue;
+        }
 
         const forceAutoReviewForAllow =
           this.config.getApprovalMode() === ApprovalMode.AUTO &&
@@ -4748,17 +6094,26 @@ export class CoreToolScheduler {
             this.config
               .getGeminiClient?.()
               ?.getHistoryTail(MAX_TRANSCRIPT_MESSAGES, false) ?? [];
-          const decision = await evaluateAutoMode({
-            ctx: pmCtx,
-            pmForcedAsk,
-            toolParams,
-            messages,
-            config: this.config,
-            signal,
-            skipClassifierReason: fallback.fallback
-              ? fallback.reason
-              : undefined,
-          });
+          const decision = await runInRequestGoalContext(
+            pendingTool.request,
+            () =>
+              evaluateAutoMode({
+                ctx: pmCtx,
+                pmForcedAsk,
+                toolParams,
+                messages,
+                config: this.config,
+                signal,
+                skipClassifierReason: fallback.fallback
+                  ? fallback.reason
+                  : undefined,
+              }),
+          );
+          if (
+            this.cancelPreExecutionIfAborted(pendingTool.request.callId, signal)
+          ) {
+            continue;
+          }
 
           const outcome = applyAutoModeDecision(
             decision,
@@ -4770,21 +6125,28 @@ export class CoreToolScheduler {
             shouldFirePermissionDeniedForAutoMode(decision, outcome)
           ) {
             try {
-              await this.config
-                .getHookSystem?.()
-                ?.firePermissionDeniedEvent(
-                  pendingTool.request.name,
-                  toolParams,
-                  pendingTool.request.callId,
-                  getAutoModePermissionDeniedReason(decision),
-                  signal,
-                  pendingTool.request.callId,
-                );
+              await runInRequestGoalContext(pendingTool.request, () =>
+                this.config
+                  .getHookSystem?.()
+                  ?.firePermissionDeniedEvent(
+                    pendingTool.request.name,
+                    toolParams,
+                    pendingTool.request.callId,
+                    getAutoModePermissionDeniedReason(decision),
+                    signal,
+                    pendingTool.request.callId,
+                  ),
+              );
             } catch (hookError) {
               debugLogger.warn(
                 `PermissionDenied hook failed for pending tool ${pendingTool.request.callId}: ${hookError instanceof Error ? hookError.message : String(hookError)}`,
               );
             }
+          }
+          if (
+            this.cancelPreExecutionIfAborted(pendingTool.request.callId, signal)
+          ) {
+            continue;
           }
           switch (outcome.kind) {
             case 'approved':
@@ -4807,6 +6169,7 @@ export class CoreToolScheduler {
                   pendingTool.request,
                   new Error(outcome.errorMessage),
                   ToolErrorType.EXECUTION_DENIED,
+                  'not_started',
                 ),
               );
               this.finalizeBlockedSpan(
@@ -4826,10 +6189,23 @@ export class CoreToolScheduler {
               break;
             }
             case 'fallback':
-              if (fallback.fallback) {
+              if (
+                isDenialFallbackReason(outcome.reason) ||
+                outcome.reason === 'classifier_unavailable'
+              ) {
                 this.autoModeFallbackCallIds.add(pendingTool.request.callId);
+                if (outcome.message) {
+                  this.setStatusInternal(
+                    pendingTool.request.callId,
+                    'awaiting_approval',
+                    decorateClassifierUnavailableConfirmation(
+                      pendingTool.confirmationDetails,
+                      outcome.message,
+                    ),
+                  );
+                }
                 debugLogger.warn(
-                  `Auto mode fallback for pending tool (${fallback.reason}): consecutiveBlock=${denialState.consecutiveBlock}, consecutiveUnavailable=${denialState.consecutiveUnavailable}`,
+                  `Auto mode fallback for pending tool (${outcome.reason}): consecutiveBlock=${denialState.consecutiveBlock}, consecutiveUnavailable=${denialState.consecutiveUnavailable}`,
                 );
               }
               break;
@@ -4864,6 +6240,11 @@ export class CoreToolScheduler {
           );
         }
       } catch (error) {
+        if (
+          this.cancelPreExecutionIfAborted(pendingTool.request.callId, signal)
+        ) {
+          continue;
+        }
         debugLogger.error(
           `Error checking confirmation for tool ${pendingTool.request.callId}:`,
           error,

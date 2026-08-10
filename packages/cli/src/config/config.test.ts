@@ -14,7 +14,13 @@ import {
   NativeLspService,
   Storage,
 } from '@qwen-code/qwen-code-core';
-import { loadCliConfig, parseArguments, type CliArgs } from './config.js';
+import {
+  isValidSessionId,
+  loadCliConfig,
+  parseArguments,
+  SessionIdConflictError,
+  type CliArgs,
+} from './config.js';
 import type { Settings } from './settings.js';
 import * as ServerConfig from '@qwen-code/qwen-code-core';
 import { isWorkspaceTrusted } from './trustedFolders.js';
@@ -28,6 +34,7 @@ const mockSessionServiceInstance = vi.hoisted(() => ({
   loadSession: vi.fn(),
   forkSession: vi.fn(),
   sessionExists: vi.fn(),
+  sessionExistsInAnyState: vi.fn(),
 }));
 const mockSessionServiceCtor = vi.hoisted(() =>
   vi.fn(() => mockSessionServiceInstance),
@@ -160,6 +167,40 @@ vi.mock('command-exists', () => ({
   },
 }));
 
+// #7734 added a sandbox runtime probe that spawns a real `docker version`
+// subprocess during sandbox selection. These tests enable the sandbox to assert
+// image precedence, not which runtime is chosen, so left unmocked the probe runs
+// for real and the suite fails on any non-macOS host without a running daemon
+// (macOS is masked because the sandbox-exec branch returns before probing).
+// Report the runtime probe healthy; leave every other spawnSync call real.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const spawnSync = vi.fn(
+    (command: string, args?: readonly string[], options?: unknown) => {
+      if (
+        (command === 'docker' || command === 'podman') &&
+        args?.[0] === 'version'
+      ) {
+        return {
+          status: 0,
+          stdout: '',
+          stderr: '',
+          signal: null,
+          pid: 0,
+          output: [],
+          error: undefined,
+        };
+      }
+      return (actual.spawnSync as unknown as (...a: unknown[]) => unknown)(
+        command,
+        args,
+        options,
+      );
+    },
+  );
+  return { ...actual, default: { ...actual, spawnSync }, spawnSync };
+});
+
 vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
   const actualServer = await importOriginal<typeof ServerConfig>();
   const SkillManagerMock = vi.fn();
@@ -211,6 +252,29 @@ vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
       respectQwenIgnore: true,
     },
   };
+});
+
+describe('isValidSessionId', () => {
+  it.each([
+    ['a canonical UUID', 'b2a1c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'],
+    [
+      'an agent-suffixed UUID',
+      'b2a1c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d-agent-qwen',
+    ],
+  ])('accepts %s', (_, value) => {
+    expect(isValidSessionId(value)).toBe(true);
+  });
+
+  // These shapes are paste-into-shell payloads for the exit-time resume
+  // echo, so the production gate must reject them.
+  it.each([
+    ['newline', 'evil\nrm -rf ~'],
+    ['escape sequence', 'evil\u001B]52;c;pwned\u0007session'],
+    ['leading dash', '-cafebabe0123456789abcdef01234567'],
+    ['non-UUID token', 'abc123'],
+  ])('rejects a payload with a %s', (_, value) => {
+    expect(isValidSessionId(value)).toBe(false);
+  });
 });
 
 describe('parseArguments', () => {
@@ -861,10 +925,22 @@ describe('parseArguments', () => {
     expect(argv.channel).toBe('desktop');
   });
 
-  it('should default ACP mode to the ACP channel when no channel is provided', async () => {
-    process.argv = ['node', 'script.js', '--acp'];
+  it('should accept daemon as a channel identifier', async () => {
+    process.argv = ['node', 'script.js', '--channel', 'daemon'];
     const argv = await parseArguments();
-    expect(argv.channel).toBe('ACP');
+    expect(argv.channel).toBe('daemon');
+  });
+
+  it('should default ACP mode to the ACP channel when no channel is provided', async () => {
+    vi.stubEnv('QWEN_CODE_SERVE', '');
+    vi.stubEnv('QWEN_CODE_DESKTOP', '');
+    try {
+      process.argv = ['node', 'script.js', '--acp'];
+      const argv = await parseArguments();
+      expect(argv.channel).toBe('ACP');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('keeps an explicit --channel when combined with --acp (the desktop invocation)', async () => {
@@ -874,6 +950,41 @@ describe('parseArguments', () => {
     // channel with the ACP default.
     expect(argv.channel).toBe('desktop');
     expect(argv.acp).toBe(true);
+  });
+
+  it('reports the daemon channel for daemon-spawned ACP children', async () => {
+    vi.stubEnv('QWEN_CODE_SERVE', '1');
+    vi.stubEnv('QWEN_CODE_DESKTOP', '');
+    try {
+      process.argv = ['node', 'script.js', '--acp'];
+      const argv = await parseArguments();
+      expect(argv.channel).toBe('daemon');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('reports the desktop channel for the Tauri desktop shell', async () => {
+    vi.stubEnv('QWEN_CODE_SERVE', '1');
+    vi.stubEnv('QWEN_CODE_DESKTOP', '1');
+    try {
+      process.argv = ['node', 'script.js', '--acp'];
+      const argv = await parseArguments();
+      expect(argv.channel).toBe('desktop');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps an explicit --channel over the daemon markers', async () => {
+    vi.stubEnv('QWEN_CODE_SERVE', '1');
+    try {
+      process.argv = ['node', 'script.js', '--acp', '--channel', 'VSCode'];
+      const argv = await parseArguments();
+      expect(argv.channel).toBe('VSCode');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('should reject invalid --approval-mode values', async () => {
@@ -1011,6 +1122,7 @@ describe('loadCliConfig', () => {
       copiedCount: 1,
     });
     mockSessionServiceInstance.sessionExists.mockResolvedValue(false);
+    mockSessionServiceInstance.sessionExistsInAnyState.mockResolvedValue(false);
     vi.mocked(os.homedir).mockReturnValue('/mock/home/user');
     vi.stubEnv('GEMINI_API_KEY', 'test-api-key');
     resetMcpApprovalsForTesting();
@@ -1039,6 +1151,59 @@ describe('loadCliConfig', () => {
       ServerConfig.DEFAULT_CONTEXT_FILENAME,
       ServerConfig.AGENT_CONTEXT_FILENAME,
     ]);
+  });
+
+  it('enables debug file logging for --debug when QWEN_DEBUG_LOG_FILE is unset', async () => {
+    delete process.env['QWEN_DEBUG_LOG_FILE'];
+    process.argv = ['node', 'script.js', '--debug'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({}, argv);
+
+    expect(process.env['QWEN_DEBUG_LOG_FILE']).toBe('1');
+  });
+
+  it('preserves explicit opt-out when --debug is used', async () => {
+    process.env['QWEN_DEBUG_LOG_FILE'] = '0';
+    process.argv = ['node', 'script.js', '--debug'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({}, argv);
+
+    expect(process.env['QWEN_DEBUG_LOG_FILE']).toBe('0');
+  });
+
+  it('leaves debug file logging unset outside --debug mode', async () => {
+    delete process.env['QWEN_DEBUG_LOG_FILE'];
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({}, argv);
+
+    expect(process.env['QWEN_DEBUG_LOG_FILE']).toBeUndefined();
+  });
+
+  describe('usage statistics', () => {
+    it.each<[string, string | undefined, boolean | undefined, boolean]>([
+      ['defaults to enabled', undefined, undefined, true],
+      ['uses a disabled setting', undefined, false, false],
+      ['lets true override a disabled setting', 'true', false, true],
+      ['lets 1 override a disabled setting', '1', false, true],
+      ['lets false override an enabled setting', 'false', true, false],
+      ['lets 0 override an enabled setting', '0', true, false],
+    ])('%s', async (_name, envValue, settingValue, expected) => {
+      vi.stubEnv('QWEN_USAGE_STATISTICS_ENABLED', envValue);
+      process.argv = ['node', 'script.js'];
+      const argv = await parseArguments();
+      const settings: Settings =
+        settingValue === undefined
+          ? {}
+          : { privacy: { usageStatisticsEnabled: settingValue } };
+
+      const config = await loadCliConfig(settings, argv);
+
+      expect(config.getUsageStatisticsEnabled()).toBe(expected);
+    });
   });
 
   it('should use configured context file name when settings.context.fileName is set', async () => {
@@ -1107,6 +1272,61 @@ describe('loadCliConfig', () => {
     );
 
     expect(config.getAgentsSettings().maxParallelAgents).toBe(2);
+  });
+
+  it('passes agents.maxParallelAgentsByModel from settings to core config', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const config = await loadCliConfig(
+      { agents: { maxParallelAgentsByModel: { 'weak-model': 1 } } },
+      argv,
+    );
+
+    expect(config.getAgentsSettings().maxParallelAgentsByModel).toEqual({
+      'weak-model': 1,
+    });
+  });
+
+  it('passes tools.shell.defaultTimeoutMs from settings to core config', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const config = await loadCliConfig(
+      { tools: { shell: { defaultTimeoutMs: 300000 } } },
+      argv,
+    );
+
+    expect(config.getShellDefaultTimeoutMs()).toBe(300000);
+  });
+
+  it('passes agents.builtin.exploreModel from settings to core config', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const config = await loadCliConfig(
+      { agents: { builtin: { exploreModel: 'fast' } } },
+      argv,
+    );
+
+    expect(config.getAgentsSettings().builtin?.exploreModel).toBe('fast');
+  });
+
+  it('passes model grade settings to core config', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const config = await loadCliConfig(
+      {
+        agents: {
+          modelGrades: { small: 'fast', high: 'qwen-max' },
+          allowedGrades: ['small'],
+        },
+      },
+      argv,
+    );
+
+    expect(config.getAgentsSettings().modelGrades).toEqual({
+      small: 'fast',
+      high: 'qwen-max',
+    });
+    expect(config.getAgentsSettings().allowedGrades).toEqual(['small']);
   });
 
   it('should ignore blank settings fallback models', async () => {
@@ -1213,6 +1433,96 @@ describe('loadCliConfig', () => {
     expect(config.shouldAutoOpenArtifact()).toBe(false);
   });
 
+  it('should enable artifacts by default', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({}, argv);
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifactEnabled: true,
+      }),
+    );
+  });
+
+  it('should propagate artifact disable setting', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({ experimental: { artifact: false } }, argv);
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifactEnabled: false,
+      }),
+    );
+  });
+
+  it('should keep the session writer lease disabled by default', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({}, argv);
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionWriterLeaseEnabled: false,
+      }),
+    );
+  });
+
+  it('should propagate the session writer lease opt-in', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({ experimental: { sessionWriterLease: true } }, argv);
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionWriterLeaseEnabled: true,
+      }),
+    );
+  });
+
+  it('should not enable the session writer lease for invalid truthy values', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig(
+      {
+        experimental: {
+          sessionWriterLease: 'true',
+        },
+      } as unknown as Settings,
+      argv,
+    );
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionWriterLeaseEnabled: false,
+      }),
+    );
+  });
+
+  it('should propagate the image model selection', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+
+    await loadCliConfig(
+      {
+        imageModel: 'openai:qwen-image-2.0\0https://images.example.com/api/v1',
+      },
+      argv,
+    );
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageModel: 'openai:qwen-image-2.0\0https://images.example.com/api/v1',
+      }),
+    );
+  });
+
   it('places session-injected (ACP/IDE) MCP servers at the top precedence tier', async () => {
     process.argv = ['node', 'script.js'];
     const argv = await parseArguments();
@@ -1245,6 +1555,108 @@ describe('loadCliConfig', () => {
     expect(servers['settings-only'].command).toBe('settings-only-cmd');
     // Session servers are never approval-gated.
     expect(config.isMcpServerPendingApproval('ide-only')).toBe(false);
+  });
+
+  it('preserves session/CLI-supplied MCP servers under safe mode while dropping settings-sourced ones', async () => {
+    process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      mcpServers: {
+        'settings-only': { command: 'settings-only-cmd' },
+      },
+    };
+    const sessionMcpServers = {
+      'session-server': new ServerConfig.MCPServerConfig('session-cmd'),
+    };
+
+    const config = await loadCliConfig(
+      settings,
+      argv,
+      process.cwd(),
+      undefined,
+      undefined,
+      undefined,
+      sessionMcpServers,
+    );
+
+    const servers = config.getMcpServers() ?? {};
+    // Session-supplied server survives safe mode — it's an explicit,
+    // per-invocation argument (ACP session/new), not ambient local state.
+    expect(servers['session-server']?.command).toBe('session-cmd');
+    // Settings-sourced server is still dropped under safe mode.
+    expect(servers['settings-only']).toBeUndefined();
+    // Never approval-gated, same as the non-safe-mode case above.
+    expect(config.isMcpServerPendingApproval('session-server')).toBe(false);
+  });
+
+  it('preserves --mcp-config-supplied MCP servers under safe mode while dropping settings-sourced ones', async () => {
+    process.argv = [
+      'node',
+      'script.js',
+      '--safe-mode',
+      '--mcp-config',
+      JSON.stringify({ 'cli-server': { command: 'cli-cmd' } }),
+    ];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      mcpServers: {
+        'settings-only': { command: 'settings-only-cmd' },
+      },
+    };
+
+    const config = await loadCliConfig(settings, argv, process.cwd());
+
+    const servers = config.getMcpServers() ?? {};
+    expect(servers['cli-server']?.command).toBe('cli-cmd');
+    expect(servers['settings-only']).toBeUndefined();
+  });
+
+  it('does NOT let a settings-sourced mcp.allowed list silently filter a session-supplied server under safe mode', async () => {
+    // Found by an automated review pass on PR #7827: the allowedMcpServers
+    // assembly guard was `!bareMode` only (missing `&& !safeMode`), so
+    // settings.mcp.allowed/excluded — LOCAL/ambient state, same category as
+    // settings.mcpServers itself — was still read under safe mode. Combined
+    // with getMcpServers()'s own allowedMcpServers filter (added earlier in
+    // this same PR for the --allowed-mcp-server-names case), a narrow
+    // settings.json mcp.allowed list would silently drop a caller-supplied
+    // top-tier server, defeating the very guarantee this PR exists to
+    // provide — via an indirect vector (a filter's SOURCE), not the
+    // mcpServers map directly.
+    process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      mcp: { allowed: ['some-other-server'] },
+    };
+    const sessionMcpServers = {
+      'session-server': new ServerConfig.MCPServerConfig('session-cmd'),
+    };
+
+    const config = await loadCliConfig(
+      settings,
+      argv,
+      process.cwd(),
+      undefined,
+      undefined,
+      undefined,
+      sessionMcpServers,
+    );
+
+    const servers = config.getMcpServers() ?? {};
+    expect(servers['session-server']?.command).toBe('session-cmd');
+  });
+
+  it('drops ALL MCP servers under safe mode when none were supplied by the caller', async () => {
+    process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      mcpServers: {
+        'settings-only': { command: 'settings-only-cmd' },
+      },
+    };
+
+    const config = await loadCliConfig(settings, argv, process.cwd());
+
+    expect(config.getMcpServers()).toEqual({});
   });
 
   it('gates unapproved workspace MCP servers in non-interactive runs', async () => {
@@ -1373,6 +1785,63 @@ describe('loadCliConfig', () => {
       'Cannot use --fork-session with --continue: no saved session found to fork.',
     );
     expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('should exit when a caller-supplied sessionId already exists (default CLI behavior)', async () => {
+    const sessionId = '123e4567-e89b-12d3-a456-426614174000';
+    mockSessionServiceInstance.sessionExistsInAnyState.mockResolvedValue(true);
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    await expect(loadCliConfig({}, { sessionId } as CliArgs)).rejects.toThrow(
+      'process.exit called',
+    );
+
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('should throw SessionIdConflictError instead of exiting when throwOnSessionIdConflict is set', async () => {
+    const sessionId = '123e4567-e89b-12d3-a456-426614174000';
+    mockSessionServiceInstance.sessionExistsInAnyState.mockResolvedValue(true);
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+
+    const promise = loadCliConfig(
+      {},
+      { sessionId } as CliArgs,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(SessionIdConflictError);
+    await expect(promise).rejects.toMatchObject({ sessionId });
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('should not throw for a fresh caller-supplied sessionId when throwOnSessionIdConflict is set', async () => {
+    const sessionId = '123e4567-e89b-12d3-a456-426614174000';
+    mockSessionServiceInstance.sessionExistsInAnyState.mockResolvedValue(false);
+
+    const config = await loadCliConfig(
+      {},
+      { sessionId } as CliArgs,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(config.getSessionId()).toBe(sessionId);
   });
 
   it('should use internal sandbox session ID without treating it as a new session', async () => {
@@ -1600,6 +2069,116 @@ describe('loadCliConfig', () => {
       expect(config.getProxy()).toBe('http://localhost:7890');
     });
   });
+
+  describe('web search settings resolution', () => {
+    const loadWithSettings = async (settings: Settings) => {
+      process.argv = ['node', 'script.js'];
+      const argv = await parseArguments();
+      return loadCliConfig(settings, argv);
+    };
+
+    it('returns undefined when neither settings nor env configure web search', async () => {
+      const config = await loadWithSettings({});
+      expect(config.getWebSearchSettings()).toBeUndefined();
+    });
+
+    it('passes tools.webSearch through from settings', async () => {
+      const config = await loadWithSettings({
+        tools: { webSearch: { enabled: true, model: 'qwen3.6-plus' } },
+      });
+      expect(config.getWebSearchSettings()).toEqual({
+        enabled: true,
+        model: 'qwen3.6-plus',
+      });
+    });
+
+    it('lets ENABLE_WEB_SEARCH override the settings flag', async () => {
+      vi.stubEnv('ENABLE_WEB_SEARCH', 'false');
+      const config = await loadWithSettings({
+        tools: { webSearch: { enabled: true, model: 'qwen3.6-plus' } },
+      });
+      expect(config.getWebSearchSettings()?.enabled).toBe(false);
+    });
+
+    it('treats a set-but-empty ENABLE_WEB_SEARCH as unset', async () => {
+      vi.stubEnv('ENABLE_WEB_SEARCH', '');
+      const config = await loadWithSettings({
+        tools: { webSearch: { enabled: true, model: 'qwen3.6-plus' } },
+      });
+      expect(config.getWebSearchSettings()?.enabled).toBe(true);
+    });
+
+    it('lets WEB_SEARCH_MODEL and WEB_SEARCH_EXTRACTOR override settings', async () => {
+      vi.stubEnv('WEB_SEARCH_MODEL', 'env-model');
+      vi.stubEnv('WEB_SEARCH_EXTRACTOR', 'false');
+      const config = await loadWithSettings({
+        tools: {
+          webSearch: { enabled: true, model: 'settings-model' },
+        },
+      });
+      expect(config.getWebSearchSettings()).toEqual({
+        enabled: true,
+        model: 'env-model',
+        webExtractor: false,
+      });
+    });
+
+    it('resolves WEB_SEARCH_BASE_URL with the DASHSCOPE_API_KEY fallback', async () => {
+      vi.stubEnv(
+        'WEB_SEARCH_BASE_URL',
+        'https://dashscope.aliyuncs.com/api/v2',
+      );
+      const config = await loadWithSettings({});
+      expect(config.getWebSearchSettings()).toEqual({
+        baseUrl: 'https://dashscope.aliyuncs.com/api/v2',
+        apiKeyEnv: 'DASHSCOPE_API_KEY',
+      });
+    });
+
+    it('selects WEB_SEARCH_API_KEY when it is non-empty', async () => {
+      vi.stubEnv(
+        'WEB_SEARCH_BASE_URL',
+        'https://dashscope.aliyuncs.com/api/v2',
+      );
+      vi.stubEnv('WEB_SEARCH_API_KEY', 'sk-live');
+      const config = await loadWithSettings({});
+      expect(config.getWebSearchSettings()?.apiKeyEnv).toBe(
+        'WEB_SEARCH_API_KEY',
+      );
+    });
+
+    it('treats a whitespace-only WEB_SEARCH_API_KEY as unset', async () => {
+      vi.stubEnv(
+        'WEB_SEARCH_BASE_URL',
+        'https://dashscope.aliyuncs.com/api/v2',
+      );
+      vi.stubEnv('WEB_SEARCH_API_KEY', '   ');
+      const config = await loadWithSettings({});
+      expect(config.getWebSearchSettings()?.apiKeyEnv).toBe(
+        'DASHSCOPE_API_KEY',
+      );
+    });
+
+    it('disables web search in safe mode', async () => {
+      process.argv = ['node', 'script.js', '--safe-mode'];
+      const argv = await parseArguments();
+      const config = await loadCliConfig(
+        { tools: { webSearch: { enabled: true, model: 'qwen3.6-plus' } } },
+        argv,
+      );
+      expect(config.getWebSearchSettings()).toBeUndefined();
+    });
+
+    it('disables web search in bare mode', async () => {
+      process.argv = ['node', 'script.js', '--bare'];
+      const argv = await parseArguments();
+      const config = await loadCliConfig(
+        { tools: { webSearch: { enabled: true, model: 'qwen3.6-plus' } } },
+        argv,
+      );
+      expect(config.getWebSearchSettings()).toBeUndefined();
+    });
+  });
 });
 
 describe('loadCliConfig telemetry', () => {
@@ -1665,6 +2244,19 @@ describe('loadCliConfig telemetry', () => {
     expect(mockConfigConstructorParams).toHaveBeenCalledWith(
       expect.objectContaining({
         question: '',
+        deferTelemetryInitialization: true,
+      }),
+    );
+  });
+
+  it('should defer telemetry for ACP startup', async () => {
+    process.argv = ['node', 'script.js', '--acp', '--telemetry'];
+    const argv = await parseArguments();
+
+    await loadCliConfig({}, argv);
+
+    expect(mockConfigConstructorParams).toHaveBeenCalledWith(
+      expect.objectContaining({
         deferTelemetryInitialization: true,
       }),
     );
@@ -1999,6 +2591,43 @@ describe('mergeExcludeTools', () => {
     };
     const config = await loadCliConfig(settings, argv, undefined, []);
     expect(config.getPermissionsDeny()).not.toContain('tool_search');
+  });
+
+  it('should pass tools.toolSearch.threshold through to the config', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      tools: { toolSearch: { threshold: 25 } },
+    };
+    const config = await loadCliConfig(settings, argv, undefined, []);
+    expect(config.getToolSearchThreshold()).toBe(25);
+  });
+
+  it('should default tools.toolSearch.threshold to 10', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const config = await loadCliConfig({}, argv, undefined, []);
+    expect(config.getToolSearchThreshold()).toBe(10);
+  });
+
+  it('should force tools.toolSearch.threshold to 0 in safe mode', async () => {
+    process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      tools: { toolSearch: { threshold: 25 } },
+    };
+    const config = await loadCliConfig(settings, argv, undefined, []);
+    expect(config.getToolSearchThreshold()).toBe(0);
+  });
+
+  it('should force tools.toolSearch.threshold to 0 in bare mode', async () => {
+    process.argv = ['node', 'script.js', '--bare'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      tools: { toolSearch: { threshold: 25 } },
+    };
+    const config = await loadCliConfig(settings, argv, undefined, []);
+    expect(config.getToolSearchThreshold()).toBe(0);
   });
 });
 
@@ -2731,6 +3360,53 @@ describe('loadCliConfig folderTrust', () => {
   });
 });
 
+describe('loadCliConfig allowPrivateNetworkHooks', () => {
+  const originalArgv = process.argv;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(os.homedir).mockReturnValue('/mock/home/user');
+    vi.stubEnv('GEMINI_API_KEY', 'test-api-key');
+  });
+
+  afterEach(() => {
+    process.argv = originalArgv;
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('should be false by default', async () => {
+    process.argv = ['node', 'script.js'];
+    const argv = await parseArguments();
+    const config = await loadCliConfig({}, argv, undefined, []);
+    expect(config.getAllowPrivateNetworkHooks()).toBe(false);
+  });
+
+  it('should pass through security.allowPrivateNetworkHooks from settings', async () => {
+    process.argv = ['node', 'script.js'];
+    const settings: Settings = {
+      security: {
+        allowPrivateNetworkHooks: true,
+      },
+    };
+    const argv = await parseArguments();
+    const config = await loadCliConfig(settings, argv, undefined, []);
+    expect(config.getAllowPrivateNetworkHooks()).toBe(true);
+  });
+
+  it('should be false in bare mode even when enabled in settings', async () => {
+    process.argv = ['node', 'script.js', '--bare'];
+    const settings: Settings = {
+      security: {
+        allowPrivateNetworkHooks: true,
+      },
+    };
+    const argv = await parseArguments();
+    const config = await loadCliConfig(settings, argv, undefined, []);
+    expect(config.getAllowPrivateNetworkHooks()).toBe(false);
+  });
+});
+
 describe('loadCliConfig with includeDirectories', () => {
   const originalArgv = process.argv;
 
@@ -2818,7 +3494,7 @@ describe('loadCliConfig with includeDirectories', () => {
 
     expect(config.getManagedAutoMemoryEnabled()).toBe(true);
     expect(config.getManagedAutoDreamEnabled()).toBe(true);
-    expect(config.getAutoSkillEnabled()).toBe(true);
+    expect(config.getAutoSkillEnabled()).toBe(false);
   });
 
   it('autoSkillConfirm: defaults to true when unset', async () => {
@@ -2993,6 +3669,19 @@ describe('loadCliConfig safe mode', () => {
 
   it('should ignore settings-sourced approvalMode in safe mode', async () => {
     process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings = {
+      tools: {
+        approvalMode: 'yolo',
+      },
+    } as unknown as Settings;
+    const config = await loadCliConfig(settings, argv, undefined, []);
+
+    expect(config.getApprovalMode()).toBe(ServerConfig.ApprovalMode.DEFAULT);
+  });
+
+  it('should force DEFAULT approval mode in bare mode regardless of settings', async () => {
+    process.argv = ['node', 'script.js', '--bare'];
     const argv = await parseArguments();
     const settings = {
       tools: {
@@ -3458,11 +4147,11 @@ describe('loadCliConfig approval mode', () => {
     vi.restoreAllMocks();
   });
 
-  it('should default to DEFAULT approval mode when no flags are set', async () => {
+  it('should default to AUTO approval mode when no flags are set', async () => {
     process.argv = ['node', 'script.js'];
     const argv = await parseArguments();
     const config = await loadCliConfig({}, argv, undefined, []);
-    expect(config.getApprovalMode()).toBe(ServerConfig.ApprovalMode.DEFAULT);
+    expect(config.getApprovalMode()).toBe(ServerConfig.ApprovalMode.AUTO);
   });
 
   it('should set PLAN approval mode when --approval-mode=plan', async () => {
@@ -3562,6 +4251,13 @@ describe('loadCliConfig approval mode', () => {
         isTrusted: false,
         source: 'file',
       });
+    });
+
+    it('should override default AUTO mode to DEFAULT', async () => {
+      process.argv = ['node', 'script.js'];
+      const argv = await parseArguments();
+      const config = await loadCliConfig({}, argv, undefined, []);
+      expect(config.getApprovalMode()).toBe(ServerConfig.ApprovalMode.DEFAULT);
     });
 
     it('should override --approval-mode=yolo to DEFAULT', async () => {
@@ -4162,5 +4858,138 @@ describe('loadCliConfig plansDirectory', () => {
     await expect(loadCliConfig(settings, argv, cwd)).rejects.toThrow(
       'plansDirectory must resolve within the project root',
     );
+  });
+});
+
+describe('loadCliConfig skills.directories', () => {
+  beforeEach(() => {
+    process.argv = ['node', 'script.js'];
+    vi.mocked(os.homedir).mockReturnValue('/mock/home/user');
+    vi.stubEnv('GEMINI_API_KEY', 'test-api-key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('should filter non-string and whitespace-only entries and trim valid ones', async () => {
+    const argv = await parseArguments();
+    const settings: Settings = {
+      skills: {
+        directories: [
+          '  ~/my-skills  ',
+          '',
+          '   ',
+          42 as unknown as string,
+          null as unknown as string,
+          '/abs/skills',
+        ],
+      },
+    };
+
+    const config = await loadCliConfig(settings, argv);
+
+    expect(config.getCustomSkillDirs()).toEqual(['~/my-skills', '/abs/skills']);
+  });
+
+  it('should return empty array when skills.directories is not set', async () => {
+    const argv = await parseArguments();
+
+    const config = await loadCliConfig({}, argv);
+
+    expect(config.getCustomSkillDirs()).toEqual([]);
+  });
+
+  it('should return empty array when skills.directories is a non-array value', async () => {
+    const argv = await parseArguments();
+    const settings = {
+      skills: {
+        directories: 'all',
+      },
+    } as unknown as Settings;
+
+    const config = await loadCliConfig(settings, argv);
+
+    expect(config.getCustomSkillDirs()).toEqual([]);
+  });
+
+  it('should ignore skills.directories in safe mode', async () => {
+    process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      skills: { directories: ['~/my-skills', '/abs/skills'] },
+    };
+
+    const config = await loadCliConfig(settings, argv, undefined, []);
+
+    expect(config.getCustomSkillDirs()).toEqual([]);
+  });
+
+  it('should ignore skills.directories in bare mode', async () => {
+    process.argv = ['node', 'script.js', '--bare'];
+    const argv = await parseArguments();
+    const settings: Settings = {
+      skills: { directories: ['~/my-skills', '/abs/skills'] },
+    };
+
+    const config = await loadCliConfig(settings, argv, undefined, []);
+
+    expect(config.getCustomSkillDirs()).toEqual([]);
+  });
+});
+
+describe('loadCliConfig skills.disabledLevels', () => {
+  beforeEach(() => {
+    process.argv = ['node', 'script.js'];
+    vi.stubEnv('GEMINI_API_KEY', 'test-api-key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('passes valid disabled skill levels to core and ignores invalid values', async () => {
+    const argv = await parseArguments();
+    const settings: Settings = {
+      skills: {
+        disabledLevels: ['bundled', 'invalid', 42 as unknown as string, 'user'],
+      },
+    };
+
+    const config = await loadCliConfig(settings, argv);
+
+    expect(config.getDisabledSkillLevels()).toEqual(
+      new Set(['bundled', 'user']),
+    );
+  });
+
+  it('keeps every skill level enabled by default', async () => {
+    const argv = await parseArguments();
+
+    const config = await loadCliConfig({}, argv);
+
+    expect(config.getDisabledSkillLevels()).toEqual(new Set());
+  });
+
+  it('ignores skills.disabledLevels in safe mode', async () => {
+    process.argv = ['node', 'script.js', '--safe-mode'];
+    const argv = await parseArguments();
+    const settings: Settings = { skills: { disabledLevels: ['bundled'] } };
+
+    const config = await loadCliConfig(settings, argv);
+
+    expect(config.getDisabledSkillLevels()).toEqual(new Set());
+  });
+
+  it('ignores skills.disabledLevels in bare mode', async () => {
+    process.argv = ['node', 'script.js', '--bare'];
+    const argv = await parseArguments();
+    const settings: Settings = { skills: { disabledLevels: ['bundled'] } };
+
+    const config = await loadCliConfig(settings, argv);
+
+    expect(config.getDisabledSkillLevels()).toEqual(new Set());
   });
 });
