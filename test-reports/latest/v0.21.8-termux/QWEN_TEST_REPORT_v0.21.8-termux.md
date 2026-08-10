@@ -10,21 +10,22 @@
 
 ## Candidate summary
 
-| Gate                   | Result  | Evidence                                                                                                |
-| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| Artifact identity      | PASS    | SHA-256 `ee9bbd25db4fc8abe6cc17f4cc5dd68d10e85f999961e25bf5b881d81ebc9330`; 24,816,735 bytes; 934 files |
-| npm 12 lifecycles      | PASS    | Qwen, Android PTY and sharp install scripts all exited 0; no blocked-script warning                     |
-| Orphan wrapper repair  | PASS    | Exact stale standalone wrapper moved to a byte-identical recoverable backup                             |
-| Negative wrapper guard | PASS    | Nonmatching executable wrapper remained byte-identical and executable                                   |
-| Shell command cache    | PASS    | Stale Bash path reproduced; `hash -r` selected the npm launcher                                         |
-| CLI                    | PASS    | `qwen --version` returned `0.21.8-termux`; `qwen --help` exited 0                                       |
-| Fork identity          | PASS    | Launcher and managed updater both target `@mmmbuto/qwen-code-termux`                                    |
-| Android PTY            | PASS    | Native PTY spawned `uname -m`, returned `aarch64`, exit 0                                               |
-| Registry install       | PENDING | Required after publication to `next` and before promotion to `latest`                                   |
+| Gate                   | Result | Evidence                                                                                                |
+| ---------------------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| Artifact identity      | PASS   | SHA-256 `ee9bbd25db4fc8abe6cc17f4cc5dd68d10e85f999961e25bf5b881d81ebc9330`; 24,816,735 bytes; 934 files |
+| npm 12 lifecycles      | PASS   | Qwen, Android PTY and sharp install scripts all exited 0; no blocked-script warning                     |
+| Orphan wrapper repair  | PASS   | Exact stale standalone wrapper moved to a byte-identical recoverable backup                             |
+| Negative wrapper guard | PASS   | Nonmatching executable wrapper remained byte-identical and executable                                   |
+| Shell command cache    | PASS   | Stale Bash path reproduced; `hash -r` selected the npm launcher                                         |
+| CLI                    | PASS   | `qwen --version` returned `0.21.8-termux`; `qwen --help` exited 0                                       |
+| Fork identity          | PASS   | Launcher and managed updater both target `@mmmbuto/qwen-code-termux`                                    |
+| Android PTY            | PASS   | Native PTY spawned `uname -m`, returned `aarch64`, exit 0                                               |
+| Registry install       | PASS   | Fresh `@latest` install with the narrow npm 12 allowlist passed the full device matrix                  |
 
-The candidate test used isolated temporary HOME, npm prefix and cache trees. It
-did not modify the device's real installation or configuration and did not use
-provider credentials or make a model request.
+Both the immutable-artifact test and the fresh registry test used isolated
+temporary HOME, npm prefix and cache trees. They did not modify the device's
+real installation or configuration and did not use provider credentials or
+make a model request.
 
 ## npm 12 install policy
 
@@ -39,8 +40,9 @@ npm install -g \
 
 The local-tarball candidate test used npm's explicit isolated-artifact override
 because npm does not apply the package allowlist to a local root tarball. That
-override is not part of the user installation instructions. The registry
-allowlist path remains a separate release gate before `latest`.
+override is not part of the user installation instructions. The final registry
+test used only the narrow allowlist above: all four lifecycle scripts exited 0
+and npm emitted no blocked-script warning.
 
 ## Wrapper regression matrix
 
@@ -70,13 +72,15 @@ crash.
 - CLI workspace: 18,565 tests passed, 22 skipped.
 - Core workspace: 19,567 tests passed, 10 skipped.
 - No-credential integration: 137/137 tests passed.
-- Release scripts: 1,075 tests passed, 9 skipped.
+- Release scripts: 1,077 tests passed, 9 skipped.
+- Public Termux CI completed successfully on the sanitized release tree.
 - Independent read-only review found no release blocker for the exact candidate
   and artifact.
 
 ## Release decision
 
-The immutable candidate is approved for publication to npm `next`. Promotion of
-the same package to `latest`, plus the GitHub tag and release, remains conditional
-on a fresh real-device installation from the npm registry using the narrow
-allowlist above.
+The immutable package is published as npm `next` and `latest`. A cache-clean
+registry lookup returned version `0.21.8-termux`, the expected integrity and
+shasum, and the downloaded registry tarball was byte-identical to the approved
+artifact. The fresh real-device installation passed the full matrix, so the
+same sanitized tree is approved for the GitHub tag and release.
