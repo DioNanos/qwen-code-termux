@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -31,6 +31,7 @@ describe('Termux release workflows', () => {
   it('prevents upstream automatic workloads from running on the public fork', () => {
     const e2e = loadWorkflow('e2e.yml');
     const npmCache = loadWorkflow('npm-cache.yml');
+    const sdkJava = loadWorkflow('sdk-java.yml');
     const sdkPython = loadWorkflow('sdk-python.yml');
     const image = loadWorkflow('build-and-publish-image.yml');
     const pages = loadWorkflow('docs-page-action.yml');
@@ -41,6 +42,9 @@ describe('Termux release workflows', () => {
     expect(npmCache.jobs.save.if).toContain(
       "github.repository == 'QwenLM/qwen-code'",
     );
+    for (const job of Object.values(sdkJava.jobs)) {
+      expect(job.if).toContain("github.repository == 'QwenLM/qwen-code'");
+    }
     for (const job of Object.values(sdkPython.jobs)) {
       expect(job.if).toContain("github.repository == 'QwenLM/qwen-code'");
     }
@@ -50,6 +54,35 @@ describe('Termux release workflows', () => {
     expect(pages.jobs.build.if).toContain(
       "github.repository == 'QwenLM/qwen-code'",
     );
+  });
+
+  it('keeps Termux CI as the only effective main-push workflow on the fork', () => {
+    const workflowsDir = path.join(ROOT, '.github/workflows');
+    const mainPushJobs = [];
+
+    for (const name of readdirSync(workflowsDir).filter((entry) =>
+      /\.ya?ml$/.test(entry),
+    )) {
+      const workflow = loadWorkflow(name);
+      const branches = workflow.on?.push?.branches;
+      const branchList = Array.isArray(branches) ? branches : [branches];
+      if (!branchList.includes('main')) {
+        continue;
+      }
+      for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+        mainPushJobs.push({ name, jobName, condition: job.if ?? '' });
+      }
+    }
+
+    const unguarded = mainPushJobs
+      .filter(
+        ({ condition }) =>
+          !condition.includes("github.repository == 'QwenLM/qwen-code'"),
+      )
+      .map(({ name, jobName }) => `${name}:${jobName}`);
+
+    expect(mainPushJobs.length).toBeGreaterThan(1);
+    expect(unguarded).toEqual(['termux-ci.yml:release-gate']);
   });
 
   it('runs the automatic gate only on hosted Linux with the full contract', () => {
