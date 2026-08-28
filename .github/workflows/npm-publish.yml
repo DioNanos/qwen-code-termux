@@ -121,7 +121,9 @@ jobs:
           notes=$(printf '%s\n' \
             "Qwen Code Termux ${version}" \
             "" \
-            "Fork release based on upstream Qwen Code 0.21.8." \
+            "Fork release based on upstream Qwen Code 0.22.2." \
+            "" \
+            "This is the final release of the fork (end-of-life): no further upstream syncs or Termux updates are planned." \
             "" \
             "Repairs an orphaned upstream standalone wrapper that can shadow the npm launcher on Termux." \
             "" \

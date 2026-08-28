@@ -87,8 +87,9 @@ with `type -a qwen`.
 ## Releases and Updates
 
 - Latest GitHub release: [releases/latest](https://github.com/DioNanos/qwen-code-termux/releases/latest)
-- Upstream baseline: [`QwenLM/qwen-code` v0.21.8](https://github.com/QwenLM/qwen-code/releases/tag/v0.21.8), packaged as `0.21.8-termux`
+- Upstream baseline: [`QwenLM/qwen-code` v0.22.2](https://github.com/QwenLM/qwen-code/releases/tag/v0.22.2), packaged as `0.22.2-termux`
 - npm package: [`@mmmbuto/qwen-code-termux`](https://www.npmjs.com/package/@mmmbuto/qwen-code-termux)
+- **This fork is end-of-life**: `0.22.2-termux` is the final release; no further upstream syncs or Termux updates are planned.
 
 Maintainer publish flow:
 

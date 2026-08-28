@@ -103,8 +103,15 @@ describe('shellAstParser lazy runtime', () => {
     mockWasmReads();
     const runtimeLoaded = vi.fn();
     const init = vi.fn(async () => undefined);
+    let releaseLanguage!: () => void;
+    const languageReady = new Promise<void>((resolve) => {
+      releaseLanguage = resolve;
+    });
     const constructed = vi.fn();
-    const loadLanguage = vi.fn(async () => ({}));
+    const loadLanguage = vi.fn(async () => {
+      await languageReady;
+      return {};
+    });
 
     class ParserMock {
       static init = init;

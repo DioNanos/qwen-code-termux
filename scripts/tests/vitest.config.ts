@@ -24,7 +24,27 @@ export default defineConfig({
             'scripts/tests/qwen-*-workflow.test.js',
             'scripts/tests/serve-ab-workflow.test.js',
           ]
-        : [...configDefaults.exclude],
+        : [
+            ...configDefaults.exclude,
+            // Fork exclusion: these suites guard the upstream CI topology
+            // (full ci.yml, npm-publish ratchet, platform lanes). The fork's
+            // ci.yml is a manual-only reference workflow and its active gate
+            // is termux-ci.yml — the fork invariants live in
+            // termux-release-workflows.test.js, which stays enabled.
+            'scripts/tests/capture-tmux-ci.test.js',
+            'scripts/tests/workflow-size.test.js',
+            'scripts/tests/ci-platform-lanes.test.js',
+            'scripts/tests/no-ak-integration-ci.test.js',
+            'scripts/tests/qwen-triage-workflow.test.js',
+            'scripts/tests/review-worktree-cleanup-workflow.test.js',
+            // Upstream autofix workflow guard: its behavioral stale-gate
+            // replay suite re-runs the gate extracted verbatim from
+            // qwen-autofix.yml, which now embeds the workflow-size gate
+            // (~6s per replay on this tree; ~10 replays ≈ 70s against the
+            // 30s suite testTimeout). The fork's autofix bridge guards stay
+            // enabled in qwen-autofix-fork-bridge-workflow.test.js.
+            'scripts/tests/qwen-autofix-workflow.test.js',
+          ],
     setupFiles: ['scripts/tests/test-setup.ts'],
     // Several tests in install-script.test.js shell out to `node` to run
     // create-standalone-package.js, which on Windows runs a full
