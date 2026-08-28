@@ -1,3 +1,12 @@
+> [!WARNING]
+> ## End of Life
+>
+> **This project has reached end of life and is no longer maintained.**
+>
+> A final release aligned with the latest upstream version will be published
+> when possible. After that, no further updates, bug fixes, or support are
+> planned. Existing releases remain available as-is.
+
 # Qwen Code Termux
 
 > Native Qwen Code CLI for **Termux / Android ARM64**.
