@@ -12535,7 +12535,17 @@ exit 1
     return { dir, git };
   };
 
-  it('rejects a round that expands into CI machinery outside the PR footprint', () => {
+  // These three tests are spawn-cost bound: every case builds a git fixture
+  // (several `git` children) and then shells out to bash for the gate block,
+  // 20+ cases per test. Their wall time therefore tracks host load, not logic
+  // — measured clean (idle host): footprint 7.8s, upsert-findings 27.6s,
+  // bite-check 19.8s; under parallel CI activity the auditor observed
+  // 33.6s / 27.2s / 48.7s, so the 30s suite default is not a reliable margin.
+  // Give each an explicit timeout; the assertions are unchanged.
+  it(
+    'rejects a round that expands into CI machinery outside the PR footprint',
+    { timeout: 120_000 },
+    () => {
     const block = reviewVerificationRunner.match(
       /(was_workspace_dir\(\) \{[\s\S]*?reject_fix 'round expands into CI\/verification machinery outside the PR footprint'\n {2}fi\nfi)/,
     )?.[1];
@@ -13102,7 +13112,10 @@ exit 1
     expect(fuzz.advisory).toContain('outside the PR footprint');
   }, 30000);
 
-  it('upserts deferred findings into a per-PR issue that survives the merge', () => {
+  it(
+    'upserts deferred findings into a per-PR issue that survives the merge',
+    { timeout: 120_000 },
+    () => {
     // Wiring: the upsert runs after both shared resolve/reply call sites
     // AND on the failure/handoff path (a failed round must not lose verified
     // findings); its content is captured from the trusted base at stage
@@ -14324,6 +14337,7 @@ exit 1
 
   it.skipIf(!hasBashMapfile)(
     'bite check: rejects a round whose changed tests pass on the pre-round tree',
+    { timeout: 120_000 },
     () => {
       // Ends at the FINAL assert: the conflict push-boundary refusal sits
       // between it and the verified_head write and is not bite machinery.
@@ -20567,7 +20581,13 @@ describe('review verification gate: baseline A/B on deterministic rejection', ()
     expect(r.stdout).not.toContain('Baseline A/B');
   });
 
-  it('classifies an unchanged branch by its verdict files (handoff contract)', () => {
+  // Same spawn-cost class as the three footprint/upsert/bite tests above
+  // (git fixtures + bash children): flaked at the 30s default once host load
+  // rose to ~8, passed isolated. Explicit timeout, assertions unchanged.
+  it(
+    'classifies an unchanged branch by its verdict files (handoff contract)',
+    { timeout: 120_000 },
+    () => {
     // The no-commit decision table, in the gate's own precedence order: a
     // handoff outranks a co-written no-action verdict (a BLOCKED stop must
     // not close silently as "no changes needed"), failure.md keeps the crash
