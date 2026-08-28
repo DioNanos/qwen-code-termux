@@ -11,17 +11,33 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { build, type Metafile, type Plugin } from 'esbuild';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// Keep Vite's one-time transform outside the individual test timeout.
+import './shellAstParser.js';
+
+vi.resetModules();
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.doUnmock('web-tree-sitter');
   vi.resetModules();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function mockWasmReads(): void {
+  const nativeFs = process.getBuiltinModule('fs');
+  const readFile = nativeFs.readFileSync;
+  vi.spyOn(nativeFs, 'readFileSync').mockImplementation(((
+    ...args: Parameters<typeof readFile>
+  ) =>
+    String(args[0]).endsWith('.wasm')
+      ? Buffer.from([0])
+      : Reflect.apply(readFile, nativeFs, args)) as typeof readFile);
+}
 
 function wasmBinaryPlugin(): Plugin {
   return {
@@ -84,17 +100,11 @@ function expectDeferredInput(
 
 describe('shellAstParser lazy runtime', () => {
   it('loads web-tree-sitter on first use and deduplicates initialization', async () => {
+    mockWasmReads();
     const runtimeLoaded = vi.fn();
     const init = vi.fn(async () => undefined);
-    let releaseLanguage!: () => void;
-    const languageReady = new Promise<void>((resolve) => {
-      releaseLanguage = resolve;
-    });
     const constructed = vi.fn();
-    const loadLanguage = vi.fn(async () => {
-      await languageReady;
-      return {};
-    });
+    const loadLanguage = vi.fn(async () => ({}));
 
     class ParserMock {
       static init = init;
@@ -142,6 +152,7 @@ describe('shellAstParser lazy runtime', () => {
   }, 60_000);
 
   it('latches a language load failure', async () => {
+    mockWasmReads();
     const languageLoads = vi.fn(async () => {
       throw new Error('bash language unavailable');
     });
@@ -168,6 +179,7 @@ describe('shellAstParser lazy runtime', () => {
   });
 
   it('maps parser runtime exceptions without changing the legacy fallback', async () => {
+    mockWasmReads();
     const init = vi.fn(async () => undefined);
     const deleteParser = vi.fn();
     const parse = vi.fn(() => {
@@ -213,6 +225,7 @@ describe('shellAstParser lazy runtime', () => {
   });
 
   it('releases each parsed tree exactly once', async () => {
+    mockWasmReads();
     const deleteTree = vi.fn();
     const parse = vi
       .fn()

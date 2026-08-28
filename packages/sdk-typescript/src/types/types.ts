@@ -142,6 +142,7 @@ export interface CLIMcpServerConfig {
   tcp?: string;
   // Common
   timeout?: number;
+  versionNegotiation?: 'auto' | 'legacy';
   trust?: boolean;
   // Metadata
   description?: string;
@@ -193,6 +194,24 @@ export interface CLIMcpServerConfig {
  * ```
  */
 export type McpServerConfig = CLIMcpServerConfig | SDKMcpServerConfig;
+
+export type EffortTier = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface EffortOverride {
+  source: 'extra_body' | 'samplingParams';
+  field: 'enable_thinking' | 'reasoning_effort' | 'thinking_budget';
+}
+
+export interface EffortStatus {
+  applied: boolean;
+  override: EffortOverride | null;
+  /**
+   * Human-readable reason assembled by the CLI for why the effort was not
+   * applied. Absent when the CLI predates this field or the effort applied;
+   * derive a fallback from `applied`/`override` when missing.
+   */
+  reason?: string;
+}
 
 /**
  * Type guard to check if a config is an SDK MCP server
@@ -288,7 +307,7 @@ export interface QueryOptions {
    * @see allowedTools For auto-approving specific tools
    * @see excludeTools For blocking specific tools
    */
-  permissionMode?: 'default' | 'plan' | 'auto-edit' | 'auto' | 'yolo';
+  permissionMode?: PermissionMode;
 
   /**
    * Custom permission handler for tool execution approval.
@@ -382,11 +401,23 @@ export interface QueryOptions {
 
   /**
    * Uses the legacy `coreTools` / CLI `--core-tools` allowlist semantics.
-   * If specified, only matching core tools are registered for the session.
-   * This is separate from `permissions.allow`, which auto-approves matching
-   * tool calls but does not restrict tool registration.
-   * Aliases like 'Read', 'Edit', and 'Bash' also work but resolve to single
-   * tools. Specifiers like 'Bash(git *)' are stripped; `coreTools` restricts
+   * If specified, only matching core tools are registered for the session
+   * (non-core built-ins such as `send_message` are unaffected).
+   * Separately, `permissions.allow` in settings.json (requires restart)
+   * activates a registry-level allowlist: when at least one valid allow
+   * rule is configured there (malformed entries do not count), built-in
+   * tools not covered by any allow or ask rule are demoted to deferred —
+   * they stay registered and loadable via `tool_search`, but their schemas
+   * are not sent in the eager model request and a call still goes through
+   * the normal approval flow (MCP tools, the `--json-schema`
+   * `structured_output` contract, the plan-mode lifecycle tools,
+   * `task_stop`, `tool_search`, and the `computer_use__*` family are
+   * exempt) (#9827, #10075). The SDK `allowedTools` parameter cannot
+   * activate the allowlist on its own, but while the allowlist is active
+   * its rules are merged into the effective allow set and count toward
+   * coverage, keeping covered built-ins eagerly registered. Aliases like
+   * 'Read', 'Edit', and 'Bash' also work but resolve to single tools.
+   * Specifiers like 'Bash(git *)' are stripped; `coreTools` restricts
    * tool registration, not invocation.
    * @example ['read_file', 'edit', 'run_shell_command']
    */
@@ -412,7 +443,7 @@ export interface QueryOptions {
   excludeTools?: string[];
 
   /**
-   * Equivalent to `permissions.allow` in settings.json.
+   * Equivalent to `permissions.allow` in settings.json for auto-approval.
    * List of tools that are allowed to run without confirmation.
    *
    * **Behavior:**
@@ -421,6 +452,16 @@ export interface QueryOptions {
    * - Checked after `excludeTools` but before `canUseTool` callback
    * - Does not override `permissionMode: 'plan'` (plan mode blocks all write tools)
    * - Has no effect in `permissionMode: 'yolo'` (already auto-approved)
+   * - Alone does NOT restrict tool registration: this parameter maps to the
+   *   CLI `--allowed-tools` flag and cannot activate the registry allowlist
+   *   by itself. While a settings-provided `permissions.allow` allowlist is
+   *   active, however, these rules are merged into the effective allow set
+   *   and count toward coverage, so covered built-ins stay eagerly
+   *   registered (#9827). To keep unlisted built-in tool schemas out of
+   *   the eager model request, set `permissions.allow` in settings.json
+   *   (requires restart); that key activates the registry allowlist, which
+   *   demotes unlisted tools to deferred (still registered and loadable
+   *   via `tool_search`, #10075)
    *
    * **Pattern matching:**
    * - Tool name: `'write_file'`
@@ -441,10 +482,10 @@ export interface QueryOptions {
   /**
    * Authentication type for the AI service.
    * - 'openai': Use OpenAI-compatible authentication
+   * - 'anthropic': Use Anthropic-compatible authentication
    * - 'qwen-oauth': Legacy Qwen OAuth authentication
-   *
-   * Qwen OAuth free tier was discontinued on 2026-04-15. New SDK setups should
-   * use OpenAI-compatible authentication or another supported provider.
+   * - 'gemini': Use Gemini authentication
+   * - 'vertex-ai': Use Vertex AI authentication
    */
   authType?: AuthType;
 
@@ -457,7 +498,7 @@ export interface QueryOptions {
   agents?: SubagentConfig[];
 
   /**
-   * Initial reasoning effort tier applied at session start.
+   * Initial reasoning effort tier requested at session start.
    *
    * Controls the depth of model reasoning/thinking. Higher tiers produce more
    * thorough reasoning at the cost of latency and tokens. Provider adapters
@@ -471,7 +512,7 @@ export interface QueryOptions {
    *
    * Use {@link Query.setEffort} to change the tier at runtime.
    */
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  effort?: EffortTier;
 
   /**
    * Include partial messages in the response stream.
