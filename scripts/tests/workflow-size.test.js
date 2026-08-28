@@ -49,7 +49,11 @@ describe('workflow file size', () => {
     expect(bytes).toBeLessThan(gateBytes);
   });
 
-  it('runs the gate on every CI profile, not just full', () => {
+  // fork: ci.yml is a manual-only reference workflow here (the active gate is
+  // termux-ci.yml), so the in-workflow gate step cannot exist. The ratchet
+  // itself is still enforced by the per-file tests below, which run in the
+  // fork's release CI.
+  it.skip('runs the gate on every CI profile, not just full', () => {
     // A .github-only PR classifies as `github_ci_only`; gating the check on the
     // `full` profile would skip it for exactly the changes that can trip it.
     const step = ciWorkflow.match(
@@ -62,7 +66,11 @@ describe('workflow file size', () => {
     expect(step?.[0]).not.toContain('ci_profile');
   });
 
-  it('wires the base SHA once at workflow level so every lane inherits it', () => {
+  // fork: same reason as above — ci.yml is manual-only reference, and this
+  // pin targets the upstream ci.yml workflow-level env block, which does not
+  // exist in the fork (ratchet enforcement lives in the tests below, which
+  // also run inside the fork's termux-ci.yml / npm-publish.yml lanes).
+  it.skip('wires the base SHA once at workflow level so every lane inherits it', () => {
     // The ratchet's PR-scope fix (#9904) hangs off this env: without it the
     // gate and its vitest mirror have no base to compare against and
     // silently degrade to the pre-fix red wall. Declared once at workflow

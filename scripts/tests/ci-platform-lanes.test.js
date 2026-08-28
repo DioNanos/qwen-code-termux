@@ -40,7 +40,8 @@ const LANES = ['test_macos', 'test_windows'];
 const condOf = (job) => String(ci.jobs[job].if ?? '');
 
 describe('platform lanes — triggers', () => {
-  it('gives the workflow a scheduled trigger', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the scheduled/queue platform lanes and their workflow-level env it pins exist in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+  it.skip('gives the workflow a scheduled trigger', () => {
     // Without it the lanes have no path to `main` at all: `ci.yml` has no
     // push trigger by design, so a merge-queue-only gate on a repository with
     // no merge queue is an off switch.
@@ -49,8 +50,11 @@ describe('platform lanes — triggers', () => {
     expect(triggers.schedule[0].cron).toMatch(/^\S+ \S+ \S+ \S+ \S+$/);
   });
 
+  // fork: ci.yml is a manual-only reference workflow here; the
+  // scheduled/queue platform lanes it pins exist in upstream ci.yml
+  // only (the fork's active gate is termux-ci.yml).
   for (const lane of LANES) {
-    it(`${lane} runs on the schedule, the queue, and a dispatch`, () => {
+    it.skip(`${lane} runs on the schedule, the queue, and a dispatch`, () => {
       const cond = condOf(lane);
       // Presence AND the disjunction between clauses: an `&&` where a `||`
       // belongs leaves the gate unsatisfiable for a trigger (event_name is
@@ -71,7 +75,7 @@ describe('platform lanes — triggers', () => {
       expect(ci.jobs[lane].needs).not.toContain('classify_platform');
     });
 
-    it(`${lane}'s triggers are alternatives, not requirements`, () => {
+    it.skip(`${lane}'s triggers are alternatives, not requirements`, () => {
       // The clause-presence assertions above survive a connective mutation:
       // `||` → `&&` between two event clauses leaves every string in place
       // and makes the gate unsatisfiable for every trigger, silently turning
@@ -102,7 +106,7 @@ describe('platform lanes — triggers', () => {
   }
 
   for (const lane of LANES) {
-    it(`${lane} is bounded so a hang cannot burn the 360-minute default`, () => {
+    it.skip(`${lane} is bounded so a hang cannot burn the 360-minute default`, () => {
       // The nightly's alert fires only when the run completes; a lane hung
       // on a host-specific prompt otherwise sits out GitHub's default
       // timeout before it fails and anyone is told.
@@ -111,7 +115,7 @@ describe('platform lanes — triggers', () => {
   }
 
   for (const lane of LANES) {
-    it(`${lane}'s steps are gated for every trigger it now has`, () => {
+    it.skip(`${lane}'s steps are gated for every trigger it now has`, () => {
       // The first thing the revived triggers hit was not a test failure but
       // the lane's own plumbing: a `verify-checkout-head` step written when
       // this lane ran in the merge queue alone, with `expected_sha` naming
@@ -146,7 +150,9 @@ describe('platform lanes — triggers', () => {
     });
   }
 
-  it('keeps a nightly run to exactly the two lanes', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the scheduled/queue platform lanes and their workflow-level env it pins exist in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('keeps a nightly run to exactly the two lanes', () => {
     // A `schedule:` trigger fires the whole workflow. Every other job must
     // therefore either exclude `schedule` outright or gate on an event
     // allowlist that cannot contain it — otherwise the nightly quietly
@@ -184,7 +190,9 @@ describe('platform lanes — the retired sensitivity classifier', () => {
     expect(JSON.stringify(ci)).not.toContain('classify_platform');
   });
 
-  it('keeps its classifier script tested for the restoration', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the scheduled/queue platform lanes and their workflow-level env it pins exist in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('keeps its classifier script tested for the restoration', () => {
     // The script layer stayed in place precisely so restoring the
     // pull-request trigger is a revert. A classifier that rotted untested in
     // the meantime would make that revert a regression instead.

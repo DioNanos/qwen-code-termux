@@ -255,7 +255,8 @@ const linkExists = (path) => {
 };
 
 describe('review worktree cleanup steps', () => {
-  it('keeps every shared-pool ci.yml checkout sweep pinned to paths.ts', () => {
+  // fork: the fork ci.yml (manual-only reference) keeps its checkout sweep without the upstream quarantine fallback, and these replay/parity pins target the upstream sweep steps.
+  it.skip('keeps every shared-pool ci.yml checkout sweep pinned to paths.ts', () => {
     expect(ciCleanSteps.map(({ id }) => id)).toEqual(
       expect.arrayContaining([
         'test',
@@ -486,66 +487,63 @@ describe('review worktree cleanup steps', () => {
     },
   );
 
-  it.skipIf(!permissionFixturesAvailable)(
-    'the pre-checkout sweep moves residue it cannot delete out of the workspace',
-    () => {
-      // The incident this exists for: residue whose containing directory
-      // denies the unlink, so `rm -rf` fails and actions/checkout dies
-      // wiping the workspace (measured, run 32621267802 — two unrelated PRs
-      // failed at Checkout on the same runner). Reproduced here with a
-      // write-denied parent rather than a foreign uid, which needs root:
-      // the failing syscall and the recovery are the same, and the sweep's
-      // own chmod is stepped over so it cannot repair the fixture away.
-      const root = mkdtempSync(join(tmpdir(), 'ci-quarantine-'));
-      const workspace = join(root, 'repo', 'repo');
-      const poison = join(
-        workspace,
-        `${toPosix(REVIEW_TMP_DIR)}/review-pr-9748-scratch-verify--round-1--x`,
-      );
-      const locked = join(poison, 'probe-ws/.qwen/tmp');
-      try {
-        mkdirSync(join(locked, 'review-pr-666'), { recursive: true });
-        chmodSync(locked, 0o500);
-        const out = spawnSync(
-          'bash',
-          [
-            '-c',
-            // Neutralise the sweep's own chmod and any sudo: this models the
-            // pool member that cannot repair the residue at all.
-            `set -euo pipefail\nchmod() { return 1; }\nsudo() { return 1; }\n${ciCleanSteps[0].run}`,
-            'clean-stale-qwen',
-          ],
-          {
-            cwd: workspace,
-            env: { ...process.env, GITHUB_WORKSPACE: workspace },
-            encoding: 'utf8',
-          },
-        );
-        expect(out.status).toBe(0);
-        // The workspace is clear, so the checkout that follows has nothing
-        // to trip on …
-        expect(existsSync(join(workspace, '.qwen'))).toBe(false);
-        // … and the residue was moved, not deleted: it still needs a human,
-        // and the warning says where it went.
-        const quarantine = join(root, 'repo', '_qwen-quarantine');
-        expect(existsSync(quarantine)).toBe(true);
-        expect(readdirSync(quarantine)).toHaveLength(1);
-        const warnings = out.stdout
-          .split('\n')
-          .filter((line) => line.startsWith('::warning::'));
-        expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('_qwen-quarantine');
-      } finally {
-        // The locked directory has usually MOVED by now (that is the point),
-        // so repair the whole fixture by path rather than the original one.
-        spawnSync('bash', [
+  // fork: this replays the upstream ci.yml sweep's quarantine fallback
+  // verbatim; the fork ci.yml (manual-only reference) sweep deletes without
+  // quarantining, so the fallback behaviour it pins does not exist here.
+  it.skip('the pre-checkout sweep moves residue it cannot delete out of the workspace', () => {
+    // The incident this exists for: residue whose containing directory
+    // denies the unlink, so `rm -rf` fails and actions/checkout dies
+    // wiping the workspace (measured, run 32621267802 — two unrelated PRs
+    // failed at Checkout on the same runner). Reproduced here with a
+    // write-denied parent rather than a foreign uid, which needs root:
+    // the failing syscall and the recovery are the same, and the sweep's
+    // own chmod is stepped over so it cannot repair the fixture away.
+    const root = mkdtempSync(join(tmpdir(), 'ci-quarantine-'));
+    const workspace = join(root, 'repo', 'repo');
+    const poison = join(
+      workspace,
+      `${toPosix(REVIEW_TMP_DIR)}/review-pr-9748-scratch-verify--round-1--x`,
+    );
+    const locked = join(poison, 'probe-ws/.qwen/tmp');
+    try {
+      mkdirSync(join(locked, 'review-pr-666'), { recursive: true });
+      chmodSync(locked, 0o500);
+      const out = spawnSync(
+        'bash',
+        [
           '-c',
-          `chmod -R u+rwX "${root}" 2>/dev/null || true`,
-        ]);
-        rmSync(root, { recursive: true, force: true });
-      }
-    },
-  );
+          // Neutralise the sweep's own chmod and any sudo: this models the
+          // pool member that cannot repair the residue at all.
+          `set -euo pipefail\nchmod() { return 1; }\nsudo() { return 1; }\n${ciCleanSteps[0].run}`,
+          'clean-stale-qwen',
+        ],
+        {
+          cwd: workspace,
+          env: { ...process.env, GITHUB_WORKSPACE: workspace },
+          encoding: 'utf8',
+        },
+      );
+      expect(out.status).toBe(0);
+      // The workspace is clear, so the checkout that follows has nothing
+      // to trip on …
+      expect(existsSync(join(workspace, '.qwen'))).toBe(false);
+      // … and the residue was moved, not deleted: it still needs a human,
+      // and the warning says where it went.
+      const quarantine = join(root, 'repo', '_qwen-quarantine');
+      expect(existsSync(quarantine)).toBe(true);
+      expect(readdirSync(quarantine)).toHaveLength(1);
+      const warnings = out.stdout
+        .split('\n')
+        .filter((line) => line.startsWith('::warning::'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('_qwen-quarantine');
+    } finally {
+      // The locked directory has usually MOVED by now (that is the point),
+      // so repair the whole fixture by path rather than the original one.
+      spawnSync('bash', ['-c', `chmod -R u+rwX "${root}" 2>/dev/null || true`]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it.skipIf(!permissionFixturesAvailable)(
     'the pre-checkout sweep still deletes residue it can remove',

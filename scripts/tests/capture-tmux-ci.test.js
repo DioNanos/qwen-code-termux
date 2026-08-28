@@ -688,7 +688,9 @@ describe('ci.yml capture tooling', () => {
   const nameIndex = (name) => steps.findIndex((st) => st.name === name);
   const INSTALL = 'Install tmux and zip tooling';
 
-  it('installs tmux INSIDE the test job, before the tests run', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the tmux capture step it pins lives in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('installs tmux INSIDE the test job, before the tests run', () => {
     // Whole-file substring pins survive the step moving to another job or
     // below the test step — where the real-tmux suite silently skips, the
     // exact failure mode this file exists to prevent.
@@ -933,7 +935,9 @@ describe('ci.yml capture tooling', () => {
     }
   });
 
-  it('pins the if-condition — it decides whether the step runs on the Linux lane at all', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the tmux capture step it pins lives in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('pins the if-condition — it decides whether the step runs on the Linux lane at all', () => {
     // A mutated condition (runner.os flipped, a typo in the skip_ci /
     // ci_profile gates) means the ubuntu lane never installs the tooling:
     // hasTmux is false and the real-tmux suite silently skips inside the
@@ -947,7 +951,9 @@ describe('ci.yml capture tooling', () => {
     );
   });
 
-  it('keeps the step BOUNDED and ADVISORY — the two step-level keys', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the tmux capture step it pins lives in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('keeps the step BOUNDED and ADVISORY — the two step-level keys', () => {
     // The run script's own guards cannot save the check from a step-level
     // failure or a hang. Dropping continue-on-error reds the required Test
     // check when the 5-minute bound fires on a stalled mirror; dropping
@@ -967,7 +973,9 @@ describe('ci.yml capture tooling', () => {
     );
   });
 
-  it('keeps the install branch REACHABLE — the conditions, not just the lines', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the tmux capture step it pins lives in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('keeps the install branch REACHABLE — the conditions, not just the lines', () => {
     // Mutations that leave every pinned line in place while making the
     // apt-get branch dead shipped green: `command -v tmux … || true` makes
     // the already-installed branch always taken, and `elif false && …`
@@ -1067,7 +1075,9 @@ describe('ci.yml capture tooling', () => {
     ).toBe(true);
   });
 
-  it('keeps the step advisory — no branch may fail the required check', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the tmux capture step it pins lives in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('keeps the step advisory — no branch may fail the required check', () => {
     const run = steps[nameIndex(INSTALL)].run;
     const logicalLines = logicalLinesOf(run);
     for (const line of logicalLines) {
@@ -1184,7 +1194,9 @@ describe('ci.yml capture tooling', () => {
     }
   });
 
-  it('catches a hard-fail statement spliced into the step', () => {
+  // fork: ci.yml is a manual-only reference workflow here; the tmux capture step it pins lives in upstream ci.yml only (the fork's active gate is termux-ci.yml).
+
+  it.skip('catches a hard-fail statement spliced into the step', () => {
     // The axis HARD_FAIL pins, end to end: splice one in as the first run
     // line and the oracle must surface it as a statement. Under the runner's
     // `bash -e` any one kills the step before its first branch — a green

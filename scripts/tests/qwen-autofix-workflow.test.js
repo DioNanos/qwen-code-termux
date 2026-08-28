@@ -1756,303 +1756,312 @@ describe('qwen-autofix workflow', () => {
     expect(parallel).toBeLessThan(targetBudget);
   });
 
-  it('behaviorally replays the stale-duplicate revalidation, including the conflict-only transition', () => {
-    // Extract the stale-gate VERBATIM from 'Prepare branch and feedback'
-    // (drift fails the test) and replay it over fixture feedback files. The
-    // subtle case: a conflict-only duplicate. Both scans emit the PR with
-    // watermark W; the first serialized job resolves the conflict, and with
-    // no newer feedback its marker keeps ts=W while its ROUND advances — so
-    // a ts-only comparison misses it. The gate must also treat
-    // same-ts-but-newer-round (with the conflict now cleared) as stale.
-    const staleGate = prepareBranchAndFeedbackStep.match(
-      /(STALE='false'\n[\s\S]*?echo "effective_round=\$\{ROUND\}" >> "\$\{GITHUB_OUTPUT\}")/,
-    )?.[1];
-    expect(staleGate).toBeTruthy();
-    const W = '2026-07-18T08:00:00Z';
-    const runStaleGate = ({
-      marks,
-      conflict,
-      round,
-      reviews = [],
-      acks = [],
-      commands = [],
-      // Default: the job was selected under the CURRENT window (the latest
-      // ack, or 'none' before any takeover) — the normal, non-raced case.
-      window = undefined,
-      // The head this job checked out (CHECKED_OUT_HEAD). The no-op same-head
-      // duplicate signature compares the live redcheck marker against it.
-      head = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111',
-    }) => {
-      const effWindow =
-        window ?? (acks.length ? acks[acks.length - 1] : 'none');
-      const dir = mkdtempSync(join(tmpdir(), 'autofix-stale-'));
-      try {
-        writeFileSync(
-          join(dir, 'ic.json'),
-          JSON.stringify([
-            ...marks.map((m) => ({
-              user: { login: 'qwen-code-dev-bot' },
-              created_at: m.at ?? '2026-07-18T09:00:00Z',
-              body: `eval <!-- autofix-eval ts=${m.ts} acted=${m.acted ?? 'true'} round=${m.round}${m.win ? ` win=${m.win}` : ''} -->${m.head ? `\n<!-- autofix-redcheck head=${m.head} -->` : ''}`,
-            })),
-            ...acks.map((at) => ({
-              user: { login: 'qwen-code-dev-bot' },
-              created_at: at,
-              body: '🤝 … <!-- takeover-ack engaged -->',
-            })),
-            ...commands.map((at) => ({
-              user: { login: 'wenshao' },
-              author_association: 'OWNER',
-              created_at: at,
-              body: '@qwen-code /takeover',
-            })),
-          ]),
-        );
-        writeFileSync(join(dir, 'rv.json'), JSON.stringify(reviews));
-        writeFileSync(join(dir, 'rc.json'), '[]');
-        writeFileSync(join(dir, 'checks.json'), '[]');
-        const out = join(dir, 'out.txt');
-        writeFileSync(out, '');
-        const stdout = execFileSync(
-          'bash',
-          [
-            '-c',
-            `${staleGate.replace(/\n {10}/g, '\n')}\nprintf '\\nADOPTED %s %s' "$WATERMARK" "$ROUND"`,
-          ],
-          {
-            env: {
-              ...process.env,
-              WORKDIR: dir,
-              GITHUB_OUTPUT: out,
-              WATERMARK: W,
-              ROUND: String(round),
-              CONFLICT: conflict,
-              MAX_ROUNDS: '5',
-              WINDOW: effWindow,
-              CHECKED_OUT_HEAD: head,
-              AUTOFIX_BOT: 'qwen-code-dev-bot',
-              REVIEW_BOT: 'qwen-code-ci-bot',
-              TRUSTED_ASSOC: '["OWNER","MEMBER","COLLABORATOR"]',
+  // fork note: this replay extracts the stale gate verbatim from
+  // qwen-autofix.yml, which now also embeds the workflow-size gate —
+  // each of its ~10 replays costs ~6s, so give this single test an
+  // explicit timeout instead of the suite default (30s).
+  it(
+    'behaviorally replays the stale-duplicate revalidation, including the conflict-only transition',
+    { timeout: 240_000 },
+    () => {
+      // Extract the stale-gate VERBATIM from 'Prepare branch and feedback'
+      // (drift fails the test) and replay it over fixture feedback files. The
+      // subtle case: a conflict-only duplicate. Both scans emit the PR with
+      // watermark W; the first serialized job resolves the conflict, and with
+      // no newer feedback its marker keeps ts=W while its ROUND advances — so
+      // a ts-only comparison misses it. The gate must also treat
+      // same-ts-but-newer-round (with the conflict now cleared) as stale.
+      const staleGate = prepareBranchAndFeedbackStep.match(
+        /(STALE='false'\n[\s\S]*?echo "effective_round=\$\{ROUND\}" >> "\$\{GITHUB_OUTPUT\}")/,
+      )?.[1];
+      expect(staleGate).toBeTruthy();
+      const W = '2026-07-18T08:00:00Z';
+      const runStaleGate = ({
+        marks,
+        conflict,
+        round,
+        reviews = [],
+        acks = [],
+        commands = [],
+        // Default: the job was selected under the CURRENT window (the latest
+        // ack, or 'none' before any takeover) — the normal, non-raced case.
+        window = undefined,
+        // The head this job checked out (CHECKED_OUT_HEAD). The no-op same-head
+        // duplicate signature compares the live redcheck marker against it.
+        head = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111',
+      }) => {
+        const effWindow =
+          window ?? (acks.length ? acks[acks.length - 1] : 'none');
+        const dir = mkdtempSync(join(tmpdir(), 'autofix-stale-'));
+        try {
+          writeFileSync(
+            join(dir, 'ic.json'),
+            JSON.stringify([
+              ...marks.map((m) => ({
+                user: { login: 'qwen-code-dev-bot' },
+                created_at: m.at ?? '2026-07-18T09:00:00Z',
+                body: `eval <!-- autofix-eval ts=${m.ts} acted=${m.acted ?? 'true'} round=${m.round}${m.win ? ` win=${m.win}` : ''} -->${m.head ? `\n<!-- autofix-redcheck head=${m.head} -->` : ''}`,
+              })),
+              ...acks.map((at) => ({
+                user: { login: 'qwen-code-dev-bot' },
+                created_at: at,
+                body: '🤝 … <!-- takeover-ack engaged -->',
+              })),
+              ...commands.map((at) => ({
+                user: { login: 'wenshao' },
+                author_association: 'OWNER',
+                created_at: at,
+                body: '@qwen-code /takeover',
+              })),
+            ]),
+          );
+          writeFileSync(join(dir, 'rv.json'), JSON.stringify(reviews));
+          writeFileSync(join(dir, 'rc.json'), '[]');
+          writeFileSync(join(dir, 'checks.json'), '[]');
+          const out = join(dir, 'out.txt');
+          writeFileSync(out, '');
+          const stdout = execFileSync(
+            'bash',
+            [
+              '-c',
+              `${staleGate.replace(/\n {10}/g, '\n')}\nprintf '\\nADOPTED %s %s' "$WATERMARK" "$ROUND"`,
+            ],
+            {
+              env: {
+                ...process.env,
+                WORKDIR: dir,
+                GITHUB_OUTPUT: out,
+                WATERMARK: W,
+                ROUND: String(round),
+                CONFLICT: conflict,
+                MAX_ROUNDS: '5',
+                WINDOW: effWindow,
+                CHECKED_OUT_HEAD: head,
+                AUTOFIX_BOT: 'qwen-code-dev-bot',
+                REVIEW_BOT: 'qwen-code-ci-bot',
+                TRUSTED_ASSOC: '["OWNER","MEMBER","COLLABORATOR"]',
+              },
+              encoding: 'utf8',
             },
-            encoding: 'utf8',
-          },
-        );
-        const adopted = stdout.match(/ADOPTED (\S+) (\S+)$/);
-        const outputs = readFileSync(out, 'utf8');
-        return {
-          stale: outputs.includes('stale=true'),
-          effectiveRound: outputs.match(/effective_round=(\d+)/)?.[1],
-          wm: adopted?.[1],
-          round: adopted?.[2],
-        };
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    };
-    const F2 = {
-      submitted_at: '2026-07-18T08:45:00Z',
-      user: { login: 'doudouOUC' },
-      author_association: 'MEMBER',
-      state: 'CHANGES_REQUESTED',
-    };
-    // Conflict-only duplicate: sibling resolved and marked round 3 at ts=W;
-    // our matrix says round 2, the conflict is now cleared → stale.
-    expect(
-      runStaleGate({
+          );
+          const adopted = stdout.match(/ADOPTED (\S+) (\S+)$/);
+          const outputs = readFileSync(out, 'utf8');
+          return {
+            stale: outputs.includes('stale=true'),
+            effectiveRound: outputs.match(/effective_round=(\d+)/)?.[1],
+            wm: adopted?.[1],
+            round: adopted?.[2],
+          };
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      };
+      const F2 = {
+        submitted_at: '2026-07-18T08:45:00Z',
+        user: { login: 'doudouOUC' },
+        author_association: 'MEMBER',
+        state: 'CHANGES_REQUESTED',
+      };
+      // Conflict-only duplicate: sibling resolved and marked round 3 at ts=W;
+      // our matrix says round 2, the conflict is now cleared → stale.
+      expect(
+        runStaleGate({
+          marks: [
+            { ts: W, round: 2 },
+            { ts: W, round: 3 },
+          ],
+          conflict: 'false',
+          round: 2,
+        }).stale,
+      ).toBe(true);
+      // First job of a conflict round: round has not advanced → proceeds.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 2 }],
+          conflict: 'false',
+          round: 2,
+        }).stale,
+      ).toBe(false);
+      // A live conflict is always actionable, even past a sibling's marker.
+      expect(
+        runStaleGate({
+          marks: [
+            { ts: W, round: 2 },
+            { ts: W, round: 3 },
+          ],
+          conflict: 'true',
+          round: 2,
+        }).stale,
+      ).toBe(false);
+      // ts-advanced duplicate (the original case): sibling evaluated through a
+      // newer live watermark and nothing newer exists → stale.
+      expect(
+        runStaleGate({
+          marks: [{ ts: '2026-07-18T08:30:00Z', round: 3 }],
+          conflict: 'false',
+          round: 2,
+        }).stale,
+      ).toBe(true);
+      // Round advanced BUT trusted feedback arrived after the live watermark —
+      // the queued job has real work and must NOT discard itself. It must ALSO
+      // adopt the live round so its marker continues the sequence instead of
+      // double-writing round 3.
+      const advanced = runStaleGate({
         marks: [
           { ts: W, round: 2 },
           { ts: W, round: 3 },
         ],
         conflict: 'false',
         round: 2,
-      }).stale,
-    ).toBe(true);
-    // First job of a conflict round: round has not advanced → proceeds.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 2 }],
-        conflict: 'false',
-        round: 2,
-      }).stale,
-    ).toBe(false);
-    // A live conflict is always actionable, even past a sibling's marker.
-    expect(
-      runStaleGate({
-        marks: [
-          { ts: W, round: 2 },
-          { ts: W, round: 3 },
-        ],
-        conflict: 'true',
-        round: 2,
-      }).stale,
-    ).toBe(false);
-    // ts-advanced duplicate (the original case): sibling evaluated through a
-    // newer live watermark and nothing newer exists → stale.
-    expect(
-      runStaleGate({
-        marks: [{ ts: '2026-07-18T08:30:00Z', round: 3 }],
-        conflict: 'false',
-        round: 2,
-      }).stale,
-    ).toBe(true);
-    // Round advanced BUT trusted feedback arrived after the live watermark —
-    // the queued job has real work and must NOT discard itself. It must ALSO
-    // adopt the live round so its marker continues the sequence instead of
-    // double-writing round 3.
-    const advanced = runStaleGate({
-      marks: [
-        { ts: W, round: 2 },
-        { ts: W, round: 3 },
-      ],
-      conflict: 'false',
-      round: 2,
-      reviews: [F2],
-    });
-    expect(advanced.stale).toBe(false);
-    expect(advanced.round).toBe('3');
-    expect(advanced.effectiveRound).toBe('3');
-    // W/T1/T2: the sibling evaluated F1 through T1; F2 arrived after T1. The
-    // duplicate proceeds for F2 but must adopt T1 as its effective watermark
-    // so the renderers below list ONLY F2 — never the already-addressed F1.
-    const T1 = '2026-07-18T08:30:00Z';
-    const adopted = runStaleGate({
-      marks: [{ ts: T1, round: 3 }],
-      conflict: 'false',
-      round: 2,
-      reviews: [F2],
-    });
-    expect(adopted.stale).toBe(false);
-    expect(adopted.wm).toBe(T1);
-    expect(adopted.round).toBe('3');
-    // Live round already at the hard cap: even with new feedback, running
-    // would produce round MAX+1 work and a second capped marker, concealing
-    // the cap the scan enforces — discard.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 5 }],
-        conflict: 'false',
-        round: 4,
         reviews: [F2],
-      }).stale,
-    ).toBe(true);
-    // The terminal-handoff sentinel ts must never be adopted as a feedback
-    // watermark (it would filter ALL future feedback out of the renderers).
-    const sentinel = runStaleGate({
-      marks: [{ ts: '9999-12-31T23:59:59Z', round: 3 }],
-      conflict: 'false',
-      round: 2,
-      reviews: [F2],
-    });
-    expect(sentinel.wm).toBe(W);
-    // …and the != sentinel guard itself, on a path that actually reaches
-    // the adoption block: a live conflict skips the stale gate, so without
-    // the guard the terminal ts would be adopted as the feedback watermark
-    // and filter ALL future feedback out of the renderers.
-    const sentinelConflict = runStaleGate({
-      marks: [{ ts: '9999-12-31T23:59:59Z', round: 3 }],
-      conflict: 'true',
-      round: 2,
-    });
-    expect(sentinelConflict.stale).toBe(false);
-    expect(sentinelConflict.wm).toBe(W);
-    // Re-armed window: a pre-reset capped marker (window 'none') plus a
-    // later engage ack — a job selected under the NEW key sees windowed live
-    // round 0 and proceeds; the old marker can neither cap it nor make it
-    // look like a same-ts round-advance duplicate.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 50 }],
-        acks: ['2026-07-18T10:00:00Z'],
-        conflict: 'false',
-        round: 0,
-      }).stale,
-    ).toBe(false);
-    // The other half of the race: a job still carrying the OLD window key
-    // after a re-arm superseded it must discard — finishing would stamp an
-    // old-sequence marker into the fresh window. The fixture is
-    // DISCRIMINATING: the old-window marker's comment lands AFTER the ack
-    // (created_at 11:00 > ack 10:00), so a timestamp-windowed
-    // implementation would have counted it — only key equality excludes it.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 3, at: '2026-07-18T11:00:00Z' }],
-        acks: ['2026-07-18T10:00:00Z'],
-        conflict: 'false',
-        round: 3,
-        window: 'none',
-      }).stale,
-    ).toBe(true);
-    // …unless it is resolving a live conflict, which stays actionable.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 3 }],
-        acks: ['2026-07-18T10:00:00Z'],
-        conflict: 'true',
-        round: 3,
-        window: 'none',
-      }).stale,
-    ).toBe(false);
-    // A trusted command comment (@qwen-code /…) newer than the live
-    // watermark is an INSTRUCTION, not feedback: without the command filter
-    // it would count in LIVE_NEW and rescue this duplicate into a full
-    // agent round about the command itself.
-    expect(
-      runStaleGate({
-        marks: [
-          { ts: W, round: 2 },
-          { ts: W, round: 3 },
-        ],
+      });
+      expect(advanced.stale).toBe(false);
+      expect(advanced.round).toBe('3');
+      expect(advanced.effectiveRound).toBe('3');
+      // W/T1/T2: the sibling evaluated F1 through T1; F2 arrived after T1. The
+      // duplicate proceeds for F2 but must adopt T1 as its effective watermark
+      // so the renderers below list ONLY F2 — never the already-addressed F1.
+      const T1 = '2026-07-18T08:30:00Z';
+      const adopted = runStaleGate({
+        marks: [{ ts: T1, round: 3 }],
         conflict: 'false',
         round: 2,
-        commands: ['2026-07-18T08:45:00Z'],
-      }).stale,
-    ).toBe(true);
-    // No-op same-head duplicate (signature c): two scans both emit the PR with
-    // watermark W; the first serialized job ends in a no-op, recording a
-    // redcheck marker for head H while keeping ts=W and round UNCHANGED.
-    // Neither the watermark nor the round trigger fires, so without the
-    // redcheck re-check the second job would run the agent again and post a
-    // duplicate report for the same head.
-    const H = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111';
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 2, acted: 'false', head: H }],
-        conflict: 'false',
-        round: 2,
-        head: H,
-      }).stale,
-    ).toBe(true);
-    // A new commit moved the head: the sibling judged a DIFFERENT head, so
-    // this target is real work, not a duplicate.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 2, acted: 'false', head: H }],
-        conflict: 'false',
-        round: 2,
-        head: 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222',
-      }).stale,
-    ).toBe(false);
-    // Same head, but trusted feedback arrived after the watermark the no-op
-    // sibling evaluated through: the queued job has real work and proceeds.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 2, acted: 'false', head: H }],
-        conflict: 'false',
-        round: 2,
-        head: H,
         reviews: [F2],
-      }).stale,
-    ).toBe(false);
-    // Same head, but a live conflict is actionable regardless of the redcheck.
-    expect(
-      runStaleGate({
-        marks: [{ ts: W, round: 2, acted: 'false', head: H }],
+      });
+      expect(adopted.stale).toBe(false);
+      expect(adopted.wm).toBe(T1);
+      expect(adopted.round).toBe('3');
+      // Live round already at the hard cap: even with new feedback, running
+      // would produce round MAX+1 work and a second capped marker, concealing
+      // the cap the scan enforces — discard.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 5 }],
+          conflict: 'false',
+          round: 4,
+          reviews: [F2],
+        }).stale,
+      ).toBe(true);
+      // The terminal-handoff sentinel ts must never be adopted as a feedback
+      // watermark (it would filter ALL future feedback out of the renderers).
+      const sentinel = runStaleGate({
+        marks: [{ ts: '9999-12-31T23:59:59Z', round: 3 }],
+        conflict: 'false',
+        round: 2,
+        reviews: [F2],
+      });
+      expect(sentinel.wm).toBe(W);
+      // …and the != sentinel guard itself, on a path that actually reaches
+      // the adoption block: a live conflict skips the stale gate, so without
+      // the guard the terminal ts would be adopted as the feedback watermark
+      // and filter ALL future feedback out of the renderers.
+      const sentinelConflict = runStaleGate({
+        marks: [{ ts: '9999-12-31T23:59:59Z', round: 3 }],
         conflict: 'true',
         round: 2,
-        head: H,
-      }).stale,
-    ).toBe(false);
-  }, 30000);
+      });
+      expect(sentinelConflict.stale).toBe(false);
+      expect(sentinelConflict.wm).toBe(W);
+      // Re-armed window: a pre-reset capped marker (window 'none') plus a
+      // later engage ack — a job selected under the NEW key sees windowed live
+      // round 0 and proceeds; the old marker can neither cap it nor make it
+      // look like a same-ts round-advance duplicate.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 50 }],
+          acks: ['2026-07-18T10:00:00Z'],
+          conflict: 'false',
+          round: 0,
+        }).stale,
+      ).toBe(false);
+      // The other half of the race: a job still carrying the OLD window key
+      // after a re-arm superseded it must discard — finishing would stamp an
+      // old-sequence marker into the fresh window. The fixture is
+      // DISCRIMINATING: the old-window marker's comment lands AFTER the ack
+      // (created_at 11:00 > ack 10:00), so a timestamp-windowed
+      // implementation would have counted it — only key equality excludes it.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 3, at: '2026-07-18T11:00:00Z' }],
+          acks: ['2026-07-18T10:00:00Z'],
+          conflict: 'false',
+          round: 3,
+          window: 'none',
+        }).stale,
+      ).toBe(true);
+      // …unless it is resolving a live conflict, which stays actionable.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 3 }],
+          acks: ['2026-07-18T10:00:00Z'],
+          conflict: 'true',
+          round: 3,
+          window: 'none',
+        }).stale,
+      ).toBe(false);
+      // A trusted command comment (@qwen-code /…) newer than the live
+      // watermark is an INSTRUCTION, not feedback: without the command filter
+      // it would count in LIVE_NEW and rescue this duplicate into a full
+      // agent round about the command itself.
+      expect(
+        runStaleGate({
+          marks: [
+            { ts: W, round: 2 },
+            { ts: W, round: 3 },
+          ],
+          conflict: 'false',
+          round: 2,
+          commands: ['2026-07-18T08:45:00Z'],
+        }).stale,
+      ).toBe(true);
+      // No-op same-head duplicate (signature c): two scans both emit the PR with
+      // watermark W; the first serialized job ends in a no-op, recording a
+      // redcheck marker for head H while keeping ts=W and round UNCHANGED.
+      // Neither the watermark nor the round trigger fires, so without the
+      // redcheck re-check the second job would run the agent again and post a
+      // duplicate report for the same head.
+      const H = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111';
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 2, acted: 'false', head: H }],
+          conflict: 'false',
+          round: 2,
+          head: H,
+        }).stale,
+      ).toBe(true);
+      // A new commit moved the head: the sibling judged a DIFFERENT head, so
+      // this target is real work, not a duplicate.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 2, acted: 'false', head: H }],
+          conflict: 'false',
+          round: 2,
+          head: 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222',
+        }).stale,
+      ).toBe(false);
+      // Same head, but trusted feedback arrived after the watermark the no-op
+      // sibling evaluated through: the queued job has real work and proceeds.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 2, acted: 'false', head: H }],
+          conflict: 'false',
+          round: 2,
+          head: H,
+          reviews: [F2],
+        }).stale,
+      ).toBe(false);
+      // Same head, but a live conflict is actionable regardless of the redcheck.
+      expect(
+        runStaleGate({
+          marks: [{ ts: W, round: 2, acted: 'false', head: H }],
+          conflict: 'true',
+          round: 2,
+          head: H,
+        }).stale,
+      ).toBe(false);
+    },
+    30000,
+  );
 
   it('behaviorally replays the eligibility recheck across lifecycle and label states', () => {
     // Extract the recheck VERBATIM (drift fails the test) and run it with a

@@ -30,6 +30,7 @@
 5950 live-host.yml
 7642 main-ci-failure-issue.yml
 1686 npm-cache.yml
+4561 npm-publish.yml
 7299 pr-force-push-reminder.yml
 6495 pr-self-report-label.yml
 9646 qwen-autofix-fork-bridge.yml
@@ -58,6 +59,7 @@
 10920 sync-desktop-to-oss.yml
 10018 sync-live-host-to-oss.yml
 10138 sync-release-to-oss.yml
+3349 termux-ci.yml
 3303 update-ecs-runner-qwen.yml
 2307 web-shell-visuals-cleanup.yml
 15380 web-shell-visuals-publish.yml
